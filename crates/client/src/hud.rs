@@ -24,7 +24,7 @@ pub fn draw(
     fx: Res<FrameFx>,
     time: Res<Time>,
     old: Query<Entity, With<HudNode>>,
-    camera: Query<(&Camera, &GlobalTransform)>,
+    camera: Query<(&Camera, &GlobalTransform), With<IsDefaultUiCamera>>,
     mut floaters: Query<(Entity, &mut Floater, &mut Node)>,
 ) {
     let dt = time.delta_secs();
@@ -64,6 +64,47 @@ pub fn draw(
             PlayPiece,
         ))
         .id();
+
+    if player.overdrive_left > 0.0 {
+        let wash = Color::srgba(accent_rgb[0], accent_rgb[1], accent_rgb[2], 0.22);
+        let band = 64.0;
+        for node in [
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                height: Val::Px(band),
+                ..default()
+            },
+            Node {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(0.0),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                height: Val::Px(band),
+                ..default()
+            },
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                bottom: Val::Px(0.0),
+                left: Val::Px(0.0),
+                width: Val::Px(band),
+                ..default()
+            },
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                bottom: Val::Px(0.0),
+                right: Val::Px(0.0),
+                width: Val::Px(band),
+                ..default()
+            },
+        ] {
+            commands.spawn((node, BackgroundColor(wash), ChildOf(root), HudNode));
+        }
+    }
 
     let boss = game.sim.enemies.iter().find(|e| {
         e.alive && matches!(e.kind, EnemyKind::BroodMother | EnemyKind::HiveTyrant)

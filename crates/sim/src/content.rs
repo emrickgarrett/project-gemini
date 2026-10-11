@@ -892,6 +892,9 @@ pub struct Hero {
     pub overdrive_fire_rate: f32,
     pub infinite_magazine: bool,
     pub kill_cd_refund: f32,
+    /// Camera-local viewmodel position. +X is screen right, -Y is screen down.
+    pub viewmodel_offset: [f32; 3],
+    pub viewmodel_fov: f32,
 }
 
 fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>), String> {
@@ -946,6 +949,8 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>), String> {
             .and_then(|v| v.as_bool())
             .ok_or_else(|| "overdrive is missing infinite_magazine".to_string())?,
         kill_cd_refund: req_f32(ability, "kill_cd_refund", "overdrive")?,
+        viewmodel_offset: req_vec3(row, "viewmodel_offset", starter)?,
+        viewmodel_fov: req_f32(row, "viewmodel_fov", starter)?,
     };
     if hero.ability_cooldown <= 0.0 || hero.overdrive_duration <= 0.0 {
         return Err("overdrive cooldown and duration must be > 0".into());
@@ -955,6 +960,11 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>), String> {
     }
     if hero.move_speed_mult <= 0.0 {
         return Err(format!("{starter} move_speed_mult must be > 0"));
+    }
+    if hero.viewmodel_fov <= 1.0 || hero.viewmodel_fov >= 170.0 {
+        return Err(format!(
+            "characters.toml {starter} viewmodel_fov must be between 1 and 170"
+        ));
     }
     parse_accent(&hero.accent)?;
     Ok((hero, vec![primary, sidearm]))
@@ -997,6 +1007,29 @@ fn req_str<'a>(table: &'a toml::map::Map<String, toml::Value>, key: &str, what: 
         .get(key)
         .and_then(|v| v.as_str())
         .ok_or_else(|| format!("characters.toml {what} is missing {key}"))
+}
+
+fn req_vec3(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<[f32; 3], String> {
+    let value = table
+        .get(key)
+        .ok_or_else(|| format!("characters.toml {what} is missing {key}"))?;
+    let arr = value
+        .as_array()
+        .ok_or_else(|| format!("characters.toml {what} {key} must be 3 numbers"))?;
+    if arr.len() != 3 {
+        return Err(format!("characters.toml {what} {key} must be 3 numbers"));
+    }
+    let mut out = [0.0; 3];
+    for (i, slot) in arr.iter().enumerate() {
+        if let Some(n) = slot.as_float() {
+            out[i] = n as f32;
+        } else if let Some(n) = slot.as_integer() {
+            out[i] = n as f32;
+        } else {
+            return Err(format!("characters.toml {what} {key} must be 3 numbers"));
+        }
+    }
+    Ok(out)
 }
 
 fn req_f32(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<f32, String> {

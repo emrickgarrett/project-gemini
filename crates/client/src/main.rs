@@ -55,6 +55,7 @@ fn main() {
                 audio::sync_gains,
                 audio::sync_crowd,
                 world::sync,
+                world::sync_viewmodel,
                 world::camera,
                 hud::draw,
             )

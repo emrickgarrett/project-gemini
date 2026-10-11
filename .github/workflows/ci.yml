@@ -42,6 +42,30 @@ jobs:
                   sys.exit(f"{name} does not match a fresh bugshots render ({len(a)} vs {len(b)} bytes)")
           print(f"{len(names)} bugshots match")
           PY
+      - name: hero stills match committed pictures
+        run: |
+          cargo run -p gemini-meshes --bin heroshot -- --out /tmp/heroshot-ci
+          python3 - << 'PY'
+          import subprocess, sys
+          from pathlib import Path
+          names = ["vex_fp_idle.png", "vex_fp_overdrive.png"]
+          def raw(path):
+              return subprocess.check_output(
+                  ["ffmpeg", "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+              )
+          for name in names:
+              fresh = Path("/tmp/heroshot-ci") / name
+              committed = Path("art/heroes") / name
+              if not committed.is_file() or not fresh.is_file():
+                  sys.exit(f"{name} missing from committed stills or a fresh heroshot render")
+              a = raw(committed)
+              b = raw(fresh)
+              if a != b:
+                  sys.exit(f"{name} does not match a fresh heroshot render ({len(a)} vs {len(b)} bytes)")
+              if len(a) != 1280 * 720 * 3:
+                  sys.exit(f"{name} is {len(a)} bytes, expected 1280x720 rgb")
+          print("2 hero stills match")
+          PY
       - name: wasm webgl2
         run: cargo build -p gemini-client --target wasm32-unknown-unknown --profile wasm-release
       - name: wasm webgpu

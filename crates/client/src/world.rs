@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 
 use bevy::asset::RenderAssetUsages;
-use bevy::camera::Hdr;
+use bevy::camera::visibility::RenderLayers;
+use bevy::camera::{ClearColorConfig, Hdr};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
@@ -61,6 +62,17 @@ pub(crate) struct Flash {
     life: f32,
 }
 
+/// Overlay camera. Its children are the first-person arms, on their own layer.
+#[derive(Component)]
+pub(crate) struct ViewmodelCamera;
+
+/// Barrel tube, muzzle ring, and core. Overdrive swaps these to an orange glow.
+#[derive(Component)]
+pub(crate) struct BarrelGlow {
+    idle: Handle<StandardMaterial>,
+    hot: Handle<StandardMaterial>,
+}
+
 #[derive(Resource, Default)]
 pub(crate) struct Bank {
     meshes: HashMap<String, Handle<Mesh>>,
@@ -70,6 +82,7 @@ pub(crate) struct Bank {
     pickup: Handle<Mesh>,
     flash: Handle<Mesh>,
     ring: Handle<Mesh>,
+    barrel_hot: Handle<StandardMaterial>,
 }
 
 #[derive(Resource, Default)]
@@ -151,7 +164,7 @@ pub fn scene(
         unlit: true,
         ..default()
     });
-    bank.mats.insert("hero_trim:false:false".into(), trim_handle);
+    bank.mats.insert("hero_trim:false:false".into(), trim_handle.clone());
     material(&mut bank, &mut materials, content, "arena_dark", false, false);
     material(&mut bank, &mut materials, content, "arena_light", false, false);
 
@@ -186,51 +199,98 @@ pub fn scene(
     }
 
     let vm = gemini_meshes::viewmodel();
-    let offset = gemini_meshes::viewmodel_offset();
+    let offset = content.hero.viewmodel_offset;
     let hands = Transform::from_xyz(offset[0], offset[1], offset[2]);
-    let teal_mesh = upload(&mut meshes, &vm.teal);
-    let cobalt_mesh = upload(&mut meshes, &vm.cobalt);
-    let white_mesh = upload(&mut meshes, &vm.white);
-    let accent_mesh = upload(&mut meshes, &vm.accent);
-    let core_mesh = upload(&mut meshes, &vm.core);
-    commands.spawn((
-        Camera3d::default(),
-        // Bloom needs this HDR camera. WebGL2 can present the view without the
-        // bloom pass; weak points stay unlit in their palette color so they
-        // still read when that happens.
-        Hdr,
-        Bloom::NATURAL,
-        Tonemapping::TonyMcMapface,
-        IsDefaultUiCamera,
-        PlayPiece,
-        children![
-            (
-                Mesh3d(teal_mesh),
-                MeshMaterial3d(mat_of(&bank, "hero_teal", false, false)),
-                hands,
-            ),
-            (
-                Mesh3d(cobalt_mesh),
-                MeshMaterial3d(mat_of(&bank, "hero_cobalt", false, false)),
-                hands,
-            ),
-            (
-                Mesh3d(white_mesh),
-                MeshMaterial3d(mat_of(&bank, "hero_white", false, false)),
-                hands,
-            ),
-            (
-                Mesh3d(accent_mesh),
-                MeshMaterial3d(mat_of(&bank, "hero_trim", false, false)),
-                hands,
-            ),
-            (
-                Mesh3d(core_mesh),
-                MeshMaterial3d(mat_of(&bank, "shots_player", true, false)),
-                hands,
-            ),
-        ],
-    ));
+    let barrel_hot = materials.add(StandardMaterial {
+        base_color: Color::srgb(trim[0], trim[1], trim[2]),
+        emissive: LinearRgba::rgb(trim[0] * 6.0, trim[1] * 6.0, trim[2] * 6.0),
+        unlit: true,
+        ..default()
+    });
+    let trim_idle = trim_handle.clone();
+    let core_idle = mat_of(&bank, "shots_player", true, false);
+    let cobalt_idle = mat_of(&bank, "hero_cobalt", false, false);
+    // The world camera draws layer 0. The overlay camera draws the arms on
+    // layer 1 with its own depth buffer, so the rifle cannot clip into the arena.
+    let world_cam = commands
+        .spawn((
+            Camera3d::default(),
+            Camera {
+                order: 0,
+                ..default()
+            },
+            RenderLayers::layer(0),
+            // Bloom needs this HDR camera. WebGL2 can present the view without the
+            // bloom pass; weak points stay unlit in their palette color so they
+            // still read when that happens.
+            Hdr,
+            Bloom::NATURAL,
+            Tonemapping::TonyMcMapface,
+            IsDefaultUiCamera,
+            PlayPiece,
+        ))
+        .id();
+    let vm_cam = commands
+        .spawn((
+            ViewmodelCamera,
+            Camera3d::default(),
+            Camera {
+                order: 1,
+                clear_color: ClearColorConfig::None,
+                ..default()
+            },
+            Projection::from(PerspectiveProjection {
+                fov: content.hero.viewmodel_fov.to_radians(),
+                near: 0.05,
+                ..default()
+            }),
+            RenderLayers::layer(1),
+            ChildOf(world_cam),
+        ))
+        .id();
+    let layer = RenderLayers::layer(1);
+    let pieces = [
+        (upload(&mut meshes, &vm.teal), mat_of(&bank, "hero_teal", false, false), None),
+        (upload(&mut meshes, &vm.cobalt), cobalt_idle.clone(), None),
+        (upload(&mut meshes, &vm.white), mat_of(&bank, "hero_white", false, false), None),
+        (
+            upload(&mut meshes, &vm.barrel),
+            cobalt_idle.clone(),
+            Some(BarrelGlow {
+                idle: cobalt_idle.clone(),
+                hot: barrel_hot.clone(),
+            }),
+        ),
+        (
+            upload(&mut meshes, &vm.accent),
+            trim_idle.clone(),
+            Some(BarrelGlow {
+                idle: trim_idle,
+                hot: barrel_hot.clone(),
+            }),
+        ),
+        (
+            upload(&mut meshes, &vm.core),
+            core_idle.clone(),
+            Some(BarrelGlow {
+                idle: core_idle,
+                hot: barrel_hot.clone(),
+            }),
+        ),
+    ];
+    for (mesh, mat, glow) in pieces {
+        let mut entity = commands.spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(mat),
+            hands,
+            layer.clone(),
+            ChildOf(vm_cam),
+        ));
+        if let Some(glow) = glow {
+            entity.insert(glow);
+        }
+    }
+    bank.barrel_hot = barrel_hot;
     commands.insert_resource(bank);
     commands.insert_resource(Links::default());
 }
@@ -516,7 +576,11 @@ fn spawn_bug(commands: &mut Commands, bank: &Bank, game: &Game, kind: EnemyKind,
     BugLink { root, parts, lod }
 }
 
-pub fn camera(game: Res<Game>, mut cameras: Query<(&mut Transform, &mut Projection), With<Camera3d>>, time: Res<Time>) {
+pub fn camera(
+    game: Res<Game>,
+    mut cameras: Query<(&mut Transform, &mut Projection), (With<Camera3d>, Without<ViewmodelCamera>)>,
+    time: Res<Time>,
+) {
     let Some(player) = game.sim.players.first() else { return };
     let eye_y = if player.crouching {
         game.content.arena.crouch_eye
@@ -544,6 +608,40 @@ pub fn camera(game: Res<Game>, mut cameras: Query<(&mut Transform, &mut Projecti
             persp.fov = fov.to_radians();
         }
     }
+}
+
+pub fn sync_viewmodel(
+    mut commands: Commands,
+    game: Res<Game>,
+    fx: Res<FrameFx>,
+    bank: Res<Bank>,
+    mut barrels: Query<(&BarrelGlow, &mut MeshMaterial3d<StandardMaterial>)>,
+    cam: Query<Entity, With<ViewmodelCamera>>,
+) {
+    let Some(player) = game.sim.players.first() else { return };
+    let overdrive = player.overdrive_left > 0.0;
+    for (glow, mut material) in &mut barrels {
+        material.0 = if overdrive { glow.hot.clone() } else { glow.idle.clone() };
+    }
+    let fired = fx
+        .sounds
+        .iter()
+        .any(|sound| sound.id == format!("{}_fire", game.content.hero.id));
+    if !(overdrive && fired) {
+        return;
+    }
+    let Ok(cam) = cam.single() else { return };
+    let offset = game.content.hero.viewmodel_offset;
+    let tip = gemini_meshes::muzzle_local();
+    commands.spawn((
+        Mesh3d(bank.flash.clone()),
+        MeshMaterial3d(bank.barrel_hot.clone()),
+        Transform::from_xyz(offset[0] + tip[0], offset[1] + tip[1], offset[2] + tip[2]).with_scale(Vec3::splat(0.55)),
+        RenderLayers::layer(1),
+        Flash { life: 0.07 },
+        PlayPiece,
+        ChildOf(cam),
+    ));
 }
 
 fn upload(meshes: &mut Assets<Mesh>, data: &MeshData) -> Handle<Mesh> {

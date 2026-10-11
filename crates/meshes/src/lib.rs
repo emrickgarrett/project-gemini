@@ -9,6 +9,7 @@ mod visual;
 pub use pose::{pose, AnimInput, Pose, Xform};
 pub use preview::{
     missing_glow_keys, painted_pixels, raster, raster_bug, raster_crown, raster_viewmodel, still, still_open,
+    ViewmodelFrame,
 };
 pub use visual::{bug, catalog, flat_shaded, EnemyVisual, Gate, Joint, Part, ShotCamera};
 
@@ -58,6 +59,8 @@ pub struct Viewmodel {
     pub white: MeshData,
     pub accent: MeshData,
     pub core: MeshData,
+    /// Outer barrel tube. Idle stays cobalt; Overdrive tints this orange.
+    pub barrel: MeshData,
 }
 
 impl Viewmodel {
@@ -67,12 +70,13 @@ impl Viewmodel {
             + self.white.tri_count()
             + self.accent.tri_count()
             + self.core.tri_count()
+            + self.barrel.tri_count()
     }
 }
 
-/// Camera-local offset shared by the client viewmodel and the hero still.
-pub fn viewmodel_offset() -> [f32; 3] {
-    [-0.14, -0.1, -0.58]
+/// Barrel tip in viewmodel mesh space, before the screen offset from characters.toml.
+pub fn muzzle_local() -> [f32; 3] {
+    [0.02, -0.005, -1.30]
 }
 
 pub fn viewmodel() -> Viewmodel {
@@ -82,6 +86,7 @@ pub fn viewmodel() -> Viewmodel {
         white: MeshData::new(),
         accent: MeshData::new(),
         core: MeshData::new(),
+        barrel: MeshData::new(),
     };
     let ink = [1.0, 1.0, 1.0, 1.0];
     glove(&mut vm, [0.2, -0.04, -0.08], 1.0, ink);
@@ -99,6 +104,7 @@ pub fn arms_and_gun(cobalt: Rgba, white: Rgba, accent: Rgba, energy: Rgba) -> Me
     geom::append(&mut m, &recolor(&vm.white, white.0));
     geom::append(&mut m, &recolor(&vm.accent, accent.0));
     geom::append(&mut m, &recolor(&vm.core, energy.0));
+    geom::append(&mut m, &recolor(&vm.barrel, cobalt.0));
     m
 }
 
@@ -181,7 +187,7 @@ fn rifle(vm: &mut Viewmodel, ink: [f32; 4]) {
     geom::plate(&mut vm.cobalt, [0.09, -0.01, -0.3], 0.34, 0.1, 0.03, 8, 5, ink);
     geom::plate(&mut vm.white, [0.02, 0.08, -0.32], 0.52, 0.055, 0.02, 14, 4, ink);
     spoke(
-        &mut vm.cobalt,
+        &mut vm.barrel,
         0.46,
         0.042,
         0.03,
@@ -335,6 +341,7 @@ mod tests {
         assert!(vm.accent.tri_count() > 40, "accent {}", vm.accent.tri_count());
         assert!(vm.core.tri_count() > 20, "core {}", vm.core.tri_count());
         assert!(vm.teal.tri_count() > 80 && vm.cobalt.tri_count() > 80);
+        assert!(vm.barrel.tri_count() >= 40, "barrel {}", vm.barrel.tri_count());
     }
 
     #[test]
