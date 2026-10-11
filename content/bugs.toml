@@ -16,10 +16,10 @@ weakpoint_hit = "weakpoint_hit"
 height = 0.45
 lod_distance = 18.0
 parts = [
-  { name="shell",    part="shell",    shape="sphere",  size=[0.42,0.40,0.46], offset=[0,0.30,0],     color="swarmer_amber", rear_open=true },
-  { name="abdomen",  part="gem",      shape="sphere",  size=[0.22,0.22,0.22], offset=[0,0.22,-0.16], color="swarmer_glow", emissive=true },
+  { name="shell",    part="shell",    shape="sphere",  size=[0.50,0.24,0.52], offset=[0,0.24,0],     color="swarmer_amber", rear_open=true },
+  { name="abdomen",  part="gem",      shape="sphere",  size=[0.15,0.15,0.15], offset=[0,0.14,-0.22], color="swarmer_glow", emissive=true },
   { name="mandible", part="mandible", shape="cone",    size=[0.05,0.16],      offset=[0.08,0.22,0.30], color="swarmer_amber", mirror=true, yaw=0.55, pitch=0.25, swing_hz=8.0, swing_amp=0.55 },
-  { name="leg",      part="leg",      shape="capsule", size=[0.03,0.30],      count=6, ring_radius=0.25, color="swarmer_amber", hip=0.36, femur=0.46, femur_lod=0.92, tibia=0.40, foot=0.16 },
+  { name="leg",      part="leg",      shape="capsule", size=[0.03,0.30],      count=6, ring_radius=0.25, color="swarmer_amber", layout="paired", hip=0.36, femur=0.46, femur_lod=0.92, tibia=0.40, foot=0.16 },
 ]
 anim = { bob=[0.03, 9.0], leg_swing=35, gait="tripod", glow_pulse=2.0 }
 
@@ -35,9 +35,9 @@ look_z = -0.08
 fov = 30
 
 [swarmer.visual.density]
-slices = 5
-stacks = 3
-plates = 4
+slices = 8
+stacks = 4
+plates = 0
 nu = 2
 nv = 2
 sides = 4
@@ -69,7 +69,7 @@ parts = [
   { name="head",   part="head",   shape="cone",    size=[0.22,0.34], offset=[0,0.48,0.72], color="spitter_carapace", point="forward" },
   { name="eyes",   part="eyes",   shape="sphere",  size=[0.05,0.05,0.05], offset=[0.09,0.56,0.82], color="spitter_glow", emissive=true, mirror=true },
   { name="sac",    part="gem",    shape="sphere",  size=[0.62,0.48,0.56], offset=[0,1.02,-0.02], color="spitter_glow", emissive=true },
-  { name="leg",    part="leg",    shape="capsule", size=[0.05,0.75], count=4, ring_radius=0.45, color="spitter_carapace", hip=0.46, femur=0.46, femur_lod=0.92, tibia=0.40, foot=0.16 },
+  { name="leg",    part="leg",    shape="capsule", size=[0.05,0.75], count=4, ring_radius=0.45, color="spitter_carapace", layout="paired", hip=0.46, femur=0.46, femur_lod=0.92, tibia=0.40, foot=0.16 },
 ]
 anim = { bob=[0.04, 3.0], leg_swing=25, gait="alternate", sac_charge_scale=1.25, sac_charge_glow=3.0 }
 
@@ -124,7 +124,7 @@ parts = [
   { name="cracks",   part="decal",    shape="decal",   on="shell", color="brute_cracks", emissive=true, active_when="vulnerable", patch=[0.28, 0.1, 0.22], patch_floor=0.05 },
   { name="horn",     part="horn",     shape="cone",    size=[0.12,0.34], offset=[0,1.7,0.62], tilt_deg=28, color="brute_amber" },
   { name="forelimb", part="forelimb", shape="capsule", size=[0.48,0.72], offset=[0.95,1.15,0.95], color="brute_amber", mirror=true, aim=[0.42, -0.08, 1.2], seg=0.5, rad=0.92, taper=0.74, blade=0.48, blade_euler=[0.85, 0.2, 0.35], blade_r=[1.05, 0.4], swing_hz=2.2, swing_amp=0.18 },
-  { name="leg",      part="leg",      shape="capsule", size=[0.16,0.8], count=4, ring_radius=0.75, color="brute_amber", hip=0.46, femur=0.46, femur_lod=0.92, tibia=0.40, foot=0.16 },
+  { name="leg",      part="leg",      shape="capsule", size=[0.16,0.8], count=4, ring_radius=0.75, color="brute_amber", layout="paired", hip=0.46, femur=0.46, femur_lod=0.92, tibia=0.40, foot=0.16 },
 ]
 anim = { bob=[0.06, 1.4], leg_swing=20, gait="alternate", charge_lean_deg=12 }
 
@@ -189,13 +189,13 @@ parts = [
   { name="gland", part="gem",   shape="sphere", size=[0.5,0.45,0.4], offset=[0,0.9,2.0], color="spitter_glow", emissive=true },
   { name="sac",   part="gem",   shape="sphere", size=[3.0,2.4,3.4], offset=[0,1.8,-0.6], color="brood_sac" },
   { name="pod",   part="pod",   shape="sphere", size=[0.6,0.6,0.6], count=6, on="sac", ring_radius=0.62, color="swarmer_glow", emissive=true, ring_phase=0.0, sink=0.98, ny_floor=0.25, ring_turn=0.4 },
-  { name="bud",   part="bud",   shape="sphere", size=[0.42,0.34,0.42], count=6, on="sac", ring_radius=0.72, color="brood_sac", emissive=false, grows_into_pod_on="enrage", ring_phase=0.5, sink=1.16, ny_floor=0.42, ring_turn=0.4, grown_scale=2.4, grown_glow=2.2 },
-  { name="leg",   part="leg",   shape="capsule", size=[0.28,1.7], count=6, ring_radius=2.15, color="brute_amber", hip=0.16, femur=0.46, femur_lod=0.92, tibia=0.40, foot=0.16 },
+  { name="bud",   part="bud",   shape="sphere", size=[0.52,0.46,0.52], count=6, on="sac", ring_radius=0.8, color="brood_sac", emissive=false, grows_into_pod_on="enrage", ring_phase=0.5, sink=1.32, ny_floor=0.55, ring_turn=0.4, grown_scale=2.4, grown_glow=2.2 },
+  { name="leg",   part="leg",   shape="capsule", size=[0.28,1.7], count=6, ring_radius=2.85, color="brute_amber", layout="radial", hip_scale=0.95, plant_scale=1.55, ring_phase=0.35, hip=0.42, femur=0.46, femur_lod=0.92, tibia=0.40, foot=0.16 },
 ]
 anim = { bob=[0.08, 0.8], leg_swing=15, gait="tripod", pod_charge_glow=3.0, pod_charge_time=1.5, sac_breathe=[0.03, 0.5] }
 
 [brood_mother.visual.camera]
-dist_mul = 3.55
+dist_mul = 4.15
 dist_add = 1.1
 eye_x = 0.7
 eye_y = 0.68
@@ -241,18 +241,18 @@ parts = [
   { name="torso",  part="torso",   shape="capsule", size=[1.2,3.0], offset=[0,3.2,0.5], tilt_deg=-15, color="brute_amber" },
   { name="armor",  part="armor",   shape="box",     size=[2.6,2.4,1.15], offset=[0,3.35,0.85], color="brute_amber", phase_max=1 },
   { name="core",   part="gem",     shape="sphere",  size=[0.8,0.8,0.8], offset=[0,3.4,1.0], color="spitter_glow", emissive=true },
-  { name="head",   part="head",    shape="cone",    size=[0.7,0.85], offset=[0,5.15,0.95], color="brute_amber", point="up" },
-  { name="crown",  part="crown",   shape="cone",    size=[0.16,0.7], count=6, on="head", color="brute_amber", spread=[2.2, 0.85, 1.5], crown_pitch=0.55 },
-  { name="scythe", part="scythe",  shape="cone",    size=[0.42,2.15], offset=[1.35,3.7,0.7], tilt_deg=70, color="brute_amber", mirror=true, aim=[1.15, 0.05, 0.55], seg=0.42, rad=0.7, taper=0.62, blade=0.95, blade_euler=[0.15, 0.0, 0.0], blade_r=[1.35, 0.28], swing_hz=1.4, swing_amp=0.12 },
+  { name="head",   part="head",    shape="cone",    size=[0.85,1.05], offset=[0,5.05,1.15], color="brute_amber", point="up" },
+  { name="crown",  part="crown",   shape="cone",    size=[0.14,1.05], count=6, on="head", color="brute_amber", spread=[1.7, 0.55, 1.15], crown_pitch=0.35 },
+  { name="scythe", part="scythe",  shape="cone",    size=[0.36,3.35], offset=[1.55,3.55,0.85], tilt_deg=70, color="brute_amber", mirror=true, aim=[1.25, 0.02, 0.7], seg=0.38, rad=0.62, taper=0.55, blade=1.25, blade_euler=[0.35, 0.0, 0.15], blade_r=[0.85, 0.16], swing_hz=1.4, swing_amp=0.12 },
   { name="tail",   part="tail",    shape="capsule", size=[0.4,1.0], count=7, chain=true, offset=[0,2.0,-1.5], curl_deg=200, base_pitch=2.05, curl_share=0.70, joint_span=0.82, segment_scale=0.90, tip_gap=0.02, segment_cap=12, sway_rate=1.6, sway_spread=0.4, sway_amp=0.06, color="brute_amber" },
   { name="cannon", part="cannon",  shape="sphere",  size=[0.7,0.7,0.7], at="tail_end", color="spitter_glow", emissive=true, phase_max=1 },
   { name="veins",  part="decal",   shape="decal",   on="legs", color="swarmer_glow", emissive=true, pulse_phase=2 },
-  { name="leg",    part="leg",     shape="capsule", size=[0.35,2.4], count=6, ring_radius=2.2, color="brute_amber", hip=0.36, femur=0.46, femur_lod=0.92, tibia=0.40, foot=0.16 },
+  { name="leg",    part="leg",     shape="capsule", size=[0.35,2.6], count=6, ring_radius=3.35, color="brute_amber", layout="radial", hip_scale=0.95, plant_scale=1.55, ring_phase=0.35, hip=0.42, femur=0.46, femur_lod=0.92, tibia=0.40, foot=0.16 },
 ]
 anim = { bob=[0.1, 0.6], leg_swing=12, gait="alternate", frenzy_speed=1.4, phase_burst="armor_shards" }
 
 [hive_tyrant.visual.camera]
-dist_mul = 2.7
+dist_mul = 3.25
 dist_add = 1.2
 eye_x = 0.78
 eye_y = 0.52

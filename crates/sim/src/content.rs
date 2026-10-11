@@ -106,6 +106,9 @@ impl Content {
         ]);
         let mut bugs: crate::bugs::BugBook = parse("bugs.toml", src.bugs)?;
         crate::bugs::bind_weak_anchors(&mut bugs).map_err(|err| format!("bugs.toml: {err}"))?;
+        crate::bugs::require_leg_layout(&bugs).map_err(|err| format!("bugs.toml: {err}"))?;
+        let bosses = load_bosses(src.bosses).map_err(|err| format!("bosses.toml: {err}"))?;
+        require_spawn_clearance(&bosses, &bugs).map_err(|err| format!("bosses.toml: {err}"))?;
         Ok(Self {
             fingerprint,
             waves: parse("waves.toml", src.waves)?,
@@ -122,7 +125,7 @@ impl Content {
             currency: parse("currency.toml", src.currency)?,
             banners: parse("banners.toml", src.banners)?,
             duplicate: parse("duplicate_ranks.toml", src.duplicate_ranks)?,
-            bosses: load_bosses(src.bosses).map_err(|err| format!("bosses.toml: {err}"))?,
+            bosses,
             weapons: parse("weapons.toml", src.weapons)?,
             hero: parse("hero.toml", src.hero)?,
             arena: parse("arena.toml", src.arena)?,
@@ -829,6 +832,38 @@ fn load_bosses(text: &str) -> Result<Vec<BossDef>, String> {
             spawn_radius: hive.spawn_radius,
         },
     ])
+}
+
+fn body_hit_radius(shape: &crate::bugs::ShapeDef) -> f32 {
+    if shape.radius > 0.0 {
+        shape.radius
+    } else {
+        shape.half_extents[0].max(shape.half_extents[1]).max(shape.half_extents[2])
+    }
+}
+
+/// Adds must spawn outside the boss body. `spawn_radius` has to clear both radii.
+fn require_spawn_clearance(bosses: &[BossDef], bugs: &crate::bugs::BugBook) -> Result<(), String> {
+    for boss in bosses {
+        let boss_kind = EnemyKind::from_name(&boss.id).ok_or_else(|| format!("{} is not a bug", boss.id))?;
+        let body_r = body_hit_radius(&bugs.of(boss_kind).hitbox.body);
+        for add_name in [&boss.spawn_kind, &boss.reinforce_kind] {
+            if add_name.is_empty() {
+                continue;
+            }
+            let add_kind = EnemyKind::from_name(add_name)
+                .ok_or_else(|| format!("{} add \"{add_name}\" is unknown", boss.id))?;
+            let add_r = body_hit_radius(&bugs.of(add_kind).hitbox.body);
+            let limit = body_r + add_r;
+            if boss.spawn_radius <= limit {
+                return Err(format!(
+                    "{} spawn_radius {} must be > body radius {} + {} radius {}",
+                    boss.id, boss.spawn_radius, body_r, add_name, add_r
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize)]

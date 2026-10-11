@@ -165,7 +165,7 @@ mod tests {
         }
         assert!(sw.height < 0.7, "swarmer knee-high, got {}", sw.height);
         assert!((br.height - 1.8).abs() < 0.05, "brute shoulder, got {}", br.height);
-        assert!((240..=420).contains(&sw.tri_count()), "swarmer {}", sw.tri_count());
+        assert!((240..=480).contains(&sw.tri_count()), "swarmer {}", sw.tri_count());
         assert!((640..=1000).contains(&sp.tri_count()), "spitter {}", sp.tri_count());
         assert!((1200..=1800).contains(&br.tri_count()), "brute {}", br.tri_count());
         assert!(brood.tri_count() <= 8000 && brood.tri_count() > 600, "brood {}", brood.tri_count());

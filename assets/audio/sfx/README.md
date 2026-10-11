@@ -1,6 +1,6 @@
 # Project Gemini SFX
 
-All sounds except brood_pod_hatch.ogg and tyrant_roar.ogg are procedurally synthesized in Python (numpy/scipy, /workspace/suno/sfx.py), no samples. Those two are trimmed Suno Sounds clips (pod hatch take 2, 1.2 s, burst peaks ~0.95 s, see bosses.toml hatch_sfx_peak_offset; tyrant roar take 2, 2.9 s) generated under Garrett's paid Suno plan, so commercial use is permitted; synth originals are in _synth_backup/. First-pass placeholders; nobody has listened to them yet. OGG Vorbis q6, 48 kHz mono, peaks normalized to -2 dBFS. Loops (L) wrap seamlessly via tail-to-head crossfade. Playback levels, pitch randomization and voice limits live in content/audio_mix.toml.
+All sounds except brood_pod_hatch.ogg and tyrant_roar.ogg are procedurally synthesized in Python (numpy/scipy, /workspace/suno/sfx.py), no samples. Those two are trimmed Suno Sounds clips (pod hatch take 2, 1.2 s, burst peaks ~0.95 s, see bosses.toml hatch_sfx_peak_offset; tyrant roar take 2, 2.9 s) generated under Garrett's paid Suno plan, so commercial use is permitted. First-pass placeholders; nobody has listened to them yet. OGG Vorbis q6, 48 kHz mono, peaks normalized to -2 dBFS. Loops (L) wrap seamlessly via tail-to-head crossfade. Playback levels, pitch randomization and voice limits live in content/audio_mix.toml.
 
 | File | Duration (s) | Loop | Trigger |
 |---|---|---|---|

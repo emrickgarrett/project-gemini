@@ -148,6 +148,18 @@ pub struct VisualPart {
     pub ring_turn: Option<f32>,
     #[serde(default)]
     pub ny_floor: Option<f32>,
+    /// "paired" or "radial". Required on a leg. An empty value fails load.
+    #[serde(default)]
+    pub layout: String,
+    /// Radial hip distance, as a fraction of ring_radius.
+    #[serde(default)]
+    pub hip_scale: Option<f32>,
+    /// Radial foot distance, as a fraction of ring_radius.
+    #[serde(default)]
+    pub plant_scale: Option<f32>,
+    /// Radial yaw offset, radians. Pod rings use the same key.
+    #[serde(default)]
+    pub ring_phase: Option<f32>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -236,6 +248,34 @@ impl BugHitbox {
 pub fn bind_weak_anchors(book: &mut BugBook) -> Result<(), String> {
     for (bug, row) in book.rows_mut() {
         bind_row(bug, row)?;
+    }
+    Ok(())
+}
+
+/// Every leg names `layout`. Radial legs also name hip scale, plant scale, and phase.
+pub fn require_leg_layout(book: &BugBook) -> Result<(), String> {
+    for (id, row) in book.rows() {
+        let Some(leg) = row.visual.parts.iter().find(|part| part.name == "leg") else {
+            return Err(format!("{id} leg is missing layout"));
+        };
+        if leg.layout.is_empty() {
+            return Err(format!("{id} leg is missing layout"));
+        }
+        match leg.layout.as_str() {
+            "paired" => {}
+            "radial" => {
+                if leg.hip_scale.is_none() {
+                    return Err(format!("{id} leg is missing hip_scale"));
+                }
+                if leg.plant_scale.is_none() {
+                    return Err(format!("{id} leg is missing plant_scale"));
+                }
+                if leg.ring_phase.is_none() {
+                    return Err(format!("{id} leg is missing ring_phase"));
+                }
+            }
+            other => return Err(format!("{id} leg layout \"{other}\" is unknown")),
+        }
     }
     Ok(())
 }
