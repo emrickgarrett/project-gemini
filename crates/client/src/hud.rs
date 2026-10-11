@@ -11,6 +11,20 @@ use crate::world::PlayPiece;
 pub(crate) struct HudNode;
 
 #[derive(Component)]
+pub(crate) struct HudLabel;
+
+#[derive(Component)]
+pub(crate) struct HudFill;
+
+#[derive(Component)]
+pub(crate) struct HudAmmo;
+
+#[derive(Default)]
+pub(crate) struct HudShape {
+    key: String,
+}
+
+#[derive(Component)]
 pub(crate) struct Floater {
     world: Vec3,
     age: f32,
@@ -23,9 +37,14 @@ pub fn draw(
     game: Res<Game>,
     fx: Res<FrameFx>,
     time: Res<Time>,
-    old: Query<Entity, With<HudNode>>,
+    // Only the root. Despawning it already despawns `HudNode` children.
+    old: Query<Entity, (With<HudNode>, Without<ChildOf>)>,
     camera: Query<(&Camera, &GlobalTransform)>,
-    mut floaters: Query<(Entity, &mut Floater, &mut Node)>,
+    mut floaters: Query<(Entity, &mut Floater, &mut Node), Without<HudFill>>,
+    mut shape: Local<HudShape>,
+    mut labels: Query<&mut Text, With<HudLabel>>,
+    mut fills: Query<&mut Node, (With<HudFill>, Without<Floater>)>,
+    mut ammos: Query<&mut Text, (With<HudAmmo>, Without<HudLabel>)>,
 ) {
     let dt = time.delta_secs();
     for (entity, mut floater, mut node) in &mut floaters {
@@ -42,28 +61,12 @@ pub fn draw(
             }
         }
     }
-    for entity in &old {
-        commands.entity(entity).despawn();
-    }
     let Some(player) = game.sim.players.first() else { return };
     let teal = color(&game, "hero_teal");
     let white = color(&game, "hero_white");
     let accent = color(&game, "hero_accent");
     let amber = color(&game, "brute_amber");
     let magenta = color(&game, "spitter_glow");
-    let root = commands
-        .spawn((
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                position_type: PositionType::Absolute,
-                ..default()
-            },
-            HudNode,
-            PlayPiece,
-        ))
-        .id();
-
     let boss = game.sim.enemies.iter().find(|e| {
         e.alive && matches!(e.kind, EnemyKind::BroodMother | EnemyKind::HiveTyrant)
     });
@@ -95,6 +98,52 @@ pub fn draw(
             Vec::new(),
         )
     };
+    let hp = if player.max_hp > 0.0 { player.hp / player.max_hp } else { 0.0 };
+    let fuel_max = game.content.controller.boost.fuel_max;
+    let fuel = if fuel_max > 0.0 { player.fuel / fuel_max } else { 0.0 };
+    let cd = player.ability_cd;
+    let max_cd = game.content.controller.ability.default_cooldown.max(0.1);
+    let ready = cd <= 0.0;
+    let boss_id = boss.map(|enemy| enemy.kind.name()).unwrap_or("");
+    let upgrade_sig: String = player.upgrades.keys().cloned().collect();
+    let key = format!(
+        "{:?}|{boss_id}|{}|{upgrade_sig}|{}|{}|{}|{}",
+        std::mem::discriminant(&game.sim.phase),
+        player.downed as u8,
+        (hp * 14.0) as i32,
+        (fuel * 14.0) as i32,
+        if ready { 14 } else { ((1.0 - cd / max_cd) * 14.0) as i32 },
+        notches.len(),
+    );
+    if !old.is_empty() && shape.key == key {
+        if let Ok(mut text) = labels.single_mut() {
+            text.0 = label;
+        }
+        if let Ok(mut node) = fills.single_mut() {
+            node.width = Val::Px(280.0 * fill.clamp(0.0, 1.0));
+        }
+        if let Ok(mut text) = ammos.single_mut() {
+            let gun = if player.downed { &player.sidearm } else { &player.primary };
+            text.0 = format!("{}  /  {}", gun.ammo, gun.reserve);
+        }
+        return;
+    }
+    for entity in &old {
+        commands.entity(entity).despawn();
+    }
+    shape.key = key;
+    let root = commands
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                position_type: PositionType::Absolute,
+                ..default()
+            },
+            HudNode,
+            PlayPiece,
+        ))
+        .id();
     commands.spawn((
         Text::new(label),
         TextFont::from_font_size(22.0),
@@ -108,6 +157,7 @@ pub fn draw(
         },
         ChildOf(root),
         HudNode,
+        HudLabel,
     ));
     bar_widget(&mut commands, root, 280.0, 10.0, fill, bar, &notches, white);
 
@@ -129,14 +179,8 @@ pub fn draw(
         HudNode,
     ));
 
-    let hp = if player.max_hp > 0.0 { player.hp / player.max_hp } else { 0.0 };
-    let fuel_max = game.content.controller.boost.fuel_max;
-    let fuel = if fuel_max > 0.0 { player.fuel / fuel_max } else { 0.0 };
     arc(&mut commands, root, 78.0, 78.0, 46.0, hp.clamp(0.0, 1.0), teal);
     arc(&mut commands, root, 168.0, 78.0, 36.0, fuel.clamp(0.0, 1.0), white);
-    let cd = player.ability_cd;
-    let max_cd = game.content.controller.ability.default_cooldown.max(0.1);
-    let ready = cd <= 0.0;
     let ready_flash = ready && (game.sim.time * 3.0).sin() > 0.2;
     arc(
         &mut commands,
@@ -226,6 +270,7 @@ pub fn draw(
         },
         ChildOf(root),
         HudNode,
+        HudAmmo,
     ));
 
     commands.spawn((
@@ -379,6 +424,7 @@ fn bar_widget(commands: &mut Commands, root: Entity, width: f32, height: f32, fi
         BackgroundColor(color),
         ChildOf(root),
         HudNode,
+        HudFill,
     ));
     for notch in notches {
         let x = -width * 0.5 + width * notch.clamp(0.0, 1.0);

@@ -37,6 +37,13 @@ pub struct FrameFx {
 #[derive(Resource)]
 pub struct PendingDifficulty(pub String);
 
+/// Leftover time since the last sim step. A frame faster than `SIM_DT` must keep
+/// this, or a 60 Hz display never reaches a tick and the match looks frozen.
+#[derive(Resource, Default)]
+pub struct SimClock {
+    acc: f32,
+}
+
 pub fn boot(mut commands: Commands, pending: Res<PendingDifficulty>) {
     let content = Content::embedded();
     let sim = Sim::new(&content, &pending.0, 7);
@@ -56,6 +63,7 @@ pub fn boot(mut commands: Commands, pending: Res<PendingDifficulty>) {
 
 pub fn gather_and_step(
     time: Res<Time>,
+    mut clock: ResMut<SimClock>,
     mut game: ResMut<Game>,
     mut fx: ResMut<FrameFx>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -178,13 +186,16 @@ pub fn gather_and_step(
         using_gamepad: using_pad,
     };
 
-    let mut acc = time.delta_secs();
+    clock.acc += time.delta_secs();
     let mut steps = 0;
     fx.sounds.clear();
     fx.stops.clear();
     fx.pings.clear();
     fx.moments.clear();
-    while acc >= SIM_DT && steps < 4 {
+    // Sim::new emits wave_start before the first tick. step() clears sounds on entry,
+    // so keep that cue or the match-start sting never plays.
+    fx.sounds.append(&mut game.sim.sounds);
+    while clock.acc >= SIM_DT && steps < 4 {
         {
             let Game { sim, content, .. } = &mut *game;
             sim.step(content, input);
@@ -202,7 +213,7 @@ pub fn gather_and_step(
         input.upgrade_choice = None;
         input.look_dx_deg = 0.0;
         input.look_dy_deg = 0.0;
-        acc -= SIM_DT;
+        clock.acc -= SIM_DT;
         steps += 1;
     }
     fx.tick = game.sim.tick;
