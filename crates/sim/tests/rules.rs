@@ -1045,7 +1045,8 @@ fn vex_overdrive_comes_from_characters() {
     assert!(off[0] > 0.0 && off[1] < 0.0, "viewmodel should sit lower right, got {off:?}");
     assert!((off[0] - 0.44).abs() < 1e-4 && (off[1] + 0.28).abs() < 1e-4 && (off[2] + 0.48).abs() < 1e-4);
     assert!((content.hero.viewmodel_fov - 40.0).abs() < 1e-4);
-    assert_eq!(content.hero.muzzle_flash_frames, 3);
+    assert!((content.hero.muzzle_flash_secs - 0.05).abs() < 1e-4);
+    assert!((content.hero.muzzle_flash_radius - 0.045).abs() < 1e-4);
     assert!(content.weapon("coil_rifle").is_none());
     let gun = content.weapon("pulse_rifle").unwrap();
     assert!((gun.fire_interval - 1.0 / 9.0).abs() < 1e-4);
@@ -1106,7 +1107,7 @@ fn vex_overdrive_comes_from_characters() {
         })
     };
     let text = include_str!("../../../content/characters.toml");
-    for key in ["viewmodel_offset", "viewmodel_fov", "muzzle_flash_frames"] {
+    for key in ["viewmodel_offset", "viewmodel_fov", "muzzle_flash_secs", "muzzle_flash_radius"] {
         let stripped = text.lines().filter(|line| !line.contains(key)).collect::<Vec<_>>().join("\n");
         let err = load_hero(&stripped).expect_err(key);
         assert!(err.contains(key), "{err}");
@@ -1114,9 +1115,14 @@ fn vex_overdrive_comes_from_characters() {
     let zero = text.replace("viewmodel_fov = 40", "viewmodel_fov = 0");
     let err = load_hero(&zero).expect_err("zero viewmodel fov");
     assert!(err.contains("viewmodel_fov"), "{err}");
-    let long = text.replace("muzzle_flash_frames = 3", "muzzle_flash_frames = 8");
-    let err = load_hero(&long).expect_err("flash longer than three frames");
-    assert!(err.contains("muzzle_flash_frames"), "{err}");
+    for (key, sample) in [("muzzle_flash_secs", "0.05"), ("muzzle_flash_radius", "0.045")] {
+        let zeroed = text.replace(&format!("{key} = {sample}"), &format!("{key} = 0"));
+        let err = load_hero(&zeroed).expect_err(key);
+        assert!(err.contains(key), "{err}");
+        let negative = text.replace(&format!("{key} = {sample}"), &format!("{key} = -1"));
+        let err = load_hero(&negative).expect_err(key);
+        assert!(err.contains(key), "{err}");
+    }
 
     let mut sim = Sim::new(&content, "normal", 2);
     assert!((sim.players[0].max_hp - content.hero.max_hp).abs() < 1e-3);

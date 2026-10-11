@@ -26,7 +26,7 @@ fn main() {
         }
     }
     fs::create_dir_all(&out).expect("create out dir");
-    let (accent, offset, fov) = vex_viewmodel();
+    let (accent, offset, fov, glow_radius) = vex_viewmodel();
     let idle = raster_viewmodel(
         W,
         H,
@@ -35,6 +35,7 @@ fn main() {
             offset,
             fov,
             overdrive: false,
+            glow_radius,
         },
     );
     let drive = raster_viewmodel(
@@ -45,6 +46,7 @@ fn main() {
             offset,
             fov,
             overdrive: true,
+            glow_radius,
         },
     );
     assert_lower_right(&idle, "idle");
@@ -111,7 +113,7 @@ fn orange_pixels(rgb: &[u8]) -> u32 {
         .count() as u32
 }
 
-fn vex_viewmodel() -> ([f32; 4], [f32; 3], f32) {
+fn vex_viewmodel() -> ([f32; 4], [f32; 3], f32, f32) {
     let text = include_str!("../../../../content/characters.toml");
     let root: toml::Value = toml::from_str(text).expect("characters.toml");
     let starter = root
@@ -136,7 +138,12 @@ fn vex_viewmodel() -> ([f32; 4], [f32; 3], f32) {
         .get("viewmodel_fov")
         .map(num)
         .expect("vex is missing viewmodel_fov");
-    (accent, offset, fov)
+    let glow_radius = row
+        .get("muzzle_flash_radius")
+        .map(num)
+        .filter(|radius| *radius > 0.0)
+        .expect("vex is missing a positive muzzle_flash_radius");
+    (accent, offset, fov, glow_radius)
 }
 
 fn parse_hex(hex: &str) -> [f32; 4] {

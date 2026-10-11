@@ -83,6 +83,8 @@ pub struct ViewmodelFrame {
     pub offset: [f32; 3],
     pub fov: f32,
     pub overdrive: bool,
+    /// Muzzle glow radius from characters.toml. Drawn only while Overdrive is firing in the still.
+    pub glow_radius: f32,
 }
 
 /// First-person still. The camera sits at the origin looking down -Z, matching the overlay camera.
@@ -107,7 +109,7 @@ pub fn raster_viewmodel(width: u32, height: u32, frame: &ViewmodelFrame) -> Vec<
             shift[1] + crate::muzzle_local()[1],
             shift[2] + crate::muzzle_local()[2],
         ];
-        let mut glow = crate::muzzle_glow();
+        let mut glow = crate::muzzle_glow(frame.glow_radius);
         crate::geom::translate(&mut glow, tip);
         parts.push((glow, [1.0, 0.72, 0.28, 1.0], true));
     }

@@ -145,7 +145,7 @@ pub fn scene(
     bank.acid = upload(&mut meshes, &gemini_meshes::tracer(acid));
     bank.pickup = upload(&mut meshes, &gemini_meshes::pickup_beam(accent));
     bank.flash = upload(&mut meshes, &gemini_meshes::gun_core(white));
-    bank.muzzle = upload(&mut meshes, &gemini_meshes::muzzle_glow());
+    bank.muzzle = upload(&mut meshes, &gemini_meshes::muzzle_glow(content.hero.muzzle_flash_radius));
     let mut ring = MeshData::new();
     // A flat faceted ring: two discs would be solid. A thin torus-like prism reads as a ring.
     for i in 0..10 {
@@ -681,8 +681,7 @@ pub fn sync_viewmodel(
     let offset = game.content.hero.viewmodel_offset;
     let tip = gemini_meshes::muzzle_local();
     let accent = game.content.palette.key("accent");
-    let frames = game.content.hero.muzzle_flash_frames;
-    let life = frames as f32 / 60.0;
+    let life = game.content.hero.muzzle_flash_secs;
     let flash_mat = materials.add(StandardMaterial {
         base_color: Color::srgba(accent[0], accent[1], accent[2], 1.0),
         emissive: LinearRgba::rgb(accent[0] * 8.0, accent[1] * 8.0, accent[2] * 8.0),
