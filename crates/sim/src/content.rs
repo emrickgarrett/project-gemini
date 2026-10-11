@@ -272,6 +272,14 @@ impl Content {
         self.audio.sfx.iter().find(|s| s.id == id)
     }
 
+    /// File for a reveal cue. Stings live in the sting table; tease and fakeout live in sfx.
+    pub fn cue_path(&self, id: &str) -> Option<&str> {
+        if let Some(sting) = self.audio.sting.iter().find(|row| row.id == id) {
+            return Some(sting.path.as_str());
+        }
+        self.sfx(id).map(|row| row.path.as_str())
+    }
+
     pub fn pitch_range(&self, id: &str) -> Option<(f32, f32)> {
         let semi = self.sfx(id)?.pitch_semitones;
         if semi <= 0.0 {

@@ -66,7 +66,17 @@ pub fn launch_from_env() -> Launch {
     }
 }
 
-pub fn autoplay(launch: Res<Launch>, mut next: ResMut<NextState<AppState>>) {
+pub fn autoplay(mut commands: Commands, launch: Res<Launch>, mut next: ResMut<NextState<AppState>>, mut opened: Local<bool>) {
+    if !*opened {
+        if let Ok(spec) = std::env::var("GEMINI_REVEAL") {
+            if let Some(run) = crate::reveal_ui::from_env(&spec) {
+                *opened = true;
+                commands.insert_resource(crate::reveal_ui::RevealPlayback(run));
+                next.set(AppState::Reveal);
+                return;
+            }
+        }
+    }
     if !matches!(*launch, Launch::Solo) {
         next.set(AppState::Playing);
     }
