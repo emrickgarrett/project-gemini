@@ -1,17 +1,22 @@
 //! Fixed-timestep match. Look and presentation live here; the sim owns the rules.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashSet;
 
 use bevy::input::gamepad::{Gamepad, GamepadAxis, GamepadButton};
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
-use bevy::window::{CursorGrabMode, CursorOptions, WindowOccluded};
+use bevy::window::{CursorGrabMode, CursorOptions};
+#[cfg(not(target_arch = "wasm32"))]
+use bevy::window::WindowOccluded;
 
 #[cfg(not(target_arch = "wasm32"))]
 use gemini_meshes::raster_bug;
 use gemini_sim::audio_mix::SoundEvent;
 use gemini_sim::content::Content;
-use gemini_sim::host_away::{AwayPhase, HostAwayClock};
+use gemini_sim::host_away::{on_host_visibility_changed, HostAwayClock};
+#[cfg(not(target_arch = "wasm32"))]
+use gemini_sim::host_away::AwayPhase;
 use gemini_sim::math::Vec3 as SimVec3;
 use gemini_sim::sim::{HitPing, MusicMoment, Phase, PlayerInput, Sim, SoundStop, SIM_DT};
 
@@ -186,6 +191,7 @@ pub struct Away {
 #[derive(Resource, Default)]
 pub struct Page {
     hidden: bool,
+    #[cfg(not(target_arch = "wasm32"))]
     occluded: HashSet<Entity>,
 }
 
@@ -197,7 +203,7 @@ pub fn gather_and_step(
     mut fx: ResMut<FrameFx>,
     mut away: ResMut<Away>,
     mut page: ResMut<Page>,
-    mut occluded: MessageReader<WindowOccluded>,
+    #[cfg(not(target_arch = "wasm32"))] mut occluded: MessageReader<WindowOccluded>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
@@ -318,21 +324,52 @@ pub fn gather_and_step(
         using_gamepad: using_pad,
     };
 
-    for msg in occluded.read() {
-        if msg.occluded {
-            page.occluded.insert(msg.window);
-        } else {
-            page.occluded.remove(&msg.window);
-        }
-    }
-    page.hidden = !page.occluded.is_empty();
-
     let rules = game.content.coop.host_away.clone();
     away.clock.set_solo(game.sim.connected_count() <= 1);
-    let dt = time.delta_secs();
-    let cues = step_away(&mut game, &mut link, &mut away, &page, dt);
+    let mut cues = Vec::new();
+    let mut stops = Vec::new();
+    #[cfg(not(target_arch = "wasm32"))]
+    let mut announce = false;
+    #[cfg(not(target_arch = "wasm32"))]
+    let samples = {
+        for msg in occluded.read() {
+            if msg.occluded {
+                page.occluded.insert(msg.window);
+            } else {
+                page.occluded.remove(&msg.window);
+            }
+        }
+        page.hidden = !page.occluded.is_empty();
+        vec![(page.hidden, time.elapsed_secs())]
+    };
+    #[cfg(target_arch = "wasm32")]
+    let samples = page_visibility::samples();
+    match &mut *link {
+        #[cfg(not(target_arch = "wasm32"))]
+        CoopLink::Client(client) => {
+            let (client_cues, client_stops) = client_away(&mut game, client, &mut away, page.hidden, time.delta_secs());
+            cues = client_cues;
+            stops = client_stops;
+        }
+        _ => {
+            for (hidden, now) in samples {
+                page.hidden = hidden;
+                let effect = on_host_visibility_changed(&mut away.clock, hidden, now, &rules, &game.sim);
+                if effect.frame.ended {
+                    away.clock.finish(&mut game.sim);
+                }
+                cues.extend(effect.frame.cues);
+                stops.extend(effect.frame.stops);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    announce |= effect.send_host_away;
+                }
+            }
+        }
+    }
     away.view = away.clock.sample(&rules);
 
+    let dt = time.delta_secs();
     clock.acc += dt;
     let max_steps = game.content.controller.sim.max_sim_steps_per_frame;
     let mut steps = 0u32;
@@ -347,6 +384,9 @@ pub fn gather_and_step(
             owner: 0,
         });
     }
+    for id in stops {
+        fx.stops.push(SoundStop { id, owner: 0 });
+    }
     fx.moments.append(&mut game.sim.music);
     if away.clock.frozen() {
         game.sim.host_away = true;
@@ -358,9 +398,7 @@ pub fn gather_and_step(
                     game.sim.host_away = false;
                     crate::net::HostStep::SignalBack
                 } else {
-                    crate::net::HostStep::Hold {
-                        announce: away.clock.take_announce(),
-                    }
+                    crate::net::HostStep::Hold { announce }
                 };
                 host.tick(&mut game, input, mode);
             }
@@ -445,43 +483,73 @@ fn save_bug_stills() {
     }
 }
 
-fn step_away(game: &mut Game, link: &mut CoopLink, away: &mut Away, page: &Page, dt: f32) -> Vec<String> {
+#[cfg(not(target_arch = "wasm32"))]
+fn client_away(game: &mut Game, client: &mut crate::net::Client, away: &mut Away, hidden: bool, dt: f32) -> (Vec<String>, Vec<String>) {
     let rules = game.content.coop.host_away.clone();
-    match link {
-        #[cfg(not(target_arch = "wasm32"))]
-        CoopLink::Client(client) => {
-            let heard = client.poll(&game.content);
-            let host_live = heard.snapshot_away == Some(false);
-            let starting = host_live && away.clock.phase() == AwayPhase::Away && !page.hidden;
-            away.clock.set_page_hidden(page.hidden);
-            if heard.away_packet {
-                away.clock.note_away_packet(rules.detect_after_seconds);
-            }
-            if let Some(flag) = heard.snapshot_away {
-                away.clock.note_snapshot(flag, rules.resume_countdown_seconds);
-            }
-            away.clock.set_silent(!host_live);
-            let step_dt = if starting { 0.0 } else { dt };
-            let frame = away.clock.tick(step_dt, &rules, &game.sim);
-            if frame.ended {
-                away.clock.finish(&mut game.sim);
-            }
-            return frame.cues;
-        }
-        _ => {}
+    let heard = client.poll(&game.content);
+    let host_live = heard.snapshot_away == Some(false);
+    let starting = host_live && away.clock.phase() == AwayPhase::Away && !hidden;
+    away.clock.set_page_hidden(hidden);
+    if heard.away_packet {
+        away.clock.note_away_packet(rules.detect_after_seconds);
     }
-    let frame = away.clock.tick(dt, &rules, &game.sim);
+    if let Some(flag) = heard.snapshot_away {
+        away.clock.note_snapshot(flag, rules.resume_countdown_seconds);
+    }
+    away.clock.set_silent(!host_live || hidden);
+    let step_dt = if starting { 0.0 } else { dt };
+    let frame = away.clock.tick(step_dt, &rules, &game.sim);
     if frame.ended {
         away.clock.finish(&mut game.sim);
     }
-    let mut cues = frame.cues;
-    if !page.hidden && away.clock.phase() != AwayPhase::Ended {
-        away.clock.host_shown(rules.resume_countdown_seconds);
+    (frame.cues, frame.stops)
+}
+
+#[cfg(target_arch = "wasm32")]
+mod page_visibility {
+    use std::cell::RefCell;
+    use std::sync::Once;
+
+    use wasm_bindgen::JsCast;
+
+    thread_local! {
+        static EVENTS: RefCell<Vec<(bool, f32)>> = const { RefCell::new(Vec::new()) };
     }
-    cues.extend(away.clock.tick(0.0, &rules, &game.sim).cues);
-    away.clock.set_page_hidden(page.hidden);
-    away.clock.set_silent(page.hidden);
-    cues
+
+    pub fn samples() -> Vec<(bool, f32)> {
+        install();
+        let mut queued = EVENTS.with(|events| std::mem::take(&mut *events.borrow_mut()));
+        if queued.is_empty() {
+            queued.push((document_hidden(), now_secs()));
+        }
+        queued
+    }
+
+    fn install() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            let Some(window) = web_sys::window() else { return };
+            let Some(document) = window.document() else { return };
+            // The browser callback records (hidden, now). The match reader applies each
+            // sample with on_host_visibility_changed, the same function WindowOccluded uses.
+            let closure = wasm_bindgen::closure::Closure::wrap(Box::new(|| {
+                EVENTS.with(|events| events.borrow_mut().push((document_hidden(), now_secs())));
+            }) as Box<dyn FnMut()>);
+            let _ = document.add_event_listener_with_callback("visibilitychange", closure.as_ref().unchecked_ref());
+            closure.forget();
+        });
+    }
+
+    fn document_hidden() -> bool {
+        web_sys::window().and_then(|window| window.document()).map(|document| document.hidden()).unwrap_or(false)
+    }
+
+    fn now_secs() -> f32 {
+        web_sys::window()
+            .and_then(|window| window.performance())
+            .map(|performance| (performance.now() / 1000.0) as f32)
+            .unwrap_or(0.0)
+    }
 }
 
 fn drive(game: &mut Game, link: &mut CoopLink, input: PlayerInput) {

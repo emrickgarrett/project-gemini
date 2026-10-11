@@ -2824,6 +2824,8 @@ dependencies = [
  "gemini-meshes",
  "gemini-proto",
  "gemini-sim",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

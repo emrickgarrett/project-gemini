@@ -170,6 +170,11 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
             .and_then(|v| v.as_str())
             .ok_or_else(|| format!("{key} is missing category"))?;
         let volume = db_to_linear(db);
+        let sync_at = if row.contains_key("sync_at") {
+            Some(row_number(row, key, "sync_at")?)
+        } else {
+            None
+        };
         by_file.insert(
             key.clone(),
             SfxDef {
@@ -182,6 +187,7 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
                 max_instances,
                 looped,
                 pitch_semitones: semis,
+                sync_at,
             },
         );
     }

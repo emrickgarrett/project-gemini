@@ -18,12 +18,13 @@ pub fn paint_away(content: &Content, shot: &AwayShot, width: u32, height: u32) -
     let height = height.max(8);
     let hud = &content.presentation.hud.away;
     let mut rgb = vec![0u8; (width * height * 3) as usize];
-    paint_bands(&mut rgb, width, height);
+    paint_arena(&mut rgb, width, height, content);
     if shot.frozen {
         let dim = hud.world_dim;
         let sat = hud.world_saturation;
+        let floor = hud.dim_floor;
         for px in rgb.chunks_exact_mut(3) {
-            let graded = grade(px[0], px[1], px[2], dim, sat);
+            let graded = grade(px[0], px[1], px[2], dim, sat, floor);
             px.copy_from_slice(&graded);
         }
     }
@@ -47,9 +48,15 @@ pub fn paint_away(content: &Content, shot: &AwayShot, width: u32, height: u32) -
         draw_text(&mut rgb, width, height, &shot.title, text_x, y, cell, ink, 1.0);
         if shot.show_timer {
             y += text_h + gap;
-            let bar_w = hud.bar_width.round() as i32;
-            let bar_x = panel_x + (panel_w - bar_w) / 2;
-            let track = [((slate[0] as f32) * 0.45) as u8, ((slate[1] as f32) * 0.45) as u8, ((slate[2] as f32) * 0.45) as u8];
+            let pad = hud.panel_pad.round() as i32;
+            let bar_w = panel_w - pad * 2;
+            let bar_x = panel_x + pad;
+            let track_mix = hud.bar_track.clamp(0.0, 1.0);
+            let track = [
+                (slate[0] as f32 * track_mix) as u8,
+                (slate[1] as f32 * track_mix) as u8,
+                (slate[2] as f32 * track_mix) as u8,
+            ];
             fill_rect(&mut rgb, width, height, bar_x, y, bar_w, bar_h, track, 1.0);
             let fill = (bar_w as f32 * shot.timer_fill.clamp(0.0, 1.0)).round() as i32;
             fill_rect(&mut rgb, width, height, bar_x, y, fill, bar_h, bar, 1.0);
@@ -57,6 +64,7 @@ pub fn paint_away(content: &Content, shot: &AwayShot, width: u32, height: u32) -
     }
     if let Some(digit) = shot.digit {
         let ink = bytes(content, &hud.count);
+        let outline = bytes(content, &hud.count_outline);
         let u = shot.digit_u.clamp(0.0, 1.0);
         let scale = hud.count_scale_from + (hud.count_scale_to - hud.count_scale_from) * u;
         let cell = ((hud.count_px * scale) / 7.0).round().max(1.0) as i32;
@@ -65,37 +73,81 @@ pub fn paint_away(content: &Content, shot: &AwayShot, width: u32, height: u32) -
         let text_h = cell * 7;
         let x = (width as i32 - text_w) / 2;
         let y = (height as i32 - text_h) / 2;
-        draw_text(&mut rgb, width, height, &label, x, y, cell, ink, 1.0 - u);
+        let alpha = 1.0 - u;
+        let px = hud.count_outline_px.round().max(1.0) as i32;
+        for oy in -1..=1 {
+            for ox in -1..=1 {
+                if ox == 0 && oy == 0 {
+                    continue;
+                }
+                draw_text(&mut rgb, width, height, &label, x + ox * px, y + oy * px, cell, outline, alpha);
+            }
+        }
+        draw_text(&mut rgb, width, height, &label, x, y, cell, ink, alpha);
     }
     rgb
 }
 
-fn paint_bands(rgb: &mut [u8], width: u32, height: u32) {
-    let band = (width / 3).max(1);
+/// Arena floor plus swarmer, spitter, and brute. The bug raster's grey field is transparent.
+fn paint_arena(rgb: &mut [u8], width: u32, height: u32, content: &Content) {
+    let dark = bytes(content, "arena_dark");
+    let light = bytes(content, "arena_light");
     for y in 0..height {
-        let shade = 170 + ((y * 80) / height.max(1)) as u8;
+        let floor = y as f32 > height as f32 * 0.42;
         for x in 0..width {
-            let px = if x < band {
-                [shade, 24, 28]
-            } else if x < band * 2 {
-                [24, shade, 36]
+            let px = if floor {
+                let band = ((x / 48) + (y / 36)) % 2 == 0;
+                if band { light } else { blend(light, dark, 0.45) }
             } else {
-                [28, 36, shade]
+                let t = y as f32 / (height as f32 * 0.42);
+                blend(dark, [8, 10, 16], 0.25 + (1.0 - t) * 0.45)
             };
             put(rgb, width, x, y, px);
         }
     }
+    blit_bug(rgb, width, height, "swarmer", width / 10, height / 2, width / 4, height / 2);
+    blit_bug(rgb, width, height, "spitter", width * 4 / 10, height * 4 / 10, width / 4, height * 5 / 10);
+    blit_bug(rgb, width, height, "brute", width * 6 / 10, height * 3 / 10, width * 3 / 10, height * 6 / 10);
 }
 
-fn grade(r: u8, g: u8, b: u8, dim: f32, sat: f32) -> [u8; 3] {
+fn blit_bug(rgb: &mut [u8], width: u32, height: u32, id: &str, origin_x: u32, origin_y: u32, bug_w: u32, bug_h: u32) {
+    let bug_w = bug_w.max(8);
+    let bug_h = bug_h.max(8);
+    let src = crate::raster_bug(id, bug_w, bug_h);
+    for y in 0..bug_h {
+        for x in 0..bug_w {
+            let i = ((y * bug_w + x) * 3) as usize;
+            let px = [src[i], src[i + 1], src[i + 2]];
+            if px == [0x8A, 0x8A, 0x8A] {
+                continue;
+            }
+            let dx = origin_x + x;
+            let dy = origin_y + y;
+            if dx < width && dy < height {
+                put(rgb, width, dx, dy, px);
+            }
+        }
+    }
+}
+
+fn grade(r: u8, g: u8, b: u8, dim: f32, sat: f32, floor: f32) -> [u8; 3] {
     let rf = r as f32;
     let gf = g as f32;
     let bf = b as f32;
     let luma = 0.2126 * rf + 0.7152 * gf + 0.0722 * bf;
     let sat = sat.clamp(0.0, 1.0);
-    let keep = (1.0 - dim).clamp(0.05, 1.0);
+    let keep = (1.0 - dim).clamp(floor, 1.0);
     let mix = |channel: f32| ((luma + (channel - luma) * sat) * keep).clamp(0.0, 255.0) as u8;
     [mix(rf), mix(gf), mix(bf)]
+}
+
+fn blend(a: [u8; 3], b: [u8; 3], t: f32) -> [u8; 3] {
+    let t = t.clamp(0.0, 1.0);
+    [
+        (a[0] as f32 * (1.0 - t) + b[0] as f32 * t) as u8,
+        (a[1] as f32 * (1.0 - t) + b[1] as f32 * t) as u8,
+        (a[2] as f32 * (1.0 - t) + b[2] as f32 * t) as u8,
+    ]
 }
 
 fn bytes(content: &Content, name: &str) -> [u8; 3] {

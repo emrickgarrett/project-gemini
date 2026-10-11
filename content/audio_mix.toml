@@ -748,6 +748,7 @@ pitch_rand_semitones = 0.0
 max_instances = 1
 loop = false
 category = "ui"
+sync_at = 3.0
 
 # Arena 01. Telegraphs stay fixed-pitch so the 1.5 s warn lines up with the vent and climb windows.
 [vent_warn]

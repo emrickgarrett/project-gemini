@@ -539,6 +539,7 @@ fn paint_away(commands: &mut Commands, root: Entity, game: &Game, away: &Away) {
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
                     row_gap: Val::Px(hud.row_gap),
+                    padding: UiRect::horizontal(Val::Px(hud.panel_pad)),
                     ..default()
                 },
                 BackgroundColor(Color::srgba(slate[0], slate[1], slate[2], hud.panel_opacity)),
@@ -557,11 +558,16 @@ fn paint_away(commands: &mut Commands, root: Entity, game: &Game, away: &Away) {
             let track = commands
                 .spawn((
                     Node {
-                        width: Val::Px(hud.bar_width),
+                        width: Val::Percent(100.0),
                         height: Val::Px(hud.bar_height),
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(slate[0] * 0.45, slate[1] * 0.45, slate[2] * 0.45, 1.0)),
+                    BackgroundColor(Color::srgba(
+                        slate[0] * hud.bar_track,
+                        slate[1] * hud.bar_track,
+                        slate[2] * hud.bar_track,
+                        1.0,
+                    )),
                     ChildOf(panel),
                     HudNode,
                 ))
@@ -583,17 +589,45 @@ fn paint_away(commands: &mut Commands, root: Entity, game: &Game, away: &Away) {
         let u = away.view.digit_u.clamp(0.0, 1.0);
         let scale = hud.count_scale_from + (hud.count_scale_to - hud.count_scale_from) * u;
         let alpha = (1.0 - u).clamp(0.0, 1.0);
+        let outline = game.content.palette.key(&hud.count_outline);
+        let shift = hud.count_outline_px;
+        let label = digit.to_string();
+        let place = |dx: f32, dy: f32| Node {
+            position_type: PositionType::Absolute,
+            left: Val::Percent(50.0),
+            top: Val::Percent(50.0),
+            margin: UiRect::new(
+                Val::Px(-hud.count_px * scale * 0.35 + dx),
+                Val::Auto,
+                Val::Px(-hud.count_px * scale * 0.55 + dy),
+                Val::Auto,
+            ),
+            ..default()
+        };
+        for (dx, dy) in [
+            (-shift, 0.0),
+            (shift, 0.0),
+            (0.0, -shift),
+            (0.0, shift),
+            (-shift, -shift),
+            (shift, -shift),
+            (-shift, shift),
+            (shift, shift),
+        ] {
+            commands.spawn((
+                Text::new(label.clone()),
+                TextFont::from_font_size(hud.count_px * scale),
+                TextColor(Color::srgba(outline[0], outline[1], outline[2], alpha)),
+                place(dx, dy),
+                ChildOf(root),
+                HudNode,
+            ));
+        }
         commands.spawn((
-            Text::new(digit.to_string()),
+            Text::new(label),
             TextFont::from_font_size(hud.count_px * scale),
             TextColor(Color::srgba(count[0], count[1], count[2], alpha)),
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Percent(50.0),
-                top: Val::Percent(50.0),
-                margin: UiRect::new(Val::Px(-hud.count_px * scale * 0.35), Val::Auto, Val::Px(-hud.count_px * scale * 0.55), Val::Auto),
-                ..default()
-            },
+            place(0.0, 0.0),
             ChildOf(root),
             HudNode,
         ));

@@ -34,6 +34,8 @@ host_leave = "match_ends_rounds_kept"
 detect_after_seconds = 3.0
 end_after_seconds = 60.0
 resume_countdown_seconds = 3.0
+# Silence left on the clock clears only after this much continuous live play.
+away_timer_reset_after_play_seconds = 10.0
 freeze = "everything"
 
 [friendly_fire]

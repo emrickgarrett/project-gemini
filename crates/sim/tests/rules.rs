@@ -1572,6 +1572,7 @@ fn coop_table_rejects_missing_keys() {
     assert!((content.coop.host_away.detect_after_seconds - 3.0).abs() < 1e-3);
     assert!((content.coop.host_away.end_after_seconds - 60.0).abs() < 1e-3);
     assert!((content.coop.host_away.resume_countdown_seconds - 3.0).abs() < 1e-3);
+    assert!((content.coop.host_away.away_timer_reset_after_play_seconds - 10.0).abs() < 1e-3);
     assert_eq!(content.coop.host_away.freeze, "everything");
     assert!(!content.coop.friendly_fire);
     assert!(!content.coop.downed_on_return);
@@ -1596,7 +1597,12 @@ fn coop_table_rejects_missing_keys() {
     let err = Content::parse(&sources_with(&base, &stripped_extra)).expect_err("missing max_extra_revivers");
     assert!(err.contains("max_extra_revivers"), "{err}");
 
-    for key in ["detect_after_seconds", "end_after_seconds", "resume_countdown_seconds"] {
+    for key in [
+        "detect_after_seconds",
+        "end_after_seconds",
+        "resume_countdown_seconds",
+        "away_timer_reset_after_play_seconds",
+    ] {
         let stripped_away = base
             .coop
             .lines()
@@ -1620,16 +1626,48 @@ fn coop_table_rejects_missing_keys() {
     let nan_away = base.coop.replace("detect_after_seconds = 3.0", "detect_after_seconds = nan");
     let err = Content::parse(&sources_with(&base, &nan_away)).expect_err("nan detect");
     assert!(err.contains("detect_after_seconds"), "{err}");
+    let zero_reset = base.coop.replace(
+        "away_timer_reset_after_play_seconds = 10.0",
+        "away_timer_reset_after_play_seconds = 0",
+    );
+    let err = Content::parse(&sources_with(&base, &zero_reset)).expect_err("zero reset");
+    assert!(err.contains("away_timer_reset_after_play_seconds"), "{err}");
+    let nan_reset = base.coop.replace(
+        "away_timer_reset_after_play_seconds = 10.0",
+        "away_timer_reset_after_play_seconds = nan",
+    );
+    let err = Content::parse(&sources_with(&base, &nan_reset)).expect_err("nan reset");
+    assert!(err.contains("away_timer_reset_after_play_seconds"), "{err}");
     let bad_freeze = base.coop.replace("freeze = \"everything\"", "freeze = \"enemies\"");
     let err = Content::parse(&sources_with(&base, &bad_freeze)).expect_err("freeze tag");
     assert!(err.contains("everything"), "{err}");
-    let bad_slate = base.presentation.replace("slate = \"arena_dark\"", "slate = \"not_a_color\"");
+    let bad_slate = base.presentation.replace("slate = \"ui_panel_slate\"", "slate = \"not_a_color\"");
     let err = Content::parse(&sources_present(&base, &bad_slate)).expect_err("palette typo");
     assert!(err.contains("not_a_color"), "{err}");
 
     let unknown = format!("{}\n[extra]\nnope = 1\n", base.coop);
     let err = Content::parse(&sources_with(&base, &unknown)).expect_err("unknown table");
     assert!(err.contains("unknown key"), "{err}");
+}
+
+#[test]
+fn host_away_mix_row_and_sync_at_fail_load() {
+    let base = gemini_sim::content::embedded_sources();
+    let missing_row = base.audio.replace("[host_away]\n", "[host_away_missing]\n");
+    let mut sources = sources_with(&base, base.coop);
+    sources.audio = &missing_row;
+    let err = Content::parse(&sources).expect_err("missing host_away row");
+    assert!(err.contains("host_away"), "{err}");
+
+    let missing_sync = base.audio.replace("sync_at = 3.0\n", "");
+    sources.audio = &missing_sync;
+    let err = Content::parse(&sources).expect_err("missing sync_at");
+    assert!(err.contains("sync_at"), "{err}");
+
+    let late_sync = base.audio.replace("sync_at = 3.0", "sync_at = 9.0");
+    sources.audio = &late_sync;
+    let err = Content::parse(&sources).expect_err("sync_at far from the countdown");
+    assert!(err.contains("sync_at"), "{err}");
 }
 
 fn sources_present<'a>(base: &'a gemini_sim::content::Sources<'a>, presentation: &'a str) -> gemini_sim::content::Sources<'a> {
@@ -1772,6 +1810,10 @@ fn client_with_a_silent_host_banners_at_3s_and_ends_at_60s_keeping_credits() {
         assert!(!row.crowd);
         assert!(row.pitch_semitones.abs() < 1e-6);
         assert!((row.volume - db_to_linear(-8.0)).abs() < 1e-4);
+        if id == "host_back" {
+            let sync = row.sync_at.expect("host_back sync_at");
+            assert!((sync - content.coop.host_away.resume_countdown_seconds).abs() <= gemini_sim::SIM_DT);
+        }
         let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../assets")
             .join(&row.path);
@@ -1928,6 +1970,91 @@ fn host_back_fires_once_at_countdown_start() {
     assert!(paused.banner);
     assert!(paused.digit.is_none());
     assert!(paused.cues.iter().any(|cue| cue == "host_away"));
+    assert!(paused.stops.iter().any(|stop| stop == "host_back"));
+}
+
+#[test]
+fn on_host_visibility_changed_is_the_web_and_native_clock() {
+    use gemini_sim::host_away::on_host_visibility_changed;
+
+    let content = Content::embedded();
+    let sim = Sim::new(&content, "normal", 6);
+    let rules = &content.coop.host_away;
+    let mut clock = gemini_sim::host_away::HostAwayClock::new(false);
+
+    on_host_visibility_changed(&mut clock, true, 0.0, rules, &sim);
+    let away = on_host_visibility_changed(&mut clock, true, 50.0, rules, &sim);
+    assert!(away.frame.banner, "50s hidden raises the banner");
+    assert!(!away.frame.ended);
+    assert!((clock.silence() - 50.0).abs() < 1e-3);
+    assert!(away.send_host_away);
+
+    let back = on_host_visibility_changed(&mut clock, false, 50.0, rules, &sim);
+    assert!(back.frame.cues.iter().any(|cue| cue == "host_back"));
+    assert_eq!(back.frame.digit, Some(3));
+    assert!((clock.silence() - 50.0).abs() < 1e-3);
+
+    let again = on_host_visibility_changed(&mut clock, true, 50.0, rules, &sim);
+    assert!(again.frame.stops.iter().any(|stop| stop == "host_back"));
+    assert!(again.frame.banner);
+    assert!(again.frame.digit.is_none());
+    assert!((clock.silence() - 50.0).abs() < 1e-3, "re-hide keeps the away timer");
+
+    let ended = on_host_visibility_changed(&mut clock, true, 60.0, rules, &sim);
+    assert!(ended.frame.ended, "the remaining 10s finishes the 60s timer");
+}
+
+#[test]
+fn away_timer_resets_only_after_continuous_play() {
+    use gemini_sim::host_away::on_host_visibility_changed;
+
+    let content = Content::embedded();
+    let sim = Sim::new(&content, "normal", 6);
+    let rules = &content.coop.host_away;
+    let mut clock = gemini_sim::host_away::HostAwayClock::new(false);
+
+    on_host_visibility_changed(&mut clock, true, 0.0, rules, &sim);
+    on_host_visibility_changed(&mut clock, true, 50.0, rules, &sim);
+    on_host_visibility_changed(&mut clock, false, 50.0, rules, &sim);
+    let live = on_host_visibility_changed(&mut clock, false, 53.0, rules, &sim);
+    assert!(!live.frame.frozen, "the 3s countdown ends");
+    assert!((clock.silence() - 50.0).abs() < 1e-3, "countdown does not clear silence");
+    on_host_visibility_changed(&mut clock, false, 63.0, rules, &sim);
+    assert!(clock.silence().abs() < 1e-3, "10s of play clears the timer");
+    on_host_visibility_changed(&mut clock, true, 63.0, rules, &sim);
+    let later = on_host_visibility_changed(&mut clock, true, 73.0, rules, &sim);
+    assert!(!later.frame.ended);
+    assert!((clock.silence() - 10.0).abs() < 1e-2);
+}
+
+#[test]
+fn a_hidden_host_freezes_bleedout_revive_and_the_breather() {
+    let content = Content::embedded();
+    let mut sim = Sim::new(&content, "normal", 6);
+    sim.phase = Phase::Breather { left: 8.0 };
+    sim.players[0].downed = true;
+    sim.players[0].hp = 0.0;
+    sim.players[0].bleedout = 12.0;
+    sim.players[0].revive_progress = 1.25;
+    sim.players[0].ability_cd = 4.5;
+    sim.host_away = true;
+    let bleed = sim.players[0].bleedout;
+    let revive = sim.players[0].revive_progress;
+    let cd = sim.players[0].ability_cd;
+    let inputs = [PlayerInput {
+        interact_held: true,
+        ..PlayerInput::default()
+    }];
+    for _ in 0..30 {
+        sim.step_peers(&content, &inputs);
+    }
+    assert!((sim.players[0].bleedout - bleed).abs() < 1e-6);
+    assert!((sim.players[0].revive_progress - revive).abs() < 1e-6);
+    assert!((sim.players[0].ability_cd - cd).abs() < 1e-6);
+    match sim.phase {
+        Phase::Breather { left } => assert!((left - 8.0).abs() < 1e-6),
+        other => panic!("breather moved to {other:?}"),
+    }
 }
 
 #[test]

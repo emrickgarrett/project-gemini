@@ -223,6 +223,14 @@ fn write_away(out: &str) -> bool {
         let path = format!("{out}/{name}.png");
         write_png(&path, W, H, &rgb);
         println!("wrote {path}");
+        let mut clear = shot;
+        clear.frozen = false;
+        let rgb = paint_away(&content, &clear, W, H);
+        let clear_name = format!("{name}_clear");
+        guard(&clear_name, &rgb);
+        let path = format!("{out}/{clear_name}.png");
+        write_png(&path, W, H, &rgb);
+        println!("wrote {path}");
     }
     flat
 }

@@ -658,7 +658,7 @@ pub fn grade(
     let hud = &game.content.presentation.hud.away;
     for mut grading in &mut cameras {
         if away.view.frozen {
-            let factor = (1.0 - hud.world_dim).clamp(0.05, 1.0);
+            let factor = (1.0 - hud.world_dim).clamp(hud.dim_floor, 1.0);
             grading.global.exposure = factor.log2();
             grading.global.post_saturation = hud.world_saturation;
             grading.global.temperature = 0.0;

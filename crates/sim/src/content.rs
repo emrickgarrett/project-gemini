@@ -123,11 +123,14 @@ impl Content {
         let mut weapons = parse::<WeaponFile>("weapons.toml", src.weapons)?;
         weapons.weapon = guns;
         let audio = crate::audio_mix::load_mix(src.audio).map_err(|err| format!("audio_mix.toml: {err}"))?;
+        let coop = load_coop(src.coop).map_err(|err| format!("coop.toml: {err}"))?;
+        validate_host_away_cues(&audio, &coop)?;
         let crate_reveal: CrateReveal = parse("crate_reveal.toml", src.crate_reveal)?;
         validate_reveal_cues(&crate_reveal, &audio)?;
         validate_reveal_layout(&crate_reveal)?;
         let palette: Palette = parse("palette.toml", src.palette)?;
         let presentation: Presentation = parse("presentation.toml", src.presentation)?;
+        validate_away_hud(&presentation.hud.away)?;
         require_palette_keys(&palette, &bugs, &presentation.hud.away).map_err(|err| format!("palette.toml: {err}"))?;
         Ok(Self {
             fingerprint,
@@ -165,7 +168,7 @@ impl Content {
             audio,
             bugs,
             crate_reveal,
-            coop: load_coop(src.coop).map_err(|err| format!("coop.toml: {err}"))?,
+            coop,
             cosmetics: load_cosmetics(src.cosmetics).map_err(|err| format!("cosmetics.toml: {err}"))?,
         })
     }
@@ -357,6 +360,48 @@ fn reveal_cue_file<'a>(audio: &'a AudioTable, id: &str) -> Result<&'a str, Strin
         return Ok(sfx.path.as_str());
     }
     Err(format!("reveal cue {id} does not resolve to a mix row with volume_db"))
+}
+
+fn validate_host_away_cues(audio: &AudioTable, coop: &CoopRules) -> Result<(), String> {
+    let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+    let check_files = assets.is_dir();
+    for id in ["host_away", "host_back"] {
+        let row = audio
+            .sfx
+            .iter()
+            .find(|row| row.id == id)
+            .ok_or_else(|| format!("audio_mix.toml is missing {id}"))?;
+        if check_files && !assets.join(&row.path).is_file() {
+            return Err(format!("{id} file {} is missing", row.path));
+        }
+    }
+    let back = audio.sfx.iter().find(|row| row.id == "host_back").expect("host_back row");
+    let Some(sync_at) = back.sync_at else {
+        return Err("audio_mix.toml host_back is missing sync_at".into());
+    };
+    let countdown = coop.host_away.resume_countdown_seconds;
+    if (sync_at - countdown).abs() > crate::sim::SIM_DT {
+        return Err(format!(
+            "audio_mix.toml host_back sync_at {sync_at} must match resume_countdown_seconds {countdown} within one sim frame"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_away_hud(away: &AwayHud) -> Result<(), String> {
+    if !(away.panel_pad >= 0.0) {
+        return Err("presentation.toml hud.away panel_pad must be non-negative".into());
+    }
+    if !(away.count_outline_px > 0.0) {
+        return Err("presentation.toml hud.away count_outline_px must be positive".into());
+    }
+    if !(away.bar_track > 0.0 && away.bar_track <= 1.0) {
+        return Err("presentation.toml hud.away bar_track must be in (0, 1]".into());
+    }
+    if !(away.dim_floor > 0.0 && away.dim_floor <= 1.0) {
+        return Err("presentation.toml hud.away dim_floor must be in (0, 1]".into());
+    }
+    Ok(())
 }
 
 fn cue_stem(path: &str) -> String {
@@ -1956,6 +2001,7 @@ fn load_coop(text: &str) -> Result<CoopRules, String> {
             "detect_after_seconds",
             "end_after_seconds",
             "resume_countdown_seconds",
+            "away_timer_reset_after_play_seconds",
             "freeze",
         ],
         "coop.toml host_away",
@@ -1963,6 +2009,7 @@ fn load_coop(text: &str) -> Result<CoopRules, String> {
     let detect_after_seconds = positive_seconds(away, "detect_after_seconds")?;
     let end_after_seconds = positive_seconds(away, "end_after_seconds")?;
     let resume_countdown_seconds = positive_seconds(away, "resume_countdown_seconds")?;
+    let away_timer_reset_after_play_seconds = positive_seconds(away, "away_timer_reset_after_play_seconds")?;
     let freeze = req_string(away, "freeze", "coop.toml host_away")?;
     expect_tag(&freeze, "everything", "coop.toml host_away freeze")?;
     let host_leave = req_string(currency, "host_leave", "coop.toml currency_share")?;
@@ -2000,6 +2047,7 @@ fn load_coop(text: &str) -> Result<CoopRules, String> {
             detect_after_seconds,
             end_after_seconds,
             resume_countdown_seconds,
+            away_timer_reset_after_play_seconds,
             freeze,
         },
         friendly_fire: req_bool(fire, "enabled", "coop.toml friendly_fire")?,
@@ -2131,19 +2179,23 @@ pub struct AwayHud {
     pub text: String,
     pub bar: String,
     pub count: String,
+    pub count_outline: String,
+    pub count_outline_px: f32,
     pub panel_opacity: f32,
     pub panel_width: f32,
     pub panel_height: f32,
     pub panel_top: f32,
+    pub panel_pad: f32,
     pub title_px: f32,
     pub row_gap: f32,
-    pub bar_width: f32,
     pub bar_height: f32,
+    pub bar_track: f32,
     pub count_px: f32,
     pub count_scale_from: f32,
     pub count_scale_to: f32,
     pub world_dim: f32,
     pub world_saturation: f32,
+    pub dim_floor: f32,
     pub coop: AwayHudCopy,
     pub solo: AwayHudCopy,
 }
@@ -2329,6 +2381,7 @@ pub struct PaletteKeys {
     pub brute_cracks: String,
     pub brood_sac: String,
     pub bud_glow: String,
+    pub ui_panel_slate: String,
 }
 
 impl Palette {
@@ -2343,6 +2396,7 @@ impl Palette {
             "brute_cracks" => self.keys.brute_cracks.as_str(),
             "brood_sac" => self.keys.brood_sac.as_str(),
             "bud_glow" => self.keys.bud_glow.as_str(),
+            "ui_panel_slate" => self.keys.ui_panel_slate.as_str(),
             "hero_teal" | "teal" => self.hero.teal.as_str(),
             "hero_cobalt" | "cobalt" => self.hero.cobalt.as_str(),
             "hero_white" | "white" => self.hero.white.as_str(),
@@ -2384,6 +2438,7 @@ fn require_palette_keys(palette: &Palette, bugs: &crate::bugs::BugBook, away: &A
     check("hud.away text", &away.text)?;
     check("hud.away bar", &away.bar)?;
     check("hud.away count", &away.count)?;
+    check("hud.away count_outline", &away.count_outline)?;
     Ok(())
 }
 
@@ -2508,6 +2563,8 @@ pub struct SfxDef {
     /// Half-range of the deterministic pitch offset, in semitones.
     #[serde(default)]
     pub pitch_semitones: f32,
+    /// When set, the cue's musical downbeat. `host_back` must match the resume countdown.
+    pub sync_at: Option<f32>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
