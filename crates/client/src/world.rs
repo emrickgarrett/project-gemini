@@ -33,7 +33,7 @@ pub(crate) struct BugPart {
     #[allow(dead_code)]
     index: usize,
     emissive: bool,
-    /// Sac-colored bud that swaps to the pod glow when it regrows.
+    /// Bud that takes `grown_color` when it regrows.
     grows: bool,
     pod_slot: Option<u32>,
     rest: Handle<StandardMaterial>,
@@ -101,9 +101,6 @@ pub fn scene(
             if part.emissive {
                 material(&mut bank, &mut materials, content, &part.palette, true, true);
             }
-            if part.name.starts_with("bud") {
-                material(&mut bank, &mut materials, content, "swarmer_glow", true, true);
-            }
         }
         bank.meshes.entry(visual.lod_key.clone()).or_insert_with(|| upload(&mut meshes, &visual.lod));
         let shell = visual
@@ -113,6 +110,21 @@ pub fn scene(
             .map(|p| p.palette.as_str())
             .unwrap_or("brute_amber");
         material(&mut bank, &mut materials, content, shell, false, false);
+    }
+    for kind in [
+        EnemyKind::Swarmer,
+        EnemyKind::Spitter,
+        EnemyKind::Brute,
+        EnemyKind::BroodMother,
+        EnemyKind::HiveTyrant,
+    ] {
+        let row = &content.bug(kind).visual;
+        if !row.bud_color.is_empty() {
+            material(&mut bank, &mut materials, content, &row.bud_color, false, false);
+        }
+        if !row.grown_color.is_empty() {
+            material(&mut bank, &mut materials, content, &row.grown_color, true, true);
+        }
     }
     let teal = rgba(content, "shots_player");
     let acid = rgba(content, "spitter_glow");
@@ -431,12 +443,19 @@ fn spawn_bug(commands: &mut Commands, bank: &Bank, game: &Game, kind: EnemyKind,
             PlayPiece,
         ))
         .id();
+    let colors = &game.content.bug(kind).visual;
     let mut parts = Vec::new();
     for (index, part) in visual.parts.iter().enumerate() {
         let mesh = bank.meshes.get(&part.mesh_key).cloned().unwrap_or_else(|| bank.tracer.clone());
-        let rest = mat_of(bank, &part.palette, part.emissive, false);
-        let hot = if part.name.starts_with("bud") {
-            mat_of(bank, "swarmer_glow", true, true)
+        let bud = part.name.starts_with("bud");
+        let rest_key = if bud && !colors.bud_color.is_empty() {
+            colors.bud_color.as_str()
+        } else {
+            part.palette.as_str()
+        };
+        let rest = mat_of(bank, rest_key, part.emissive && !bud, false);
+        let hot = if bud && !colors.grown_color.is_empty() {
+            mat_of(bank, &colors.grown_color, true, true)
         } else if part.emissive {
             mat_of(bank, &part.palette, true, true)
         } else {
@@ -474,7 +493,6 @@ fn spawn_bug(commands: &mut Commands, bank: &Bank, game: &Game, kind: EnemyKind,
             ChildOf(root),
         ))
         .id();
-    let _ = game;
     BugLink { root, parts, lod }
 }
 

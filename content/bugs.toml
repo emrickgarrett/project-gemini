@@ -4,7 +4,9 @@
 # `audio` names the events. Mix levels live in audio.toml, not in code.
 #
 # Design "phase 1" is the first phase (sim phase index 0, above the first
-# threshold). The hive tail hitbox uses active_phase = 1 for that window.
+# threshold). Weak-point centers come from the named visual part. The offset
+# on a hitbox is only the fallback when that part has no anchor. The hive
+# cannon follows the visual part named "cannon" (phase_max = 1).
 
 [feedback]
 weakpoint_hit = "weakpoint_hit"
@@ -77,6 +79,8 @@ shell_open = "brute_shell_open"
 [brood_mother.visual]
 height = 3.0
 lod_distance = 48.0
+bud_color = "brood_sac"
+grown_color = "swarmer_glow"
 parts = [
   { name="head",    shape="sphere",  size=[1.0,0.8,1.0], offset=[0,1.3,1.6], color="brute_amber" },
   { name="crown",   shape="cone",    size=[0.15,0.5], count=5, on="head", color="brute_amber" },
@@ -130,7 +134,7 @@ anim = { bob=[0.1, 0.6], leg_swing=12, gait="alternate", frenzy_speed=1.4, phase
 [hive_tyrant.hitbox]
 body = { shape = "capsule", radius = 2.0, height = 5.0, offset = [0, 2.5, 0] }
 core = { shape = "sphere", radius = 0.7, offset = [0, 3.0, 1.2] }
-tail = { shape = "sphere", radius = 0.6, offset = [0, 3.5, -3.0], active_phase = 1 }
+cannon = { shape = "sphere", radius = 0.6, anchor = "cannon" }
 
 [hive_tyrant.audio]
 footstep = "tyrant_footstep"

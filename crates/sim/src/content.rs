@@ -921,14 +921,13 @@ pub fn currency_reward(
 }
 
 pub fn weakpoint_of(content: &Content, kind: EnemyKind) -> Weakpoint {
-    let shape = content
-        .bug(kind)
-        .hitbox
-        .weak()
-        .expect("bug weak volume");
+    let book = content.bug(kind);
+    let shape = book.hitbox.weak().expect("bug weak volume");
+    let implicit = if book.hitbox.weakpoint.is_some() { "" } else { "core" };
+    let placed = crate::bugs::place_shape(&book.visual, shape, implicit);
     Weakpoint {
-        offset: shape.offset,
-        radius: shape.bounding_radius().max(shape.radius),
+        offset: placed.offset,
+        radius: placed.bounding_radius().max(placed.radius),
     }
 }
 

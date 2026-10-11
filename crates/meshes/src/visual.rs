@@ -431,6 +431,7 @@ fn add_tail(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) {
     let mesh = Arc::new(segment_mesh(len * 0.9, radius, radius * 0.78, dens.sides.max(4)));
     // Limb mesh points along -Y. Positive X rotation swings that toward -Z and then up,
     // so the chain curls over the back instead of pitching forward.
+    // The sim's tail-end anchor uses this pitch (2.05), curl share (0.70), and joint span (0.82).
     let step = spec.curl_deg.to_radians() / count as f32;
     let base = 2.05_f32;
     let mut parent = None;
