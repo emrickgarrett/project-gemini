@@ -7,14 +7,12 @@ critical = ["spitter_charge", "player_downed", "wave_start", "brood_roar", "tyra
 
 # Sim event ids that name a file. Unlisted events stay silent.
 [alias]
-shot = "blaster_fire"
 hit = "acid_impact"
 hurt = "player_hurt"
 downed = "player_downed"
 pickup = "pickup"
 wave = "wave_start"
 dash = "jetpack_boost"
-reload = "blaster_reload"
 swarmer_crowd = "swarmer_crowd_loop"
 spitter_fire = "spitter_spit"
 swarmer_footstep = "swarmer_click_01"
@@ -22,8 +20,6 @@ brute_footstep = "brute_step_01"
 brute_attack = "brute_grunt"
 tyrant_attack = "tyrant_scythe_swipe"
 weakpoint_hit = "weakpoint_hit"
-# Temporary. The hero PR removes this and emits vex_ability directly.
-ability = "vex_ability"
 
 [sting.crate_common]
 path = "audio/stings/crate_common.ogg"

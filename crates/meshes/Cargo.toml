@@ -13,3 +13,7 @@ toml = "0.8"
 [[bin]]
 name = "bugshots"
 path = "src/bin/bugshots.rs"
+
+[[bin]]
+name = "heroshot"
+path = "src/bin/heroshot.rs"

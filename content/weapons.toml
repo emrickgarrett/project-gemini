@@ -1,26 +1,4 @@
 # Sprint-to-fire delay is the 0.15s note on controller.toml [move].
+# The starter's guns are loaded from characters.toml.
 sprint_to_fire_delay = 0.15
-
-[[weapon]]
-id = "coil_rifle"
-slot = "primary"
-damage = 12
-fire_interval = 0.11
-magazine = 30
-reserve = 180
-reload_time = 1.5
-projectile_speed = 88
-projectile_radius = 0.08
-spread = 0.012
-
-[[weapon]]
-id = "spark_pistol"
-slot = "sidearm"
-damage = 15
-fire_interval = 0.28
-magazine = 12
-reserve = 48
-reload_time = 1.15
-projectile_speed = 72
-projectile_radius = 0.09
-spread = 0.02
+weapon = []

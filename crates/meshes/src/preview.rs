@@ -56,6 +56,86 @@ pub fn still_open(id: &str, panel: u32) -> (u32, u32, Vec<u8>) {
     compose(id, panel, cam)
 }
 
+/// First-person still of the shared arm mesh. `accent` is the starter hero's trim.
+pub fn raster_viewmodel(width: u32, height: u32, accent: [f32; 4]) -> Vec<u8> {
+    let vm = crate::viewmodel();
+    let palette = palette_of();
+    let shift = crate::viewmodel_offset();
+    let parts = [
+        (shifted(&vm.teal, shift), palette("hero_teal"), false),
+        (shifted(&vm.cobalt, shift), palette("hero_cobalt"), false),
+        (shifted(&vm.white, shift), palette("hero_white"), false),
+        (shifted(&vm.accent, shift), accent, false),
+        (shifted(&vm.core, shift), palette("shots_player"), true),
+    ];
+    draw_parts(&parts, [0.0, 0.02, 0.04], [-0.02, -0.12, -1.0], 36.0, width, height)
+}
+
+fn shifted(mesh: &crate::MeshData, by: [f32; 3]) -> crate::MeshData {
+    let mut copy = mesh.clone();
+    for p in &mut copy.positions {
+        p[0] += by[0];
+        p[1] += by[1];
+        p[2] += by[2];
+    }
+    copy
+}
+
+fn draw_parts(
+    parts: &[(crate::MeshData, [f32; 4], bool)],
+    eye: [f32; 3],
+    target: [f32; 3],
+    fov_deg: f32,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    let w = width.max(8);
+    let h = height.max(8);
+    let mut color = Vec::with_capacity((w * h * 3) as usize);
+    for _ in 0..(w * h) {
+        color.extend_from_slice(&BG);
+    }
+    let mut depth = vec![f32::INFINITY; (w * h) as usize];
+    let forward = norm(sub(target, eye));
+    let right = norm(cross(forward, [0.0, 1.0, 0.0]));
+    let up = cross(right, forward);
+    let key = norm([-0.35, 0.86, 0.4]);
+    let fill = norm([0.6, 0.25, -0.35]);
+    let fov = fov_deg.to_radians();
+    let aspect = w as f32 / h as f32;
+    let focal = 1.0 / (fov * 0.5).tan();
+    for (mesh, albedo, emissive) in parts {
+        for tri in mesh.indices.chunks(3) {
+            if tri.len() < 3 {
+                continue;
+            }
+            let ia = tri[0] as usize;
+            let ib = tri[1] as usize;
+            let ic = tri[2] as usize;
+            let nw = mesh.normals[ia];
+            let ndot = (nw[0] * key[0] + nw[1] * key[1] + nw[2] * key[2]).clamp(0.0, 1.0);
+            let ndot2 = (nw[0] * fill[0] + nw[1] * fill[1] + nw[2] * fill[2]).clamp(0.0, 1.0);
+            let shade = (0.55 + 0.42 * ndot + 0.2 * ndot2).clamp(0.0, 1.0);
+            let rgb = if *emissive {
+                [albedo[0], albedo[1], albedo[2]]
+            } else {
+                [albedo[0] * shade, albedo[1] * shade, albedo[2] * shade]
+            };
+            let Some(a) = project(mesh.positions[ia], eye, right, up, forward, focal, aspect, w, h) else {
+                continue;
+            };
+            let Some(b) = project(mesh.positions[ib], eye, right, up, forward, focal, aspect, w, h) else {
+                continue;
+            };
+            let Some(c) = project(mesh.positions[ic], eye, right, up, forward, focal, aspect, w, h) else {
+                continue;
+            };
+            fill_tri(&mut color, &mut depth, w, h, a, b, c, rgb);
+        }
+    }
+    color
+}
+
 fn compose(id: &str, panel: u32, camera: Option<([f32; 3], [f32; 3], f32)>) -> (u32, u32, Vec<u8>) {
     let panel = panel.max(8);
     let visual = bug(id);

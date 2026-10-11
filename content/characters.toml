@@ -9,7 +9,7 @@ accent = "#F97316"            # orange
 max_hp = 100
 move_speed_mult = 1.0
 weapon = "pulse_rifle"
-ability = { id = "overdrive", cooldown = 20.0, desc = "6s: +35% fire rate, infinite magazine" }
+ability = { id = "overdrive", cooldown = 20.0, duration = 6.0, fire_rate = 0.35, infinite_magazine = true, kill_cd_refund = 1.0, desc = "6s: +35% fire rate, infinite magazine" }
 passive = "kills during overdrive refund 1s of cooldown"
 fantasy = "the all-rounder; easiest to pick up"
 
@@ -50,11 +50,11 @@ passive = "+50% jetpack fuel"
 fantasy = "spots and deletes spitters and boss weak points"
 
 [weapons]
-pulse_rifle    = { dmg = 14, rps = 9.0, mag = 36, reload = 1.6, spread_deg = 1.2 }
+pulse_rifle    = { dmg = 14, rps = 9.0, mag = 36, reserve = 180, reload = 1.6, spread_deg = 1.2, projectile_speed = 88, projectile_radius = 0.08 }
 arc_caster     = { dmg = 22, rps = 6.0, mag = 30, reload = 1.8, range = 14, chain_targets = 2, chain_falloff = 0.5 }
 scatter_cannon = { dmg = 9, pellets = 10, rps = 1.4, mag = 6, reload = 2.4, spread_deg = 7.0, knockback = 6.0 }
 rail_needle    = { dmg = 85, rps = 1.2, mag = 5, reload = 2.0, pierce = 3, spread_deg = 0.0 }
-sidearm        = { dmg = 12, rps = 4.0, mag = 12, reload = 1.2, spread_deg = 1.5 }   # downed / self-revive
+sidearm        = { dmg = 12, rps = 4.0, mag = 12, reserve = 48, reload = 1.2, spread_deg = 1.5, projectile_speed = 72, projectile_radius = 0.09 }   # downed / self-revive
 
 [unlock]
 starter = "vex"              # guests start with Vex; others come from crates

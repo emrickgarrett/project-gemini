@@ -123,7 +123,6 @@ pub fn scene(
     let teal = rgba(content, "shots_player");
     let acid = rgba(content, "spitter_glow");
     let white = rgba(content, "hero_white");
-    let cobalt = rgba(content, "hero_cobalt");
     let accent = rgba(content, "hero_accent");
     bank.tracer = upload(&mut meshes, &gemini_meshes::tracer(teal));
     bank.acid = upload(&mut meshes, &gemini_meshes::tracer(acid));
@@ -144,6 +143,15 @@ pub fn scene(
     material(&mut bank, &mut materials, content, "hero_accent", true, false);
     material(&mut bank, &mut materials, content, "hero_cobalt", false, false);
     material(&mut bank, &mut materials, content, "hero_white", false, false);
+    material(&mut bank, &mut materials, content, "hero_teal", false, false);
+    let trim = gemini_sim::content::hex_srgb(&content.hero.accent);
+    let trim_handle = materials.add(StandardMaterial {
+        base_color: Color::srgb(trim[0], trim[1], trim[2]),
+        emissive: LinearRgba::BLACK,
+        unlit: true,
+        ..default()
+    });
+    bank.mats.insert("hero_trim:false:false".into(), trim_handle);
     material(&mut bank, &mut materials, content, "arena_dark", false, false);
     material(&mut bank, &mut materials, content, "arena_light", false, false);
 
@@ -177,11 +185,14 @@ pub fn scene(
         ));
     }
 
-    let arms = upload(
-        &mut meshes,
-        &gemini_meshes::arms_and_gun(cobalt, white, accent, teal),
-    );
-    let core = upload(&mut meshes, &gemini_meshes::gun_core(teal));
+    let vm = gemini_meshes::viewmodel();
+    let offset = gemini_meshes::viewmodel_offset();
+    let hands = Transform::from_xyz(offset[0], offset[1], offset[2]);
+    let teal_mesh = upload(&mut meshes, &vm.teal);
+    let cobalt_mesh = upload(&mut meshes, &vm.cobalt);
+    let white_mesh = upload(&mut meshes, &vm.white);
+    let accent_mesh = upload(&mut meshes, &vm.accent);
+    let core_mesh = upload(&mut meshes, &vm.core);
     commands.spawn((
         Camera3d::default(),
         // Bloom needs this HDR camera. WebGL2 can present the view without the
@@ -194,14 +205,29 @@ pub fn scene(
         PlayPiece,
         children![
             (
-                Mesh3d(arms),
-                MeshMaterial3d(mat_of(&bank, "hero_cobalt", false, false)),
-                Transform::from_xyz(0.15, -0.18, -0.35),
+                Mesh3d(teal_mesh),
+                MeshMaterial3d(mat_of(&bank, "hero_teal", false, false)),
+                hands,
             ),
             (
-                Mesh3d(core),
+                Mesh3d(cobalt_mesh),
+                MeshMaterial3d(mat_of(&bank, "hero_cobalt", false, false)),
+                hands,
+            ),
+            (
+                Mesh3d(white_mesh),
+                MeshMaterial3d(mat_of(&bank, "hero_white", false, false)),
+                hands,
+            ),
+            (
+                Mesh3d(accent_mesh),
+                MeshMaterial3d(mat_of(&bank, "hero_trim", false, false)),
+                hands,
+            ),
+            (
+                Mesh3d(core_mesh),
                 MeshMaterial3d(mat_of(&bank, "shots_player", true, false)),
-                Transform::from_xyz(0.0, 0.0, 0.0),
+                hands,
             ),
         ],
     ));
