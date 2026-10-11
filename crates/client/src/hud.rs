@@ -11,10 +11,8 @@ use crate::world::PlayPiece;
 pub(crate) struct HudNode;
 
 #[derive(Component)]
-struct Floater {
-    #[allow(dead_code)]
+pub(crate) struct Floater {
     world: Vec3,
-    #[allow(dead_code)]
     age: f32,
     #[allow(dead_code)]
     weak: bool,
@@ -24,9 +22,26 @@ pub fn draw(
     mut commands: Commands,
     game: Res<Game>,
     fx: Res<FrameFx>,
+    time: Res<Time>,
     old: Query<Entity, With<HudNode>>,
     camera: Query<(&Camera, &GlobalTransform)>,
+    mut floaters: Query<(Entity, &mut Floater, &mut Node)>,
 ) {
+    let dt = time.delta_secs();
+    for (entity, mut floater, mut node) in &mut floaters {
+        floater.age += dt;
+        if floater.age > 0.7 {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        if let Ok((cam, xf)) = camera.single() {
+            let risen = floater.world + Vec3::Y * floater.age * 0.8;
+            if let Ok(screen) = cam.world_to_viewport(xf, risen) {
+                node.left = Val::Px(screen.x);
+                node.top = Val::Px(screen.y);
+            }
+        }
+    }
     for entity in &old {
         commands.entity(entity).despawn();
     }
@@ -327,8 +342,7 @@ pub fn draw(
                         age: 0.0,
                         weak: ping.weak,
                     },
-                    ChildOf(root),
-                    HudNode,
+                    PlayPiece,
                 ));
             }
         }
