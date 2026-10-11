@@ -204,9 +204,19 @@ pub enum PlannedSwitch {
 /// Decide how to leave `from` for `to`.
 ///
 /// Combat↔boss follows `[transitions]` and is a hard cut on the cue written
-/// there. A crossfade is returned only when the requested mode is a bar-line
-/// crossfade AND the two tracks share a tempo. Different tempos are never
-/// beat-matched; they hard-cut instead.
+/// there. `crossfade_on_bar` waits for a bar, except boss enrage, which fires
+/// on the roar. `crossfade_on_roar` starts the fade immediately. A crossfade
+/// is returned only when the two tracks share a tempo. Different tempos hard-cut.
+/// `hard_cut`, `hard_cut_on_*`, and `breather_only` are hard cuts. Any other
+/// mode is an error.
+pub fn known_transition(mode: &str) -> bool {
+    mode == "crossfade_on_bar"
+        || mode == "crossfade_on_roar"
+        || mode == "hard_cut"
+        || mode == "breather_only"
+        || mode.starts_with("hard_cut_on_")
+}
+
 pub fn plan_switch(
     from: &TrackDef,
     to: &TrackDef,
@@ -215,7 +225,7 @@ pub fn plan_switch(
     kind: TransitionKind,
     transitions: &Transitions,
     warn_seconds: f32,
-) -> PlannedSwitch {
+) -> Result<PlannedSwitch, String> {
     let (mode, cue, fade_bars) = match kind {
         TransitionKind::CombatToBoss => (
             transitions.combat_to_boss.as_str(),
@@ -257,13 +267,17 @@ pub fn plan_switch(
         }
     };
 
-    let wants_crossfade = mode.starts_with("crossfade");
+    if !known_transition(mode) {
+        return Err(format!("unknown transition mode \"{mode}\""));
+    }
     let tempos_ok = same_bar_grid(from, to, from_loop_seconds, to_loop_seconds, warn_seconds);
-    if wants_crossfade && tempos_ok {
-        let wait_for_bar = !matches!(kind, TransitionKind::BossEnrage | TransitionKind::BossPhase);
-        PlannedSwitch::CrossfadeOnBar { fade_bars, wait_for_bar }
+    // Enrage is authored as crossfade_on_bar but fires on the roar, so it does not wait.
+    let wait_for_bar = mode == "crossfade_on_bar" && !matches!(kind, TransitionKind::BossEnrage);
+    let crossfade = mode == "crossfade_on_bar" || mode == "crossfade_on_roar";
+    if crossfade && tempos_ok {
+        Ok(PlannedSwitch::CrossfadeOnBar { fade_bars, wait_for_bar })
     } else {
-        PlannedSwitch::HardCut { cue }
+        Ok(PlannedSwitch::HardCut { cue })
     }
 }
 
@@ -507,6 +521,11 @@ pub fn load_music(text: &str) -> Result<LoadedMusic, String> {
             src.director.layer_fade_bars
         };
         if !row.phases.is_empty() {
+            let boss_id = row
+                .boss_id
+                .clone()
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| format!("{id} is missing boss_id"))?;
             let dir = audio_path(&row.path);
             for (i, phase) in row.phases.iter().enumerate() {
                 let key = format!("{id}_phase{}", i + 1);
@@ -519,7 +538,7 @@ pub fn load_music(text: &str) -> Result<LoadedMusic, String> {
                         loop_bars: row.loop_bars,
                         fade_bars: fade,
                         role: role.into(),
-                        boss_id: Some(boss_for(&id, row.boss_id.clone())),
+                        boss_id: Some(boss_id.clone()),
                         path: Some(format!("{dir}{phase}")),
                         layer: Vec::new(),
                     },
@@ -527,21 +546,19 @@ pub fn load_music(text: &str) -> Result<LoadedMusic, String> {
             }
             continue;
         }
-        let role = if !row.role.is_empty() {
-            row.role.clone()
-        } else if id.contains("enrage") {
-            "enrage".into()
-        } else if id.contains("loop") {
-            "boss".into()
-        } else if id.starts_with("combat") {
-            "combat".into()
+        if row.role.is_empty() {
+            return Err(format!("{id} is missing role"));
+        }
+        let role = row.role.clone();
+        let boss_id = if matches!(role.as_str(), "boss" | "enrage" | "phase") {
+            Some(
+                row.boss_id
+                    .clone()
+                    .filter(|name| !name.is_empty())
+                    .ok_or_else(|| format!("{id} is missing boss_id"))?,
+            )
         } else {
-            "music".into()
-        };
-        let boss_id = if row.boss_id.is_some() || role == "menu" || role == "combat" {
-            row.boss_id.clone()
-        } else {
-            Some(boss_for(&id, None))
+            row.boss_id.clone().filter(|name| !name.is_empty())
         };
         let layered = row.path.ends_with('/');
         let layer = if layered {
@@ -570,6 +587,37 @@ pub fn load_music(text: &str) -> Result<LoadedMusic, String> {
                 layer,
             },
         );
+    }
+    if src.rotation.loops.is_empty() {
+        return Err("rotation loops is empty".into());
+    }
+    if src.rotation.endless_rotate_every_waves == 0 {
+        return Err("endless_rotate_every_waves is 0".into());
+    }
+    for id in [&src.rotation.slice_waves_1_5, &src.rotation.slice_waves_6_10] {
+        if id.is_empty() || !track.contains_key(id.as_str()) {
+            return Err(format!("rotation names unknown track \"{id}\""));
+        }
+    }
+    for id in &src.rotation.loops {
+        if !track.contains_key(id) {
+            return Err(format!("rotation loop \"{id}\" is not a track"));
+        }
+    }
+    for mode in [
+        src.transitions.combat_to_boss.as_str(),
+        src.transitions.boss_to_combat.as_str(),
+        src.transitions.boss_loop_to_enrage.as_str(),
+        src.transitions.tyrant_phase_change.as_str(),
+        src.transitions.combat_loop_swap.as_str(),
+        src.transitions.menu_to_combat.as_str(),
+        src.transitions.combat_to_menu.as_str(),
+        src.transitions.same_tempo.as_str(),
+        src.transitions.different_tempo.as_str(),
+    ] {
+        if !known_transition(mode) {
+            return Err(format!("unknown transition mode \"{mode}\""));
+        }
     }
     Ok(LoadedMusic {
         director: MusicDirectorCfg {
@@ -600,19 +648,6 @@ fn audio_path(path: &str) -> String {
         path.to_string()
     } else {
         format!("audio/{path}")
-    }
-}
-
-fn boss_for(id: &str, explicit: Option<String>) -> String {
-    if let Some(id) = explicit {
-        return id;
-    }
-    if id.contains("brood") {
-        "brood_mother".into()
-    } else if id.contains("tyrant") {
-        "hive_tyrant".into()
-    } else {
-        String::new()
     }
 }
 
@@ -695,6 +730,7 @@ mod tests {
             &content.music.transitions,
             warn,
         );
+        let plan = plan.expect("mode");
         assert!(matches!(plan, PlannedSwitch::HardCut { .. }));
         assert_eq!(switch_clock(&plan), SwitchClock::Reset);
     }
@@ -714,7 +750,7 @@ mod tests {
             &content.music.transitions,
             warn,
         );
-        assert!(matches!(same, PlannedSwitch::CrossfadeOnBar { .. }));
+        assert!(matches!(same.expect("mode"), PlannedSwitch::CrossfadeOnBar { .. }));
         let drift = plan_switch(
             &a,
             &b,
@@ -724,7 +760,7 @@ mod tests {
             &content.music.transitions,
             warn,
         );
-        assert!(matches!(drift, PlannedSwitch::HardCut { .. }));
+        assert!(matches!(drift.expect("mode"), PlannedSwitch::HardCut { .. }));
         let other_bpm = track(137.67, 8);
         let cut = plan_switch(
             &a,
@@ -735,7 +771,7 @@ mod tests {
             &content.music.transitions,
             warn,
         );
-        assert!(matches!(cut, PlannedSwitch::HardCut { .. }));
+        assert!(matches!(cut.expect("mode"), PlannedSwitch::HardCut { .. }));
     }
 
     #[test]

@@ -40,21 +40,27 @@ path = "music/combat_01/"
 bpm = 141.58
 beats_per_bar = 4
 loop_bars = 16          # 27.123s
+role = "combat"
 [track.combat_02]
 path = "music/combat_02/"   # take B style, 141.58 (sped up 0.07%)
 bpm = 141.58
 beats_per_bar = 4
 loop_bars = 16
+role = "combat"
 [track.boss_brood_loop]
 path = "music/boss_brood/boss_loop.ogg"
 bpm = 137.67
 beats_per_bar = 4
 loop_bars = 16          # 27.892s
+role = "boss"
+boss_id = "brood_mother"
 [track.boss_brood_enrage]
 path = "music/boss_brood/boss_enrage.ogg"   # final; reads E major vs loop E minor (unverified by ear)
 bpm = 137.67
 beats_per_bar = 4
 loop_bars = 16
+role = "enrage"
+boss_id = "brood_mother"
 
 [track.boss_tyrant]
 path = "music/boss_tyrant/"
@@ -62,6 +68,7 @@ phases = ["phase1.ogg", "phase2.ogg", "phase3.ogg"]   # armored, cracked, frenzy
 bpm = 140.00
 beats_per_bar = 4
 loop_bars = 16          # 1,316,571 samples
+boss_id = "hive_tyrant"
 
 
 [director]

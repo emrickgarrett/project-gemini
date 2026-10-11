@@ -29,14 +29,14 @@ pub fn raster_bug(id: &str, width: u32, height: u32) -> Vec<u8> {
     draw(visual, &palette, width, height, false, None)
 }
 
-/// Color still from above the shell, so the open cracks read on their own.
+/// Color still from a visual that authors `camera_open` (the brute's open shell).
 pub fn raster_crown(id: &str, width: u32, height: u32) -> Vec<u8> {
     let visual = bug(id);
     let palette = palette_of();
-    let height_m = visual.height;
-    let eye = [height_m * 0.15, height_m * 2.15, -height_m * 0.55];
-    let target = [0.0, height_m * 0.62, -0.05];
-    draw(visual, &palette, width, height, false, Some((eye, target, 32.0)))
+    let cam = visual
+        .camera_open
+        .unwrap_or_else(|| panic!("{id} has no camera_open"));
+    draw(visual, &palette, width, height, false, Some((cam.eye, cam.target, cam.fov)))
 }
 
 pub fn raster(visual: &EnemyVisual, palette: &dyn Fn(&str) -> [f32; 4], width: u32, height: u32) -> Vec<u8> {
@@ -103,7 +103,7 @@ fn draw(
     }
     let mut depth = vec![f32::INFINITY; (w * h) as usize];
     let posed = pose(visual, still_anim(), &[]);
-    let (eye, target, fov_deg) = camera.unwrap_or_else(|| concept_camera(&visual.id, visual.height));
+    let (eye, target, fov_deg) = camera.unwrap_or((visual.camera.eye, visual.camera.target, visual.camera.fov));
     let forward = norm(sub(target, eye));
     let right = norm(cross(forward, [0.0, 1.0, 0.0]));
     let up = cross(right, forward);
@@ -157,40 +157,6 @@ fn draw(
         }
     }
     color
-}
-
-/// Concept-sheet angles. +Z is the head, -Z is the abdomen / sac.
-fn concept_camera(id: &str, height: f32) -> ([f32; 3], [f32; 3], f32) {
-    let dist = height * 2.35 + 0.9;
-    match id {
-        // Rear three-quarter: the glowing abdomen faces the camera.
-        "swarmer" => (
-            [dist * 0.55, height * 1.05 + 0.12, -dist * 1.15],
-            [0.0, height * 0.42, -0.08],
-            30.0,
-        ),
-        // Side view. Camera on +X puts the head (screen left) opposite the sac.
-        "spitter" => (
-            [dist * 1.35, height * 0.46, dist * 0.02],
-            [0.0, height * 0.46, -0.02],
-            28.0,
-        ),
-        "brute" => (
-            [dist * 0.78, height * 0.58, dist * 0.95],
-            [0.0, height * 0.42, 0.05],
-            30.0,
-        ),
-        "brood_mother" => (
-            [dist * 0.68, height * 0.62, dist * 0.92],
-            [0.0, height * 0.40, 0.1],
-            30.0,
-        ),
-        _ => (
-            [dist * 0.82, height * 0.46, dist * 0.74],
-            [0.0, height * 0.46, 0.05],
-            28.0,
-        ),
-    }
 }
 
 pub fn palette_of() -> impl Fn(&str) -> [f32; 4] {

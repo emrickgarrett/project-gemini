@@ -11,7 +11,7 @@ use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use gemini_meshes::{missing_glow_keys, painted_pixels, raster_bug, raster_crown, still};
+use gemini_meshes::{catalog, missing_glow_keys, painted_pixels, raster_bug, raster_crown, still};
 
 fn main() {
     let mut out = "art/bugs".to_string();
@@ -24,10 +24,10 @@ fn main() {
         }
     }
     fs::create_dir_all(&out).expect("create out dir");
-    let ids = ["swarmer", "spitter", "brute", "brood_mother", "hive_tyrant"];
+    let ids: Vec<String> = catalog().iter().map(|visual| visual.id.clone()).collect();
     let panel = 1024u32;
     let mut failed = false;
-    for id in ids {
+    for id in &ids {
         let (w, h, rgb) = still(id, panel);
         let color = raster_bug(id, panel, panel);
         let painted = painted_pixels(&color);
@@ -40,15 +40,20 @@ fn main() {
         write_png(&path, w, h, &rgb);
         println!("wrote {path} ({painted} px)");
     }
-    let open = raster_crown("brute", panel, panel);
-    let open_painted = painted_pixels(&open);
-    if open_painted < 800 {
-        eprintln!("brute_open still failed ({open_painted} px)");
-        failed = true;
+    for visual in catalog() {
+        if visual.camera_open.is_none() {
+            continue;
+        }
+        let open = raster_crown(&visual.id, panel, panel);
+        let open_painted = painted_pixels(&open);
+        if open_painted < 800 {
+            eprintln!("{}_open still failed ({open_painted} px)", visual.id);
+            failed = true;
+        }
+        let open_path = format!("{out}/{}_open.png", visual.id);
+        write_png(&open_path, panel, panel, &open);
+        println!("wrote {open_path} ({open_painted} px)");
     }
-    let open_path = format!("{out}/brute_open.png");
-    write_png(&open_path, panel, panel, &open);
-    println!("wrote {open_path} ({open_painted} px)");
     if failed {
         std::process::exit(1);
     }

@@ -238,7 +238,8 @@ fn switch_to(
         kind,
         &content.music.transitions,
         content.music.director.bpm_warn_seconds(),
-    );
+    )
+    .expect("transition mode");
     match switch_clock(&plan) {
         SwitchClock::Reset => start_track(commands, assets, content, music, target),
         SwitchClock::WaitForBar => {

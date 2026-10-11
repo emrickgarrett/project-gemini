@@ -141,6 +141,13 @@ pub struct VisualPart {
     pub patch_floor: f32,
     #[serde(default)]
     pub at: Option<String>,
+    /// Pod ring. Missing on every part that is not a pod; bake fails when a pod omits them.
+    #[serde(default)]
+    pub sink: Option<f32>,
+    #[serde(default)]
+    pub ring_turn: Option<f32>,
+    #[serde(default)]
+    pub ny_floor: Option<f32>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -393,7 +400,7 @@ pub fn visual_anchor(visual: &BugVisual, name: &str) -> Option<[f32; 3]> {
     }
     if let Some(host_name) = part.on.as_deref() {
         let host = part_named(visual, host_name)?;
-        let height = size_extents(&host.size)[1];
+        let height = size_extents(&host.size)?[1];
         return Some([host.offset[0], host.offset[1] + height * 0.5, host.offset[2]]);
     }
     None
@@ -417,15 +424,17 @@ fn bake_pods(bug: &str, visual: &BugVisual, hitbox: &mut BugHitbox) -> Result<()
     if pod.ring_radius <= 0.0 {
         return Err(format!("{bug} visual pod ring_radius is missing"));
     }
-    let ext = size_extents(&host.size);
+    let ext = size_extents(&host.size).ok_or_else(|| format!("{bug} visual pod host is missing size"))?;
+    let sink = pod.sink.ok_or_else(|| format!("{bug} visual pod is missing sink"))?;
+    let turn = pod.ring_turn.ok_or_else(|| format!("{bug} visual pod is missing ring_turn"))?;
+    let floor = pod.ny_floor.ok_or_else(|| format!("{bug} visual pod is missing ny_floor"))?;
     let radii = [ext[0] * 0.5, ext[1] * 0.5, ext[2] * 0.5];
     let count = pod.count;
-    let sink = 0.98_f32;
     for i in 0..count {
-        let a = i as f32 / count as f32 * std::f32::consts::TAU + 0.4;
+        let a = i as f32 / count as f32 * std::f32::consts::TAU + turn;
         let nx = a.cos() * pod.ring_radius;
         let nz = a.sin() * pod.ring_radius;
-        let ny = (1.0 - nx * nx - nz * nz).max(0.25).sqrt();
+        let ny = (1.0 - nx * nx - nz * nz).max(floor).sqrt();
         hitbox.pods.push(PodPlacement {
             offset: [
                 host.offset[0] + nx * radii[0] * sink,
@@ -452,14 +461,14 @@ pub fn glow_bounds(visual: &BugVisual, name: &str) -> Option<PartBounds> {
     let half = if part.size.is_empty() {
         let host_name = part.on.as_deref().unwrap_or("");
         let host = part_named(visual, host_name)?;
-        let ext = size_extents(&host.size);
+        let ext = size_extents(&host.size)?;
         let patch = part.patch.as_slice();
         if patch.len() < 3 {
             return None;
         }
         [ext[0] * patch[0], (ext[1] * patch[1]).max(part.patch_floor), ext[2] * patch[2]]
     } else {
-        let ext = size_extents(&part.size);
+        let ext = size_extents(&part.size)?;
         [ext[0] * 0.5, ext[1] * 0.5, ext[2] * 0.5]
     };
     Some(bounds_at(center, half))
@@ -483,12 +492,12 @@ fn bounds_at(center: [f32; 3], half: [f32; 3]) -> PartBounds {
 }
 
 /// Full extents. Two-number sizes are radius and length, matching the visual table.
-fn size_extents(size: &[f32]) -> [f32; 3] {
+fn size_extents(size: &[f32]) -> Option<[f32; 3]> {
     match size {
-        [x, y, z, ..] => [*x, *y, *z],
-        [r, h] => [*r * 2.0, *h, *r * 2.0],
-        [r] => [*r, *r, *r],
-        _ => [0.2, 0.2, 0.2],
+        [x, y, z, ..] => Some([*x, *y, *z]),
+        [r, h] => Some([*r * 2.0, *h, *r * 2.0]),
+        [r] => Some([*r, *r, *r]),
+        _ => None,
     }
 }
 

@@ -126,16 +126,26 @@ pub fn db_to_linear(db: f32) -> f32 {
 pub fn load_mix(text: &str) -> Result<AudioTable, String> {
     let root: toml::Value = toml::from_str(text).map_err(|err| err.to_string())?;
     let table = root.as_table().ok_or("audio mix is not a table")?;
-    let num = |key: &str, fallback: f64| -> f32 {
-        table.get(key).and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64))).unwrap_or(fallback) as f32
+    let number = |key: &str| -> Result<f64, String> {
+        let value = table.get(key).ok_or_else(|| format!("audio mix is missing {key}"))?;
+        value
+            .as_float()
+            .or_else(|| value.as_integer().map(|i| i as f64))
+            .ok_or_else(|| format!("audio mix {key} is not a number"))
     };
-    let voice_cap = table.get("voice_cap").and_then(|v| v.as_integer()).unwrap_or(32) as usize;
-    let critical: Vec<String> = table
+    let voice_cap = table
+        .get("voice_cap")
+        .and_then(|v| v.as_integer())
+        .ok_or("audio mix is missing voice_cap")? as usize;
+    let critical_rows = table
         .get("critical")
         .and_then(|v| v.as_array())
-        .map(|rows| rows.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
-        .unwrap_or_default();
-    let alias = table.get("alias").and_then(|v| v.as_table());
+        .ok_or("audio mix is missing critical")?;
+    let critical: Vec<String> = critical_rows
+        .iter()
+        .map(|v| v.as_str().map(|s| s.to_string()).ok_or_else(|| "critical entry is not a string".to_string()))
+        .collect::<Result<_, _>>()?;
+    let alias = table.get("alias").and_then(|v| v.as_table()).ok_or("audio mix is missing alias")?;
     let mut by_file: std::collections::BTreeMap<String, SfxDef> = std::collections::BTreeMap::new();
     for (key, value) in table {
         if matches!(
@@ -144,22 +154,28 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
         ) {
             continue;
         }
-        let Some(row) = value.as_table() else { continue };
-        if !row.contains_key("volume_db") {
-            continue;
-        }
-        let db = row.get("volume_db").and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64))).unwrap_or(0.0) as f32;
-        let semis = row.get("pitch_rand_semitones").and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64))).unwrap_or(0.0) as f32;
-        let max_instances = row.get("max_instances").and_then(|v| v.as_integer()).unwrap_or(1) as u32;
-        let looped = row.get("loop").and_then(|v| v.as_bool()).unwrap_or(false);
-        let category = row.get("category").and_then(|v| v.as_str()).unwrap_or("");
+        let row = value.as_table().ok_or_else(|| format!("audio mix {key} is not a row"))?;
+        let db = row_number(row, key, "volume_db")?;
+        let semis = row_number(row, key, "pitch_rand_semitones")?;
+        let max_instances = row
+            .get("max_instances")
+            .and_then(|v| v.as_integer())
+            .ok_or_else(|| format!("{key} is missing max_instances"))? as u32;
+        let looped = row
+            .get("loop")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| format!("{key} is missing loop"))?;
+        let category = row
+            .get("category")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| format!("{key} is missing category"))?;
         let volume = db_to_linear(db);
         by_file.insert(
             key.clone(),
             SfxDef {
                 id: key.clone(),
                 path: format!("audio/sfx/{key}.ogg"),
-                loudness: volume.abs().max(0.05),
+                loudness: volume,
                 volume,
                 crowd: category == "swarm_bed",
                 critical: critical.iter().any(|id| id == key),
@@ -170,23 +186,24 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
         );
     }
     let mut sfx: Vec<SfxDef> = by_file.values().cloned().collect();
-    if let Some(alias) = alias {
-        for (event, target) in alias {
-            let Some(name) = target.as_str() else { continue };
-            let Some(src) = by_file.get(name) else { continue };
-            let mut copy = src.clone();
-            copy.id = event.clone();
-            copy.critical = copy.critical || critical.iter().any(|id| id == event);
-            sfx.push(copy);
-        }
+    for (event, target) in alias {
+        let name = target.as_str().ok_or_else(|| format!("alias {event} is not a string"))?;
+        let src = by_file
+            .get(name)
+            .ok_or_else(|| format!("alias {event} names missing file {name}"))?;
+        let mut copy = src.clone();
+        copy.id = event.clone();
+        copy.critical = copy.critical || critical.iter().any(|id| id == event);
+        sfx.push(copy);
     }
     let mut sting = Vec::new();
     if let Some(rows) = table.get("sting").and_then(|v| v.as_table()) {
         for (id, value) in rows {
-            let path = value.get("path").and_then(|v| v.as_str()).unwrap_or("");
-            if path.is_empty() {
-                continue;
-            }
+            let path = value
+                .get("path")
+                .and_then(|v| v.as_str())
+                .filter(|path| !path.is_empty())
+                .ok_or_else(|| format!("sting {id} is missing path"))?;
             sting.push(crate::content::StingDef {
                 id: id.clone(),
                 path: path.to_string(),
@@ -195,13 +212,25 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
     }
     Ok(AudioTable {
         voice_cap,
-        crowd_radius: num("crowd_radius", 30.0),
-        crowd_full_count: table.get("crowd_full_count").and_then(|v| v.as_integer()).unwrap_or(18) as u32,
-        min_distance: num("min_distance", 0.5),
+        crowd_radius: number("crowd_radius")? as f32,
+        crowd_full_count: table
+            .get("crowd_full_count")
+            .and_then(|v| v.as_integer())
+            .ok_or("audio mix is missing crowd_full_count")? as u32,
+        min_distance: number("min_distance")? as f32,
         sfx,
         sting,
         pitch: Vec::new(),
     })
+}
+
+fn row_number(row: &toml::Table, id: &str, key: &str) -> Result<f32, String> {
+    let value = row.get(key).ok_or_else(|| format!("{id} is missing {key}"))?;
+    value
+        .as_float()
+        .or_else(|| value.as_integer().map(|n| n as f64))
+        .map(|n| n as f32)
+        .ok_or_else(|| format!("{id} {key} is not a number"))
 }
 
 fn score_of(audio: &AudioTable, def: &SfxDef, pos: Vec3, listener: Vec3) -> f32 {

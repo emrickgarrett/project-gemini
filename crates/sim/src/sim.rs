@@ -153,6 +153,21 @@ pub enum AiState {
     Recover { left: f32 },
 }
 
+/// One-tick request from enemy logic. Replaces the old `vel.y` marker.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EnemyCue {
+    #[default]
+    None,
+    /// Spitter or hive telegraph just started. Plays the charge cue, no projectile yet.
+    Charge,
+    /// Brute telegraph. Plays the attack cue.
+    Brute,
+    /// Brood telegraph. Plays the attack cue.
+    Brood,
+    /// Spit or acid actually leaves the bug.
+    Fire,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Enemy {
     pub id: u32,
@@ -215,6 +230,8 @@ pub struct Enemy {
     pub reinforce_cd: f32,
     #[serde(default)]
     pub reinforce_warn: f32,
+    #[serde(default)]
+    pub cue: EnemyCue,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1028,7 +1045,7 @@ impl Sim {
                         .boss("hive_tyrant")
                         .and_then(|def| def.phase(0))
                         .map(|p| p.tail_weakpoint_mult)
-                        .unwrap_or(self.enemies[enemy_index].weak_mult);
+                        .unwrap_or(0.0);
                     dmg *= mult * (1.0 + mods.weakpoint_damage_pct);
                     self.enemies[enemy_index].tail_hp = (self.enemies[enemy_index].tail_hp - dmg).max(0.0);
                     if self.enemies[enemy_index].tail_hp <= 0.0 {
@@ -1039,12 +1056,15 @@ impl Sim {
                 }
                 HitSpot::Weak => {
                     weak_ok = true;
-                    let mut mult = self.enemies[enemy_index].weak_mult;
-                    if self.enemies[enemy_index].kind == EnemyKind::HiveTyrant {
-                        if let Some(row) = content.boss("hive_tyrant").and_then(|def| def.phase(self.enemies[enemy_index].phase)) {
-                            mult = row.core_damage_mult;
-                        }
-                    }
+                    let mut mult = if self.enemies[enemy_index].kind == EnemyKind::HiveTyrant {
+                        content
+                            .boss("hive_tyrant")
+                            .and_then(|def| def.phase(self.enemies[enemy_index].phase))
+                            .map(|row| row.core_damage_mult)
+                            .unwrap_or(0.0)
+                    } else {
+                        self.enemies[enemy_index].weak_mult
+                    };
                     mult *= 1.0 + mods.weakpoint_damage_pct;
                     dmg *= mult;
                     let charging = matches!(self.enemies[enemy_index].ai, AiState::Telegraph { .. });
@@ -1055,7 +1075,7 @@ impl Sim {
                         let pos = self.enemies[enemy_index].pos;
                         self.enemies[enemy_index].ai = AiState::Chase;
                         self.enemies[enemy_index].attack_cd = content.combat.spitter_cooldown;
-                        self.enemies[enemy_index].vel.y = 0.0;
+                        self.enemies[enemy_index].cue = EnemyCue::None;
                         self.stops.push(SoundStop {
                             id: charge_id,
                             owner: enemy_id,
@@ -1380,7 +1400,13 @@ impl Sim {
                 .round()
                 .max(1.0) as u32;
             let origin = enemy.pos;
-            let kind = EnemyKind::from_name(&def.spawn_kind).unwrap_or(EnemyKind::Swarmer);
+            let Some(kind) = EnemyKind::from_name(&def.spawn_kind) else {
+                let _ = enemy;
+                if let Some((id, pos)) = cue {
+                    self.sound_at(&id, pos);
+                }
+                return;
+            };
             let _ = enemy;
             if let Some((id, pos)) = cue {
                 self.sound_at(&id, pos);
@@ -1443,7 +1469,7 @@ impl Sim {
         if enemy.acid_warn > 0.0 {
             enemy.acid_warn = (enemy.acid_warn - dt).max(0.0);
             if enemy.acid_warn <= 0.0 && !enemy.tail_broken {
-                enemy.vel.y = 999.0;
+                enemy.cue = EnemyCue::Fire;
                 enemy.acid_cd = row.acid_volley_interval;
             }
         } else if row.acid_volley_interval > 0.0 && !enemy.tail_broken {
@@ -1478,31 +1504,33 @@ impl Sim {
         }
         if reinforce_now {
             let budget = self.director.wave_budget * row.reinforce_budget_fraction;
-            let kind = EnemyKind::from_name(&def.reinforce_kind).unwrap_or(EnemyKind::Swarmer);
-            let cost = content.enemy(kind).cost.max(0.01);
-            let mut left = budget;
-            while left + 1e-3 >= cost {
-                let alive = self.enemies.iter().filter(|e| e.alive).count() + spawned.len();
-                if alive >= cap {
-                    break;
+            if let Some(kind) = EnemyKind::from_name(&def.reinforce_kind) {
+                let cost = content.enemy(kind).cost.max(0.01);
+                let mut left = budget;
+                while left + 1e-3 >= cost {
+                    let alive = self.enemies.iter().filter(|e| e.alive).count() + spawned.len();
+                    if alive >= cap {
+                        break;
+                    }
+                    spawned.push((kind, origin, 1));
+                    left -= cost;
                 }
-                spawned.push((kind, origin, 1));
-                left -= cost;
             }
         } else if arm_reinforce {
-            let kind = EnemyKind::from_name(&def.reinforce_kind).unwrap_or(EnemyKind::Swarmer);
-            let cost = content.enemy(kind).cost.max(0.01);
-            let want = ((self.director.wave_budget * row.reinforce_budget_fraction) / cost).ceil() as usize;
-            let alive = self.enemies.iter().filter(|e| e.alive).count();
-            let reserved: usize = self.enemies.iter().map(|e| e.reserved as usize).sum();
-            if row.reinforce_queue_on_cap || alive + reserved < cap {
-                let enemy = &mut self.enemies[index];
-                enemy.reinforce_warn = row.reinforce_telegraph;
-                if row.reinforce_reserve {
-                    enemy.reserved = want.min(cap.saturating_sub(alive)) as u32;
+            if let Some(kind) = EnemyKind::from_name(&def.reinforce_kind) {
+                let cost = content.enemy(kind).cost.max(0.01);
+                let want = ((self.director.wave_budget * row.reinforce_budget_fraction) / cost).ceil() as usize;
+                let alive = self.enemies.iter().filter(|e| e.alive).count();
+                let reserved: usize = self.enemies.iter().map(|e| e.reserved as usize).sum();
+                if row.reinforce_queue_on_cap || alive + reserved < cap {
+                    let enemy = &mut self.enemies[index];
+                    enemy.reinforce_warn = row.reinforce_telegraph;
+                    if row.reinforce_reserve {
+                        enemy.reserved = want.min(cap.saturating_sub(alive)) as u32;
+                    }
+                } else {
+                    self.enemies[index].reinforce_cd = row.reinforce_interval;
                 }
-            } else {
-                self.enemies[index].reinforce_cd = row.reinforce_interval;
             }
         }
         let player = self.players.first().map(|p| p.pos).unwrap_or(Vec3::ZERO);
@@ -1671,6 +1699,7 @@ impl Sim {
             scythe_cd: 0.0,
             reinforce_cd: 0.0,
             reinforce_warn: 0.0,
+            cue: EnemyCue::None,
         });
     }
 
@@ -1686,7 +1715,9 @@ impl Sim {
         let (mut hp, dmg) = scaled_stats(content, self, def.hp, def.dmg);
         hp *= hp_scale;
         let pos = Vec3::new(0.0, 0.0, -content.arena.spawn_ring * 0.65);
-        let spawn_kind = EnemyKind::from_name(&def.spawn_kind).unwrap_or(EnemyKind::Swarmer);
+        let Some(spawn_kind) = EnemyKind::from_name(&def.spawn_kind) else {
+            return;
+        };
         let id = self.alloc_id();
         self.director.spawned_this_wave = self.director.spawned_this_wave.saturating_add(1);
         self.enemies.push(Enemy {
@@ -1733,6 +1764,7 @@ impl Sim {
             scythe_cd: def.phase(0).map(|p| p.scythe_interval).unwrap_or(0.0),
             reinforce_cd: def.phase(0).map(|p| p.reinforce_interval).unwrap_or(0.0),
             reinforce_warn: 0.0,
+            cue: EnemyCue::None,
         });
         let _ = dmg;
         if !def.intro_sfx.is_empty() {
@@ -2106,7 +2138,7 @@ fn step_enemy(
                             content.combat.boss_melee_interval
                         };
                         enemy.ai = AiState::Recover { left: 0.2 };
-                        enemy.vel.y = 999.0;
+                        enemy.cue = EnemyCue::Fire;
                     }
                     _ => {
                         enemy.ai = AiState::Lunge { left: 0.12 };
@@ -2180,8 +2212,8 @@ fn step_enemy(
                         content.combat.telegraph_seconds
                     },
                 };
-                // Charge cue is emitted by the sim after movement; mark with vel.y = 1 for one check.
-                enemy.vel.y = 1.0;
+                // Charge cue is emitted by the sim after movement, on this same tick.
+                enemy.cue = EnemyCue::Charge;
             }
         }
         EnemyKind::Brute => {
@@ -2190,7 +2222,7 @@ fn step_enemy(
                 enemy.ai = AiState::Telegraph {
                     left: content.combat.telegraph_seconds,
                 };
-                enemy.vel.y = 2.0;
+                enemy.cue = EnemyCue::Brute;
             }
         }
         EnemyKind::HiveTyrant => {}
@@ -2200,7 +2232,7 @@ fn step_enemy(
                 enemy.ai = AiState::Telegraph {
                     left: content.combat.telegraph_seconds,
                 };
-                enemy.vel.y = 3.0;
+                enemy.cue = EnemyCue::Brood;
             }
         }
         EnemyKind::Swarmer => {}
@@ -2495,19 +2527,19 @@ fn kind_index(kind: EnemyKind) -> usize {
     }
 }
 
-/// Spitter / hive shots are spawned when an enemy asks for one via `vel.y`.
+/// Spitter / hive shots are spawned when an enemy asks for one via `cue`.
 /// Called from `tick_enemies` after movement so the cue and the projectile share a tick.
 pub fn launch_pending_shots(sim: &mut Sim, content: &Content) {
     let player_pos = sim.players.first().map(|p| p.pos).unwrap_or(Vec3::ZERO);
     let mut spawned: Vec<Projectile> = Vec::new();
     let mut cues: Vec<SoundEvent> = Vec::new();
     for enemy in &mut sim.enemies {
-        let marker = enemy.vel.y;
-        if marker == 0.0 {
+        let marker = enemy.cue;
+        if marker == EnemyCue::None {
             continue;
         }
-        enemy.vel.y = 0.0;
-        if marker == 1.0 && matches!(enemy.ai, AiState::Telegraph { .. }) {
+        enemy.cue = EnemyCue::None;
+        if marker == EnemyCue::Charge && matches!(enemy.ai, AiState::Telegraph { .. }) {
             if enemy.kind == EnemyKind::Spitter {
                 let id = content.bug(enemy.kind).audio.charge.clone();
                 cues.push(SoundEvent {
@@ -2523,21 +2555,21 @@ pub fn launch_pending_shots(sim: &mut Sim, content: &Content) {
                     owner: enemy.id,
                 });
             }
-        } else if marker == 2.0 {
+        } else if marker == EnemyCue::Brute {
             let id = content.bug(EnemyKind::Brute).audio.attack.clone();
             cues.push(SoundEvent {
                 id,
                 pos: enemy.pos,
                 owner: enemy.id,
             });
-        } else if marker == 3.0 {
+        } else if marker == EnemyCue::Brood {
             let id = content.bug(EnemyKind::BroodMother).audio.attack.clone();
             cues.push(SoundEvent {
                 id,
                 pos: enemy.pos,
                 owner: enemy.id,
             });
-        } else if (marker - 999.0).abs() < 0.1
+        } else if marker == EnemyCue::Fire
             && (enemy.kind == EnemyKind::Spitter || enemy.kind == EnemyKind::HiveTyrant)
         {
             let origin = enemy.pos + Vec3::new(0.0, body_lift_of(content, enemy.kind), 0.0);

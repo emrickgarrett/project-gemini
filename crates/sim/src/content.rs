@@ -28,6 +28,7 @@ pub struct Content {
     pub music: MusicFile,
     pub audio: AudioTable,
     pub bugs: crate::bugs::BugBook,
+    pub crate_reveal: CrateReveal,
 }
 
 pub struct Sources<'a> {
@@ -49,6 +50,7 @@ pub struct Sources<'a> {
     pub music: &'a str,
     pub audio: &'a str,
     pub bugs: &'a str,
+    pub crate_reveal: &'a str,
 }
 
 pub fn embedded_sources() -> Sources<'static> {
@@ -71,6 +73,7 @@ pub fn embedded_sources() -> Sources<'static> {
         music: include_str!("../../../content/music.toml"),
         audio: include_str!("../../../content/audio_mix.toml"),
         bugs: include_str!("../../../content/bugs.toml"),
+        crate_reveal: include_str!("../../../content/crate_reveal.toml"),
     }
 }
 
@@ -99,6 +102,7 @@ impl Content {
             src.music,
             src.audio,
             src.bugs,
+            src.crate_reveal,
         ]);
         let mut bugs: crate::bugs::BugBook = parse("bugs.toml", src.bugs)?;
         crate::bugs::bind_weak_anchors(&mut bugs).map_err(|err| format!("bugs.toml: {err}"))?;
@@ -130,6 +134,7 @@ impl Content {
             },
             audio: crate::audio_mix::load_mix(src.audio).map_err(|err| format!("audio_mix.toml: {err}"))?,
             bugs,
+            crate_reveal: parse("crate_reveal.toml", src.crate_reveal)?,
         })
     }
 
@@ -215,14 +220,14 @@ impl Content {
             .map(|(id, _)| id.as_str())
     }
 
-    /// Combat loop for this wave. Slice waves 1–5 and 6–10 are fixed; endless rotates.
+    /// Combat loop for this wave.
+    /// `slice_waves_1_5` covers waves 1–5 and `slice_waves_6_10` covers the rest of a slice.
+    /// Endless rotates by `endless_rotate_every_waves`. Load rejects an empty rotation.
     pub fn combat_loop_id(&self, wave: u32, endless: bool) -> &str {
         let rot = &self.music.rotation;
         if endless {
-            let every = rot.endless_every.max(1);
-            let index = (wave.saturating_sub(1) / every) as usize;
-            let n = rot.loops.len().max(1);
-            rot.loops.get(index % n).map(|s| s.as_str()).unwrap_or("combat_01")
+            let index = (wave.saturating_sub(1) / rot.endless_every) as usize;
+            rot.loops[index % rot.loops.len()].as_str()
         } else if wave <= 5 {
             rot.slice_early.as_str()
         } else {
@@ -688,6 +693,15 @@ fn load_bosses(text: &str) -> Result<Vec<BossDef>, String> {
     let file: File = toml::from_str(text).map_err(|err| err.to_string())?;
     let brood = file.brood_mother;
     let hive = file.hive_tyrant;
+    if EnemyKind::from_name(&brood.spawn_kind).is_none() {
+        return Err(format!("brood_mother spawn_kind \"{}\" is unknown", brood.spawn_kind));
+    }
+    if EnemyKind::from_name(&hive.spawn_kind).is_none() {
+        return Err(format!("hive_tyrant spawn_kind \"{}\" is unknown", hive.spawn_kind));
+    }
+    if EnemyKind::from_name(&hive.reinforce_kind).is_none() {
+        return Err(format!("hive_tyrant reinforce_kind \"{}\" is unknown", hive.reinforce_kind));
+    }
     let phase = |src: PhaseSrc| BossPhase {
         move_speed: src.move_speed,
         core_damage_mult: src.core_damage_mult,
@@ -706,6 +720,14 @@ fn load_bosses(text: &str) -> Result<Vec<BossDef>, String> {
         reinforce_queue_on_cap: src.reinforce_queue_on_cap,
     };
     let phases = vec![phase(hive.phase1), phase(hive.phase2), phase(hive.phase3)];
+    if phases[0].tail_weakpoint_mult <= 0.0 {
+        return Err("hive_tyrant.phase1.tail_weakpoint_mult must be > 0".into());
+    }
+    for (i, row) in phases.iter().enumerate() {
+        if row.core_damage_mult <= 0.0 {
+            return Err(format!("hive_tyrant phase {} core_damage_mult must be > 0", i + 1));
+        }
+    }
     let first = &phases[0];
     Ok(vec![
         BossDef {
@@ -1061,6 +1083,66 @@ impl Palette {
             _ => "#FFFFFF",
         };
         hex_srgb(hex)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct CrateReveal {
+    pub fakeout_enabled: bool,
+    pub common: CrateTier,
+    pub rare: CrateTier,
+    pub epic: CrateTier,
+    pub legendary: CrateTier,
+    pub multi_pull: CrateMulti,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct CrateTier {
+    pub tease: String,
+    pub sting: String,
+    pub drop: [f32; 2],
+    pub crack: [f32; 2],
+    pub burst: f32,
+    pub rise: [f32; 2],
+    pub card: f32,
+    pub fakeout_allowed: bool,
+    pub fakeout_chance: f32,
+    pub fakeout_window: [f32; 2],
+    #[serde(default)]
+    pub freeze: Option<[f32; 2]>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct CrateMulti {
+    pub pod_interval: f32,
+    pub full_sequence_for: String,
+    pub summary_grid: bool,
+}
+
+impl CrateReveal {
+    pub fn tier(&self, id: &str) -> Option<&CrateTier> {
+        match id {
+            "common" => Some(&self.common),
+            "rare" => Some(&self.rare),
+            "epic" => Some(&self.epic),
+            "legendary" => Some(&self.legendary),
+            _ => None,
+        }
+    }
+
+    pub fn tease(&self, id: &str) -> Option<&str> {
+        self.tier(id).map(|tier| tier.tease.as_str())
+    }
+
+    /// True while `t` is inside the tier's fake-out window and the global switch allows it.
+    pub fn fakeout_open(&self, id: &str, t: f32) -> bool {
+        let Some(tier) = self.tier(id) else {
+            return false;
+        };
+        if !self.fakeout_enabled || !tier.fakeout_allowed || tier.fakeout_chance <= 0.0 {
+            return false;
+        }
+        t >= tier.fakeout_window[0] && t <= tier.fakeout_window[1]
     }
 }
 
