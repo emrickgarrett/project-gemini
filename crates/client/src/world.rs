@@ -173,9 +173,10 @@ pub fn scene(
     material(&mut bank, &mut materials, content, "arena_dark", false, false);
     material(&mut bank, &mut materials, content, "arena_light", false, false);
 
+    let arena = &content.arena;
     let ground = upload(
         &mut meshes,
-        &box_at([0.0, -0.08, 0.0], [content.arena.half_extent * 2.0, 0.16, content.arena.half_extent * 2.0]),
+        &box_at([0.0, -0.08, 0.0], [arena.size[0], 0.16, arena.size[1]]),
     );
     commands.spawn((
         Mesh3d(ground),
@@ -183,22 +184,48 @@ pub fn scene(
         Transform::IDENTITY,
         PlayPiece,
     ));
-    for obstacle in &content.arena.obstacles {
-        let size = [
-            obstacle.max.x - obstacle.min.x,
-            obstacle.max.y - obstacle.min.y,
-            obstacle.max.z - obstacle.min.z,
-        ];
-        let center = [
-            (obstacle.min.x + obstacle.max.x) * 0.5,
-            (obstacle.min.y + obstacle.max.y) * 0.5,
-            (obstacle.min.z + obstacle.max.z) * 0.5,
-        ];
-        let mesh = upload(&mut meshes, &box_at([0.0, 0.0, 0.0], size));
+    let deck = upload(
+        &mut meshes,
+        &box_at(
+            [arena.platform.center.x, arena.platform.height * 0.5, arena.platform.center.z],
+            [arena.platform.radius * 2.0, arena.platform.height, arena.platform.radius * 2.0],
+        ),
+    );
+    commands.spawn((
+        Mesh3d(deck),
+        MeshMaterial3d(mat_of(&bank, "arena_light", false, false)),
+        Transform::IDENTITY,
+        PlayPiece,
+    ));
+    for ramp in &arena.platform.ramps {
+        let mid = (ramp.from + ramp.to) * 0.5;
+        let len = SimVec::new(ramp.to.x - ramp.from.x, 0.0, ramp.to.z - ramp.from.z).length().max(0.2);
+        let mesh = upload(
+            &mut meshes,
+            &box_at([mid.x, arena.platform.height * 0.25, mid.z], [len, arena.platform.height * 0.5, ramp.width]),
+        );
         commands.spawn((
             Mesh3d(mesh),
             MeshMaterial3d(mat_of(&bank, "arena_light", false, false)),
-            Transform::from_xyz(center[0], center[1], center[2]),
+            Transform::IDENTITY,
+            PlayPiece,
+        ));
+    }
+    for ledge in &arena.ledges {
+        let mesh = upload(&mut meshes, &box_at([ledge.pos.x, ledge.pos.y, ledge.pos.z], [2.4, 0.3, 2.4]));
+        commands.spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(mat_of(&bank, "arena_light", false, false)),
+            Transform::IDENTITY,
+            PlayPiece,
+        ));
+    }
+    for vent in &arena.vents {
+        let mesh = upload(&mut meshes, &box_at([vent.pos.x, 0.2, vent.pos.z], [1.4, 0.4, 1.4]));
+        commands.spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(mat_of(&bank, "arena_dark", false, false)),
+            Transform::IDENTITY,
             PlayPiece,
         ));
     }
@@ -628,11 +655,7 @@ pub fn camera(
     time: Res<Time>,
 ) {
     let Some(player) = game.sim.players.first() else { return };
-    let eye_y = if player.crouching {
-        game.content.arena.crouch_eye
-    } else {
-        game.content.arena.eye_height
-    };
+    let eye_y = game.content.view_eye(player.crouching);
     let speed = (player.vel.x * player.vel.x + player.vel.z * player.vel.z).sqrt();
     let bob = if game.bob && player.grounded && speed > 0.4 {
         let hz = game.content.presentation.view_bob_hz;

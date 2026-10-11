@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 
-use crate::math::{Aabb, Vec3};
+use crate::math::Vec3;
 use crate::music::{MusicDirectorCfg, MusicRotation, TrackDef, Transitions};
 
 #[derive(Clone, Debug)]
@@ -66,7 +66,7 @@ pub fn embedded_sources() -> Sources<'static> {
         bosses: include_str!("../../../content/bosses.toml"),
         weapons: include_str!("../../../content/weapons.toml"),
         hero: include_str!("../../../content/characters.toml"),
-        arena: include_str!("../../../content/arena.toml"),
+        arena: include_str!("../../../content/arena_01.toml"),
         presentation: include_str!("../../../content/presentation.toml"),
         combat: include_str!("../../../content/combat.toml"),
         palette: include_str!("../../../content/palette.toml"),
@@ -131,7 +131,7 @@ impl Content {
             bosses,
             weapons,
             hero,
-            arena: parse("arena.toml", src.arena)?,
+            arena: load_arena(src.arena).map_err(|err| format!("arena_01.toml: {err}"))?,
             presentation: parse("presentation.toml", src.presentation)?,
             combat: parse("combat.toml", src.combat)?,
             palette: parse("palette.toml", src.palette)?,
@@ -171,6 +171,14 @@ impl Content {
 
     pub fn wave(&self, n: u32) -> Option<&WaveDef> {
         self.waves.wave.iter().find(|w| w.n == n)
+    }
+
+    pub fn view_eye(&self, crouching: bool) -> f32 {
+        if crouching {
+            self.controller.camera.crouch_eye
+        } else {
+            self.controller.camera.eye_height
+        }
     }
 
     pub fn enemy(&self, kind: EnemyKind) -> &EnemyStats {
@@ -435,6 +443,8 @@ pub struct CameraCfg {
     pub fov_sprint_add: f32,
     pub view_bob_amplitude: f32,
     pub landing_dip: f32,
+    pub eye_height: f32,
+    pub crouch_eye: f32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1082,49 +1092,593 @@ fn req_u32(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -
     Ok(n.round() as u32)
 }
 
-#[derive(Clone, Debug, Deserialize)]
-pub struct ArenaFile {
+#[derive(Clone, Debug)]
+pub struct Arena {
+    pub size: [f32; 2],
+    pub shape: String,
+    /// Square half-extent of `size`, used by the spatial grid.
     pub half_extent: f32,
-    pub spawn_ring: f32,
-    pub eye_height: f32,
-    pub crouch_eye: f32,
-    #[serde(default)]
-    pub obstacle: Vec<ObstacleRaw>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct ObstacleRaw {
-    min: [f32; 3],
-    max: [f32; 3],
+    pub radius: f32,
+    pub platform: Platform,
+    pub boss_area: BossArea,
+    pub vents: Vec<Vent>,
+    pub ledges: Vec<Ledge>,
+    pub pickups: Vec<ArenaPickup>,
+    pub player_spawn: Vec3,
+    pub perch_rules: PerchRules,
 }
 
 #[derive(Clone, Debug)]
-pub struct Arena {
-    pub half_extent: f32,
-    pub spawn_ring: f32,
-    pub eye_height: f32,
-    pub crouch_eye: f32,
-    pub obstacles: Vec<Aabb>,
+pub struct Platform {
+    pub center: Vec3,
+    pub radius: f32,
+    pub height: f32,
+    pub railing_height: f32,
+    pub ramps: Vec<Ramp>,
 }
 
-impl<'de> Deserialize<'de> for Arena {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = ArenaFile::deserialize(deserializer)?;
-        Ok(Self {
-            half_extent: raw.half_extent,
-            spawn_ring: raw.spawn_ring,
-            eye_height: raw.eye_height,
-            crouch_eye: raw.crouch_eye,
-            obstacles: raw
-                .obstacle
-                .into_iter()
-                .map(|o| Aabb {
-                    min: Vec3::new(o.min[0], o.min[1], o.min[2]),
-                    max: Vec3::new(o.max[0], o.max[1], o.max[2]),
-                })
-                .collect(),
+#[derive(Clone, Debug)]
+pub struct Ramp {
+    pub from: Vec3,
+    pub to: Vec3,
+    pub width: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct BossArea {
+    pub center: Vec3,
+    pub radius: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct Vent {
+    pub id: String,
+    pub pos: Vec3,
+    pub bearing_deg: f32,
+    pub telegraph: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct Ledge {
+    pub id: String,
+    pub pos: Vec3,
+    pub jetpack_only: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ArenaPickup {
+    pub id: String,
+    pub pos: Vec3,
+    pub spawns_during: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct PerchRules {
+    pub flow_field_targets: String,
+    pub all_perched_grace: f32,
+    pub climb_speed_mult: f32,
+    pub budget_shift_to_spitters: f32,
+    pub fuel_regen_on_perch: bool,
+}
+
+impl Vent {
+    /// Yaw that aims local -Z back toward the arena center. `bearing_deg` 0 is +Z.
+    pub fn inward_yaw(&self) -> f32 {
+        let rad = self.bearing_deg.to_radians();
+        let inward_x = -rad.sin();
+        let inward_z = -rad.cos();
+        (-inward_x).atan2(-inward_z)
+    }
+}
+
+impl Arena {
+    pub fn boss_spawn(&self) -> Vec3 {
+        Vec3::new(self.boss_area.center.x, 0.0, self.boss_area.center.z)
+    }
+
+    pub fn on_perch(&self, pos: Vec3) -> bool {
+        self.ledges.iter().any(|ledge| {
+            let dx = pos.x - ledge.pos.x;
+            let dz = pos.z - ledge.pos.z;
+            dx * dx + dz * dz <= 1.44 && (pos.y - ledge.pos.y).abs() <= 0.45
         })
     }
+
+    pub fn nearest_ledge(&self, from: Vec3) -> Option<&Ledge> {
+        self.ledges.iter().min_by(|a, b| {
+            let da = (a.pos.x - from.x).powi(2) + (a.pos.z - from.z).powi(2);
+            let db = (b.pos.x - from.x).powi(2) + (b.pos.z - from.z).powi(2);
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+    }
+
+    pub fn floor_y(&self, x: f32, z: f32) -> f32 {
+        if let Some(height) = self.ramp_height(x, z) {
+            return height;
+        }
+        if self.in_disc(x, z) {
+            return self.platform.height;
+        }
+        0.0
+    }
+
+    /// Surface the body should stand on. Jetpack ledges only catch you from just above.
+    pub fn support_y(&self, x: f32, y: f32, z: f32, vel_y: f32) -> f32 {
+        if let Some(top) = self.ledge_top(x, y, z, vel_y) {
+            return top;
+        }
+        let floor = self.floor_y(x, z);
+        if self.in_disc(x, z) && self.ramp_height(x, z).is_none() && y < floor - 0.35 && vel_y <= 0.0 {
+            return 0.0;
+        }
+        floor
+    }
+
+    pub fn clamp_play(&self, pos: &mut Vec3, pad: f32) {
+        let hx = (self.size[0] * 0.5 - pad).max(0.5);
+        let hz = (self.size[1] * 0.5 - pad).max(0.5);
+        pos.x = pos.x.clamp(-hx, hx);
+        pos.z = pos.z.clamp(-hz, hz);
+        if self.shape == "circle" {
+            let limit = (self.radius - pad).max(0.5);
+            let d = (pos.x * pos.x + pos.z * pos.z).sqrt();
+            if d > limit {
+                let scale = limit / d;
+                pos.x *= scale;
+                pos.z *= scale;
+            }
+        }
+    }
+
+    pub fn inside_play(&self, pos: Vec3, pad: f32) -> bool {
+        let hx = self.size[0] * 0.5 - pad;
+        let hz = self.size[1] * 0.5 - pad;
+        if pos.x.abs() > hx || pos.z.abs() > hz {
+            return false;
+        }
+        if self.shape == "circle" {
+            let limit = (self.radius - pad).max(0.0);
+            return pos.x * pos.x + pos.z * pos.z <= limit * limit + 1e-4;
+        }
+        true
+    }
+
+    /// Deck, ramp volume, and the low railing. Shots along the walkable top pass.
+    pub fn blocks_shot(&self, p0: Vec3, p1: Vec3) -> bool {
+        if !self.inside_play(p1, 0.0) {
+            return true;
+        }
+        for i in 0..=6 {
+            let t = i as f32 / 6.0;
+            let p = p0 + (p1 - p0) * t;
+            if self.solid_at(p) {
+                return true;
+            }
+        }
+        false
+    }
+
+    pub fn shove_bug(&self, pos: &mut Vec3) {
+        if pos.y > self.platform.height - 0.5 || self.ramp_height(pos.x, pos.z).is_some() {
+            return;
+        }
+        if !self.in_disc(pos.x, pos.z) {
+            return;
+        }
+        let dx = pos.x - self.platform.center.x;
+        let dz = pos.z - self.platform.center.z;
+        let d = (dx * dx + dz * dz).sqrt().max(0.001);
+        let rim = self.platform.radius + 0.05;
+        pos.x = self.platform.center.x + dx / d * rim;
+        pos.z = self.platform.center.z + dz / d * rim;
+    }
+
+    /// Keep the player on the disc, off the railing, and out of the deck volume.
+    pub fn resolve_player(&self, pos: &mut Vec3, old: Vec3, pad: f32) {
+        self.clamp_play(pos, pad);
+        self.hold_railing(pos, old);
+        self.push_out_of_deck(pos, old);
+    }
+
+    fn hold_railing(&self, pos: &mut Vec3, old: Vec3) {
+        let old_d = self.disc_dist(old.x, old.z);
+        let new_d = self.disc_dist(pos.x, pos.z);
+        if old_d > self.platform.radius + 0.15 || new_d <= self.platform.radius {
+            return;
+        }
+        if pos.y > self.platform.height + self.platform.railing_height {
+            return;
+        }
+        if old.y < self.platform.height - 0.3 {
+            return;
+        }
+        if self.ramp_height(pos.x, pos.z).is_some() || self.ramp_height(old.x, old.z).is_some() {
+            return;
+        }
+        let rim = (self.platform.radius - 0.02).max(0.1);
+        let dx = pos.x - self.platform.center.x;
+        let dz = pos.z - self.platform.center.z;
+        pos.x = self.platform.center.x + dx / new_d.max(0.001) * rim;
+        pos.z = self.platform.center.z + dz / new_d.max(0.001) * rim;
+    }
+
+    fn push_out_of_deck(&self, pos: &mut Vec3, old: Vec3) {
+        if self.ramp_height(pos.x, pos.z).is_some() || !self.in_disc(pos.x, pos.z) {
+            return;
+        }
+        if pos.y >= self.platform.height - 0.2 {
+            return;
+        }
+        let old_inside = self.in_disc(old.x, old.z) && old.y < self.platform.height - 0.2;
+        if old_inside {
+            return;
+        }
+        let dx = pos.x - self.platform.center.x;
+        let dz = pos.z - self.platform.center.z;
+        let d = (dx * dx + dz * dz).sqrt().max(0.001);
+        let rim = self.platform.radius + 0.02;
+        pos.x = self.platform.center.x + dx / d * rim;
+        pos.z = self.platform.center.z + dz / d * rim;
+    }
+
+    fn ledge_top(&self, x: f32, y: f32, z: f32, vel_y: f32) -> Option<f32> {
+        for ledge in &self.ledges {
+            let dx = x - ledge.pos.x;
+            let dz = z - ledge.pos.z;
+            if dx * dx + dz * dz > 1.44 {
+                continue;
+            }
+            let top = ledge.pos.y;
+            if !ledge.jetpack_only {
+                if y <= top + 0.35 {
+                    return Some(top);
+                }
+                continue;
+            }
+            let near = (y - top).abs() <= 0.4 || (vel_y <= 0.15 && y <= top + 0.25 && y >= top - 1.3);
+            if near {
+                return Some(top);
+            }
+        }
+        None
+    }
+
+    fn ramp_height(&self, x: f32, z: f32) -> Option<f32> {
+        for ramp in &self.platform.ramps {
+            let abx = ramp.to.x - ramp.from.x;
+            let abz = ramp.to.z - ramp.from.z;
+            let len2 = abx * abx + abz * abz;
+            if len2 < 1e-4 {
+                continue;
+            }
+            let t = ((x - ramp.from.x) * abx + (z - ramp.from.z) * abz) / len2;
+            if !(-0.02..=1.02).contains(&t) {
+                continue;
+            }
+            let clamped = t.clamp(0.0, 1.0);
+            let px = ramp.from.x + abx * clamped;
+            let pz = ramp.from.z + abz * clamped;
+            let lateral = ((x - px).powi(2) + (z - pz).powi(2)).sqrt();
+            if lateral > ramp.width * 0.5 {
+                continue;
+            }
+            return Some(self.platform.height * (1.0 - clamped));
+        }
+        None
+    }
+
+    fn in_disc(&self, x: f32, z: f32) -> bool {
+        self.disc_dist(x, z) <= self.platform.radius
+    }
+
+    fn disc_dist(&self, x: f32, z: f32) -> f32 {
+        let dx = x - self.platform.center.x;
+        let dz = z - self.platform.center.z;
+        (dx * dx + dz * dz).sqrt()
+    }
+
+    fn solid_at(&self, p: Vec3) -> bool {
+        if let Some(height) = self.ramp_height(p.x, p.z) {
+            if p.y >= -0.2 && p.y < height - 0.15 {
+                return true;
+            }
+        }
+        if self.in_disc(p.x, p.z) && p.y >= -0.2 && p.y < self.platform.height - 0.15 {
+            return true;
+        }
+        let d = self.disc_dist(p.x, p.z);
+        d - self.platform.radius <= 0.35
+            && self.platform.radius - d <= 0.35
+            && p.y >= self.platform.height
+            && p.y <= self.platform.height + self.platform.railing_height
+            && self.ramp_height(p.x, p.z).is_none()
+    }
+}
+
+fn load_arena(text: &str) -> Result<Arena, String> {
+    let root: toml::Value = toml::from_str(text).map_err(|err: toml::de::Error| err.to_string())?;
+    let table = root.as_table().ok_or_else(|| "arena_01 is not a table".to_string())?;
+    expect_keys(
+        table,
+        &[
+            "size",
+            "shape",
+            "radius",
+            "platform",
+            "boss_area",
+            "vent",
+            "ledge",
+            "pickup",
+            "player_spawn",
+            "perch_rules",
+        ],
+        "arena_01",
+    )?;
+    let size = nums2(table.get("size").unwrap(), "size")?;
+    let shape = table
+        .get("shape")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "shape must be a string".to_string())?
+        .to_string();
+    if shape != "circle" {
+        return Err(format!("shape \"{shape}\" is unknown"));
+    }
+    let radius = num(table.get("radius").unwrap(), "radius")?;
+    if radius <= 0.0 || size[0] + 1e-3 < radius * 2.0 || size[1] + 1e-3 < radius * 2.0 {
+        return Err("size must contain the circle".into());
+    }
+    let platform = load_platform(table.get("platform").unwrap())?;
+    let boss_area = load_boss_area(table.get("boss_area").unwrap())?;
+    let vents = load_rows(table.get("vent").unwrap(), "vent", load_vent)?;
+    let ledges = load_rows(table.get("ledge").unwrap(), "ledge", load_ledge)?;
+    let pickups = load_rows(table.get("pickup").unwrap(), "pickup", load_pickup)?;
+    if vents.is_empty() {
+        return Err("arena_01 is missing vent".into());
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for vent in &vents {
+        if !seen.insert(vent.id.clone()) {
+            return Err(format!("duplicate vent id {}", vent.id));
+        }
+        let dx = vent.pos.x - boss_area.center.x;
+        let dz = vent.pos.z - boss_area.center.z;
+        if (dx * dx + dz * dz).sqrt() <= boss_area.radius {
+            return Err(format!("{} is inside the boss area", vent.id));
+        }
+    }
+    for ledge in &ledges {
+        if !seen.insert(ledge.id.clone()) {
+            return Err(format!("duplicate ledge id {}", ledge.id));
+        }
+    }
+    for pickup in &pickups {
+        if !seen.insert(pickup.id.clone()) {
+            return Err(format!("duplicate pickup id {}", pickup.id));
+        }
+    }
+    let spawn = nums3(table.get("player_spawn").unwrap(), "player_spawn")?;
+    let perch_rules = load_perch_rules(table.get("perch_rules").unwrap())?;
+    Ok(Arena {
+        half_extent: size[0].max(size[1]) * 0.5,
+        size,
+        shape,
+        radius,
+        platform,
+        boss_area,
+        vents,
+        ledges,
+        pickups,
+        player_spawn: Vec3::new(spawn[0], spawn[1], spawn[2]),
+        perch_rules,
+    })
+}
+
+fn load_platform(value: &toml::Value) -> Result<Platform, String> {
+    let table = value.as_table().ok_or_else(|| "platform is not a table".to_string())?;
+    expect_keys(table, &["center", "radius", "height", "railing_height", "ramps"], "platform")?;
+    let center = nums2(table.get("center").unwrap(), "platform.center")?;
+    let radius = num(table.get("radius").unwrap(), "platform.radius")?;
+    let height = num(table.get("height").unwrap(), "platform.height")?;
+    let railing_height = num(table.get("railing_height").unwrap(), "platform.railing_height")?;
+    if radius <= 0.0 || height < 0.0 || railing_height < 0.0 {
+        return Err("platform radius, height, and railing_height must be >= 0".into());
+    }
+    let ramps_value = table.get("ramps").unwrap();
+    let ramps = ramps_value
+        .as_array()
+        .ok_or_else(|| "platform.ramps must be an array".to_string())?;
+    let mut loaded = Vec::new();
+    for (i, ramp) in ramps.iter().enumerate() {
+        let row = ramp.as_table().ok_or_else(|| format!("platform.ramps[{i}] is not a table"))?;
+        expect_keys(row, &["from", "to", "width"], &format!("platform.ramps[{i}]"))?;
+        let from = nums2(row.get("from").unwrap(), &format!("platform.ramps[{i}].from"))?;
+        let to = nums2(row.get("to").unwrap(), &format!("platform.ramps[{i}].to"))?;
+        let width = num(row.get("width").unwrap(), &format!("platform.ramps[{i}].width"))?;
+        if width <= 0.0 {
+            return Err(format!("platform.ramps[{i}].width must be > 0"));
+        }
+        loaded.push(Ramp {
+            from: Vec3::new(from[0], 0.0, from[1]),
+            to: Vec3::new(to[0], 0.0, to[1]),
+            width,
+        });
+    }
+    if loaded.is_empty() {
+        return Err("platform is missing ramps".into());
+    }
+    Ok(Platform {
+        center: Vec3::new(center[0], 0.0, center[1]),
+        radius,
+        height,
+        railing_height,
+        ramps: loaded,
+    })
+}
+
+fn load_boss_area(value: &toml::Value) -> Result<BossArea, String> {
+    let table = value.as_table().ok_or_else(|| "boss_area is not a table".to_string())?;
+    expect_keys(table, &["center", "radius"], "boss_area")?;
+    let center = nums2(table.get("center").unwrap(), "boss_area.center")?;
+    let radius = num(table.get("radius").unwrap(), "boss_area.radius")?;
+    if radius <= 0.0 {
+        return Err("boss_area.radius must be > 0".into());
+    }
+    Ok(BossArea {
+        center: Vec3::new(center[0], 0.0, center[1]),
+        radius,
+    })
+}
+
+fn load_vent(table: &toml::map::Map<String, toml::Value>) -> Result<Vent, String> {
+    expect_keys(table, &["id", "pos", "bearing_deg", "telegraph"], "vent")?;
+    let id = req_id(table, "vent")?;
+    let pos = nums3(table.get("pos").unwrap(), &format!("{id}.pos"))?;
+    let bearing_deg = num(table.get("bearing_deg").unwrap(), &format!("{id}.bearing_deg"))?;
+    let telegraph = num(table.get("telegraph").unwrap(), &format!("{id}.telegraph"))?;
+    if telegraph <= 0.0 {
+        return Err(format!("{id} telegraph must be > 0"));
+    }
+    Ok(Vent {
+        id,
+        pos: Vec3::new(pos[0], pos[1], pos[2]),
+        bearing_deg,
+        telegraph,
+    })
+}
+
+fn load_ledge(table: &toml::map::Map<String, toml::Value>) -> Result<Ledge, String> {
+    expect_keys(table, &["id", "pos", "jetpack_only"], "ledge")?;
+    let id = req_id(table, "ledge")?;
+    let pos = nums3(table.get("pos").unwrap(), &format!("{id}.pos"))?;
+    let jetpack_only = table
+        .get("jetpack_only")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| format!("{id} jetpack_only must be a bool"))?;
+    Ok(Ledge {
+        id,
+        pos: Vec3::new(pos[0], pos[1], pos[2]),
+        jetpack_only,
+    })
+}
+
+fn load_pickup(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaPickup, String> {
+    expect_keys(table, &["id", "pos", "spawns_during"], "pickup")?;
+    let id = req_id(table, "pickup")?;
+    let pos = nums3(table.get("pos").unwrap(), &format!("{id}.pos"))?;
+    let spawns_during = table
+        .get("spawns_during")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("{id} is missing spawns_during"))?
+        .to_string();
+    if spawns_during != "breather" {
+        return Err(format!("{id} spawns_during \"{spawns_during}\" is unknown"));
+    }
+    Ok(ArenaPickup {
+        id,
+        pos: Vec3::new(pos[0], pos[1], pos[2]),
+        spawns_during,
+    })
+}
+
+fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
+    let table = value.as_table().ok_or_else(|| "perch_rules is not a table".to_string())?;
+    expect_keys(
+        table,
+        &[
+            "flow_field_targets",
+            "all_perched_grace",
+            "climb_speed_mult",
+            "budget_shift_to_spitters",
+            "fuel_regen_on_perch",
+        ],
+        "perch_rules",
+    )?;
+    let flow_field_targets = table
+        .get("flow_field_targets")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "perch_rules is missing flow_field_targets".to_string())?
+        .to_string();
+    if flow_field_targets != "nearest_grounded_player" {
+        return Err(format!("flow_field_targets \"{flow_field_targets}\" is unknown"));
+    }
+    let all_perched_grace = num(table.get("all_perched_grace").unwrap(), "all_perched_grace")?;
+    let climb_speed_mult = num(table.get("climb_speed_mult").unwrap(), "climb_speed_mult")?;
+    let budget_shift_to_spitters = num(table.get("budget_shift_to_spitters").unwrap(), "budget_shift_to_spitters")?;
+    let fuel_regen_on_perch = table
+        .get("fuel_regen_on_perch")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| "fuel_regen_on_perch must be a bool".to_string())?;
+    if all_perched_grace < 0.0 || climb_speed_mult < 0.0 || !(0.0..=1.0).contains(&budget_shift_to_spitters) {
+        return Err("perch_rules numbers are out of range".into());
+    }
+    Ok(PerchRules {
+        flow_field_targets,
+        all_perched_grace,
+        climb_speed_mult,
+        budget_shift_to_spitters,
+        fuel_regen_on_perch,
+    })
+}
+
+fn load_rows<T>(
+    value: &toml::Value,
+    what: &str,
+    load: fn(&toml::map::Map<String, toml::Value>) -> Result<T, String>,
+) -> Result<Vec<T>, String> {
+    let rows = value.as_array().ok_or_else(|| format!("{what} must be an array"))?;
+    rows.iter()
+        .map(|row| {
+            let table = row.as_table().ok_or_else(|| format!("{what} row is not a table"))?;
+            load(table)
+        })
+        .collect()
+}
+
+fn expect_keys(table: &toml::map::Map<String, toml::Value>, allowed: &[&str], what: &str) -> Result<(), String> {
+    for key in table.keys() {
+        if !allowed.contains(&key.as_str()) {
+            return Err(format!("{what} has unknown key {key}"));
+        }
+    }
+    for key in allowed {
+        if !table.contains_key(*key) {
+            return Err(format!("{what} is missing {key}"));
+        }
+    }
+    Ok(())
+}
+
+fn req_id(table: &toml::map::Map<String, toml::Value>, what: &str) -> Result<String, String> {
+    table
+        .get("id")
+        .and_then(|v| v.as_str())
+        .filter(|id| !id.is_empty())
+        .map(|id| id.to_string())
+        .ok_or_else(|| format!("{what} is missing id"))
+}
+
+fn num(value: &toml::Value, what: &str) -> Result<f32, String> {
+    match value {
+        toml::Value::Float(n) => Ok(*n as f32),
+        toml::Value::Integer(n) => Ok(*n as f32),
+        _ => Err(format!("{what} must be a number")),
+    }
+}
+
+fn nums2(value: &toml::Value, what: &str) -> Result<[f32; 2], String> {
+    let arr = value.as_array().ok_or_else(|| format!("{what} must be an array"))?;
+    if arr.len() != 2 {
+        return Err(format!("{what} must have 2 numbers"));
+    }
+    Ok([num(&arr[0], what)?, num(&arr[1], what)?])
+}
+
+fn nums3(value: &toml::Value, what: &str) -> Result<[f32; 3], String> {
+    let arr = value.as_array().ok_or_else(|| format!("{what} must be an array"))?;
+    if arr.len() != 3 {
+        return Err(format!("{what} must have 3 numbers"));
+    }
+    Ok([num(&arr[0], what)?, num(&arr[1], what)?, num(&arr[2], what)?])
 }
 
 #[derive(Clone, Debug, Deserialize)]

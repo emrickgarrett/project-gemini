@@ -136,7 +136,7 @@ fn spawner_respects_cap_and_one_wave_queue() {
     content.combat.spawn_interval = 0.01;
     content.combat.group_budget = 40.0;
     let mut sim = Sim::new(&content, "normal", 2);
-    for _ in 0..30 {
+    for _ in 0..60 {
         sim.step(&content, PlayerInput::default());
     }
     assert!(sim.enemies.len() <= 5, "alive {}", sim.enemies.len());
@@ -161,7 +161,7 @@ fn spawner_respects_cap_and_one_wave_queue() {
     }
     sim.step(&content, PlayerInput::default());
     assert_eq!(sim.director.wave, 2);
-    for _ in 0..20 {
+    for _ in 0..60 {
         sim.step(&content, PlayerInput::default());
     }
     assert!(sim.enemies.len() <= 5);
@@ -176,7 +176,7 @@ fn difficulty_scales_spawned_hp() {
     let content = Content::embedded();
     let mut normal = Sim::new(&content, "normal", 5);
     let mut heroic = Sim::new(&content, "heroic", 5);
-    for _ in 0..40 {
+    for _ in 0..70 {
         normal.step(&content, PlayerInput::default());
         heroic.step(&content, PlayerInput::default());
     }
@@ -290,10 +290,12 @@ fn self_revive_hp_and_spitter_standoff_come_from_content() {
     sim.enemies.clear();
     sim.director.pool = 0.0;
     sim.director.parked = true;
-    sim.enemies.push(spitter_at(8.0));
+    // South of the platform so the deck does not block the 8 m gap.
+    sim.players[0].pos = Vec3::new(0.0, 0.0, 20.0);
+    sim.enemies.push(spitter_at(28.0));
     sim.step(&content, PlayerInput::default());
     let back = sim.enemies.iter().find(|e| e.id == 42).unwrap();
-    assert!(back.pos.z > 8.0, "inside the back-away ratio, z moved to {}", back.pos.z);
+    assert!(back.pos.z > 28.0, "inside the back-away ratio, z moved to {}", back.pos.z);
     assert!(matches!(back.ai, AiState::Chase), "8 < 20 * 0.5, so it must not spit");
 
     content.combat.keep_away_ratios = [0.5, 0.2];
@@ -301,7 +303,8 @@ fn self_revive_hp_and_spitter_standoff_come_from_content() {
     sim.enemies.clear();
     sim.director.pool = 0.0;
     sim.director.parked = true;
-    sim.enemies.push(spitter_at(8.0));
+    sim.players[0].pos = Vec3::new(0.0, 0.0, 20.0);
+    sim.enemies.push(spitter_at(28.0));
     sim.step(&content, PlayerInput::default());
     let firing = sim.enemies.iter().find(|e| e.id == 42).unwrap();
     assert!(matches!(firing.ai, AiState::Telegraph { .. }));
@@ -312,8 +315,9 @@ fn self_revive_hp_and_spitter_standoff_come_from_content() {
     sim.enemies.clear();
     sim.director.pool = 0.0;
     sim.director.parked = true;
-    sim.enemies.push(spitter_at(8.0));
-    let before = 8.0;
+    sim.players[0].pos = Vec3::new(0.0, 0.0, 20.0);
+    sim.enemies.push(spitter_at(28.0));
+    let before = 28.0;
     sim.step(&content, PlayerInput::default());
     let close = sim.enemies.iter().find(|e| e.id == 42).unwrap();
     assert!(close.pos.z < before, "outside keep-away, it should close, z={}", close.pos.z);
@@ -362,6 +366,7 @@ fn spitter_at(z: f32) -> gemini_sim::sim::Enemy {
         reinforce_cd: 0.0,
         reinforce_warn: 0.0,
         cue: gemini_sim::sim::EnemyCue::None,
+        climbing: false,
     }
 }
 
@@ -408,6 +413,7 @@ fn hurt(sim: &mut Sim, content: &Content) {
         reinforce_cd: 0.0,
         reinforce_warn: 0.0,
         cue: gemini_sim::sim::EnemyCue::None,
+        climbing: false,
     });
     sim.step(content, PlayerInput::default());
 }
@@ -500,6 +506,7 @@ fn bug(kind: gemini_sim::content::EnemyKind) -> gemini_sim::sim::Enemy {
         reinforce_cd: 0.0,
         reinforce_warn: 0.0,
         cue: gemini_sim::sim::EnemyCue::None,
+        climbing: false,
     }
 }
 
@@ -936,6 +943,9 @@ fn every_emitted_sound_resolves_to_a_mix_file() {
         "jump".into(),
         "dash".into(),
         "swarmer_crowd".into(),
+        "vent_warn".into(),
+        "vent_burst".into(),
+        "perch_climb_warn".into(),
         content.bugs.feedback.weakpoint_hit.clone(),
     ];
     for (_, row) in content.bugs.rows() {
@@ -1179,4 +1189,155 @@ fn vex_overdrive_comes_from_characters() {
     assert_eq!(sim.players[0].overdrive_left, 0.0);
     sim.step(&content, PlayerInput::default());
     assert!(!sim.sounds.iter().any(|s| s.id == "vex_ability_end"));
+}
+
+#[test]
+fn arena_01_vents_perches_and_pickups() {
+    use gemini_sim::content::{EnemyKind, WaveDef};
+    let content = Content::embedded();
+    assert_eq!(content.arena.shape, "circle");
+    assert!((content.arena.radius - 40.0).abs() < 1e-3);
+    assert!((content.arena.size[0] - 80.0).abs() < 1e-3);
+    assert_eq!(content.arena.vents.len(), 6);
+    assert!((content.arena.vents[0].telegraph - 1.5).abs() < 1e-4);
+    assert!((content.arena.vents[1].bearing_deg - 60.0).abs() < 1e-3);
+    assert!((content.arena.platform.height - 4.0).abs() < 1e-4);
+    assert!((content.arena.platform.railing_height - 0.6).abs() < 1e-4);
+    assert_eq!(content.arena.platform.ramps.len(), 2);
+    assert!((content.arena.floor_y(0.0, 0.0) - 4.0).abs() < 1e-3);
+    assert!((content.arena.floor_y(12.0, 0.0) - 2.0).abs() < 0.05);
+    assert!(content.arena.floor_y(30.0, 10.0).abs() < 1e-3);
+    assert!((content.arena.boss_area.center.z - (-24.0)).abs() < 1e-3);
+    assert!((content.arena.boss_area.radius - 12.5).abs() < 1e-3);
+    assert_eq!(content.arena.ledges.len(), 4);
+    assert!(content.arena.ledges.iter().all(|ledge| ledge.jetpack_only));
+    assert!(content.arena.pickups.iter().all(|spot| spot.spawns_during == "breather"));
+    assert!((content.arena.player_spawn.y - 4.0).abs() < 1e-4);
+    assert_eq!(content.arena.perch_rules.flow_field_targets, "nearest_grounded_player");
+    assert!(!content.arena.perch_rules.fuel_regen_on_perch);
+    assert!((content.arena.perch_rules.climb_speed_mult - 0.5).abs() < 1e-4);
+    assert!((content.arena.perch_rules.all_perched_grace - 8.0).abs() < 1e-4);
+    assert!((content.arena.perch_rules.budget_shift_to_spitters - 0.3).abs() < 1e-4);
+    assert!((content.controller.camera.eye_height - 1.62).abs() < 1e-4);
+    assert!((content.controller.camera.crouch_eye - 1.02).abs() < 1e-4);
+
+    let base = gemini_sim::content::embedded_sources();
+    let parse = |arena: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            waves: base.waves,
+            difficulty: base.difficulty,
+            controller: base.controller,
+            run_upgrades: base.run_upgrades,
+            endless: base.endless,
+            currency: base.currency,
+            banners: base.banners,
+            duplicate_ranks: base.duplicate_ranks,
+            bosses: base.bosses,
+            weapons: base.weapons,
+            hero: base.hero,
+            arena,
+            presentation: base.presentation,
+            combat: base.combat,
+            palette: base.palette,
+            music: base.music,
+            audio: base.audio,
+            bugs: base.bugs,
+            crate_reveal: base.crate_reveal,
+        })
+    };
+    let missing = include_str!("../../../content/arena_01.toml").replacen("telegraph = 1.5\n", "", 1);
+    let err = parse(&missing).expect_err("missing telegraph");
+    assert!(err.contains("telegraph"), "{err}");
+    let inside = include_str!("../../../content/arena_01.toml").replacen("pos = [0.0, 0, -38.0]", "pos = [0.0, 0, -24.0]", 1);
+    let err = parse(&inside).expect_err("vent in the boss area");
+    assert!(err.contains("boss"), "{err}");
+
+    let mut boss_content = Content::embedded();
+    boss_content.waves.wave = vec![WaveDef {
+        n: 1,
+        mix: [1.0, 0.0, 0.0],
+        boss: Some("brood_mother".into()),
+    }];
+    let boss_sim = Sim::new(&boss_content, "normal", 1);
+    let boss = boss_sim
+        .enemies
+        .iter()
+        .find(|enemy| enemy.kind == EnemyKind::BroodMother)
+        .unwrap();
+    assert!((boss.pos.x - content.arena.boss_area.center.x).abs() < 1e-3);
+    assert!((boss.pos.z - content.arena.boss_area.center.z).abs() < 1e-3);
+
+    let mut sim = Sim::new(&content, "normal", 2);
+    assert!((sim.players[0].pos.y - 4.0).abs() < 1e-3);
+    sim.step(&content, PlayerInput::default());
+    assert!(sim.sounds.iter().any(|sound| sound.id == "vent_warn"));
+    assert!(sim.pending_vents.iter().all(|vent| vent.kind == EnemyKind::Swarmer));
+    assert!(sim.enemies.is_empty());
+    let mut heard_burst = false;
+    for _ in 0..60 {
+        sim.step(&content, PlayerInput::default());
+        if sim.sounds.iter().any(|sound| sound.id == "vent_burst") {
+            heard_burst = true;
+        }
+    }
+    assert!(heard_burst);
+    assert!(sim.enemies.iter().any(|enemy| enemy.kind == EnemyKind::Swarmer));
+
+    let mut sim = Sim::new(&content, "normal", 4);
+    sim.phase = Phase::Upgrade {
+        options: vec!["rapid_cells".into()],
+    };
+    sim.step(
+        &content,
+        PlayerInput {
+            upgrade_choice: Some(0),
+            ..PlayerInput::default()
+        },
+    );
+    assert!(matches!(sim.phase, Phase::Breather { .. }));
+    assert_eq!(sim.pickups.len(), 4);
+
+    let ledge = content.arena.ledges.iter().find(|ledge| ledge.id == "shelf_e").unwrap().pos;
+    let mut sim = Sim::new(&content, "normal", 5);
+    sim.enemies.clear();
+    sim.pending_vents.clear();
+    sim.director.pool = 0.0;
+    sim.director.parked = true;
+    sim.players[0].pos = ledge;
+    sim.players[0].vel = Vec3::ZERO;
+    sim.players[0].grounded = true;
+    sim.players[0].fuel = 10.0;
+    sim.players[0].fuel_delay = 0.0;
+    sim.all_perched_for = content.arena.perch_rules.all_perched_grace;
+    let mut climber = bug(EnemyKind::Swarmer);
+    climber.id = 3;
+    climber.speed = 4.0;
+    climber.pos = Vec3::new(ledge.x, 0.0, ledge.z);
+    sim.enemies.push(climber);
+    let mut warned = false;
+    for _ in 0..6 {
+        sim.step(&content, PlayerInput::default());
+        if sim.sounds.iter().any(|sound| sound.id == "perch_climb_warn") {
+            warned = true;
+        }
+    }
+    assert!(warned);
+    assert!((sim.players[0].fuel - 10.0).abs() < 1e-3, "fuel {}", sim.players[0].fuel);
+    assert!(sim.enemies[0].pos.y > 0.2, "y {}", sim.enemies[0].pos.y);
+
+    let mut shifted = Content::embedded();
+    shifted.combat.group_budget = 80.0;
+    let mut sim = Sim::new(&shifted, "normal", 8);
+    sim.players[0].pos = ledge;
+    sim.players[0].grounded = true;
+    sim.director.pool = 80.0;
+    sim.director.group_left = 80.0;
+    sim.director.parked = false;
+    sim.director.spawn_wait = 0.0;
+    sim.pending_vents.clear();
+    sim.step(&shifted, PlayerInput::default());
+    assert!(
+        sim.pending_vents.iter().any(|vent| vent.kind == EnemyKind::Spitter),
+        "perched budget should move a share onto spitters"
+    );
 }

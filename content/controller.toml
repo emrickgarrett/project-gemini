@@ -24,6 +24,8 @@ fov_default = 90            # player-adjustable 75 to 110
 fov_sprint_add = 6
 view_bob_amplitude = 0.02   # with a toggle to turn it off
 landing_dip = 0.08
+eye_height = 1.62
+crouch_eye = 1.02
 [aim]                       # gentle on mouse, stronger on gamepad
 mouse_aim_assist = false
 pad_slowdown_radius_deg = 4.0
