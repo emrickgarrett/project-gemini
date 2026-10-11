@@ -1,0 +1,8 @@
+source_take: combat_takeA.mp3
+bpm: 141.58
+beats_per_bar: 4
+loop_bars: 16
+loop_start_s: 116.9893
+sample_rate: 48000
+sample_length: 1301916
+key_estimate: E major (runner-up E minor)

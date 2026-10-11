@@ -4,3 +4,9 @@ endless_milestone_every = 10  # past wave 20, +150 * difficulty.currency every 1
 match_complete_bonus = 200    # * difficulty.currency
 boss_kill_bonus = 50
 per_round_cap_mult = 1.25     # reject claims above 1.25x formula
+
+[validation]                  # backend checks on each host round report
+credit_timing = "per_round"   # credited at each round end; repeat reports for the same round are ignored
+min_round_seconds = 25        # a round reported faster than this is rejected (20s breather excluded)
+max_rounds_per_hour = 60
+max_reported_wave_jump = 1    # rounds must arrive in order, one wave at a time

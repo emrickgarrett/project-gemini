@@ -1,0 +1,49 @@
+# Persistent weapon parts from crates. Sidegrades + small boosts; total power from parts capped.
+# Each hero weapon has 3 slots. Part rarity scales the value: common 1.0x, rare 1.5x, epic 2.0x, legendary 2.5x + unique perk.
+slots = ["barrel", "core", "mod"]
+max_total_power_from_parts = 0.15    # summed dmg-equivalent boost across all slots, hard cap
+dupes = "convert_to_part_shards"     # 5 shards = reroll one part's secondary
+
+[[part]]
+slot = "barrel"
+id = "long_barrel"
+effect = { range_pct = 0.08, spread_pct = -0.10, rps_pct = -0.03 }
+[[part]]
+slot = "barrel"
+id = "short_barrel"
+effect = { rps_pct = 0.05, spread_pct = 0.10 }
+[[part]]
+slot = "barrel"
+id = "heavy_barrel"
+effect = { dmg_pct = 0.05, rps_pct = -0.04, knockback_pct = 0.20 }
+
+[[part]]
+slot = "core"
+id = "overclocked_core"
+effect = { dmg_pct = 0.04, reload_pct = 0.06 }   # slower reload
+[[part]]
+slot = "core"
+id = "efficient_core"
+effect = { mag_pct = 0.15 }
+[[part]]
+slot = "core"
+id = "weakpoint_core"
+effect = { weakpoint_dmg_pct = 0.08, dmg_pct = -0.02 }
+
+[[part]]
+slot = "mod"
+id = "quickload"
+effect = { reload_pct = -0.10 }
+[[part]]
+slot = "mod"
+id = "stabilizer"
+effect = { spread_pct = -0.12, move_speed_while_firing_pct = -0.05 }
+[[part]]
+slot = "mod"
+id = "ability_link"
+effect = { ability_cooldown_pct = -0.05 }
+
+[legendary_perks]   # one rolled on a legendary part, never stacks with itself
+volatile_rounds = "kills have 10% chance to explode for 40 dmg in 3m"
+hunters_mark = "first hit on a bug marks it: +10% damage from you for 4s"
+second_wind = "reloading on an empty mag gives +15% move speed for 2s"

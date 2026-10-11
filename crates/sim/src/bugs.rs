@@ -127,8 +127,27 @@ pub struct VisualPart {
     /// Shared segment count cap. Zero means the chain is not authored.
     #[serde(default)]
     pub segment_cap: u32,
+    /// Tail sway: `sin(time * sway_rate + index * sway_spread) * sway_amp` added to pitch.
+    #[serde(default)]
+    pub sway_rate: f32,
+    #[serde(default)]
+    pub sway_spread: f32,
+    #[serde(default)]
+    pub sway_amp: f32,
+    /// Crack patch, as fractions of the host extents. Empty when this part is not a scar.
+    #[serde(default)]
+    pub patch: Vec<f32>,
+    #[serde(default)]
+    pub patch_floor: f32,
     #[serde(default)]
     pub at: Option<String>,
+    /// Pod ring. Missing on every part that is not a pod; bake fails when a pod omits them.
+    #[serde(default)]
+    pub sink: Option<f32>,
+    #[serde(default)]
+    pub ring_turn: Option<f32>,
+    #[serde(default)]
+    pub ny_floor: Option<f32>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -227,6 +246,7 @@ fn bind_row(bug: &str, row: &mut BugRow) -> Result<(), String> {
     bind_slot(bug, "core", visual, &mut hitbox.core)?;
     bind_slot(bug, "cannon", visual, &mut hitbox.cannon)?;
     bind_slot(bug, "tail", visual, &mut hitbox.tail)?;
+    bake_pods(bug, visual, hitbox)?;
     Ok(())
 }
 
@@ -234,6 +254,9 @@ fn bind_slot(bug: &str, slot: &str, visual: &BugVisual, shape: &mut Option<Shape
     let Some(shape) = shape.as_mut() else {
         return Ok(());
     };
+    if shape.offset != [0.0, 0.0, 0.0] {
+        return Err(format!("{bug} {slot} weak point must not author an offset"));
+    }
     let offset = resolved_offset(visual, shape).map_err(|err| format!("{bug} {slot} {err}"))?;
     if shape.anchor.is_empty() {
         shape.anchor.clone_from(&shape.name);
@@ -377,10 +400,50 @@ pub fn visual_anchor(visual: &BugVisual, name: &str) -> Option<[f32; 3]> {
     }
     if let Some(host_name) = part.on.as_deref() {
         let host = part_named(visual, host_name)?;
-        let height = size_extents(&host.size)[1];
+        let height = size_extents(&host.size)?[1];
         return Some([host.offset[0], host.offset[1] + height * 0.5, host.offset[2]]);
     }
     None
+}
+
+/// Pod centers follow the visual pod ring on its host. The gameplay table
+/// authors a radius only; an offset list is rejected.
+fn bake_pods(bug: &str, visual: &BugVisual, hitbox: &mut BugHitbox) -> Result<(), String> {
+    if hitbox.pod.is_none() {
+        return Ok(());
+    }
+    if !hitbox.pods.is_empty() {
+        return Err(format!("{bug} pod hitboxes must not author offsets"));
+    }
+    let pod = part_named(visual, "pod").ok_or_else(|| format!("{bug} pod hitbox has no visual pod part"))?;
+    let host_name = pod.on.as_deref().ok_or_else(|| format!("{bug} visual pod has no host"))?;
+    let host = part_named(visual, host_name).ok_or_else(|| format!("{bug} visual pod host \"{host_name}\" is missing"))?;
+    if pod.count == 0 {
+        return Err(format!("{bug} visual pod count is missing"));
+    }
+    if pod.ring_radius <= 0.0 {
+        return Err(format!("{bug} visual pod ring_radius is missing"));
+    }
+    let ext = size_extents(&host.size).ok_or_else(|| format!("{bug} visual pod host is missing size"))?;
+    let sink = pod.sink.ok_or_else(|| format!("{bug} visual pod is missing sink"))?;
+    let turn = pod.ring_turn.ok_or_else(|| format!("{bug} visual pod is missing ring_turn"))?;
+    let floor = pod.ny_floor.ok_or_else(|| format!("{bug} visual pod is missing ny_floor"))?;
+    let radii = [ext[0] * 0.5, ext[1] * 0.5, ext[2] * 0.5];
+    let count = pod.count;
+    for i in 0..count {
+        let a = i as f32 / count as f32 * std::f32::consts::TAU + turn;
+        let nx = a.cos() * pod.ring_radius;
+        let nz = a.sin() * pod.ring_radius;
+        let ny = (1.0 - nx * nx - nz * nz).max(floor).sqrt();
+        hitbox.pods.push(PodPlacement {
+            offset: [
+                host.offset[0] + nx * radii[0] * sink,
+                host.offset[1] + ny * radii[1] * sink,
+                host.offset[2] + nz * radii[2] * sink,
+            ],
+        });
+    }
+    Ok(())
 }
 
 /// Hit center of a weak point. A missing or unknown anchor name is an error.
@@ -398,11 +461,14 @@ pub fn glow_bounds(visual: &BugVisual, name: &str) -> Option<PartBounds> {
     let half = if part.size.is_empty() {
         let host_name = part.on.as_deref().unwrap_or("");
         let host = part_named(visual, host_name)?;
-        let ext = size_extents(&host.size);
-        // Scars sit on the host's crown. The slab is the glowing patch, not the whole shell.
-        [ext[0] * 0.28, (ext[1] * 0.1).max(0.05), ext[2] * 0.22]
+        let ext = size_extents(&host.size)?;
+        let patch = part.patch.as_slice();
+        if patch.len() < 3 {
+            return None;
+        }
+        [ext[0] * patch[0], (ext[1] * patch[1]).max(part.patch_floor), ext[2] * patch[2]]
     } else {
-        let ext = size_extents(&part.size);
+        let ext = size_extents(&part.size)?;
         [ext[0] * 0.5, ext[1] * 0.5, ext[2] * 0.5]
     };
     Some(bounds_at(center, half))
@@ -426,19 +492,29 @@ fn bounds_at(center: [f32; 3], half: [f32; 3]) -> PartBounds {
 }
 
 /// Full extents. Two-number sizes are radius and length, matching the visual table.
-fn size_extents(size: &[f32]) -> [f32; 3] {
+fn size_extents(size: &[f32]) -> Option<[f32; 3]> {
     match size {
-        [x, y, z, ..] => [*x, *y, *z],
-        [r, h] => [*r * 2.0, *h, *r * 2.0],
-        [r] => [*r, *r, *r],
-        _ => [0.2, 0.2, 0.2],
+        [x, y, z, ..] => Some([*x, *y, *z]),
+        [r, h] => Some([*r * 2.0, *h, *r * 2.0]),
+        [r] => Some([*r, *r, *r]),
+        _ => None,
     }
 }
 
 /// Cannon center for `at = "tail_end"`. Pitch, joint, segment length, gap, and
 /// the segment cap are the tail part's fields. A chain with no cap, scale, or
 /// joint is not an anchor.
+/// Cannon center at `time`, including the tail's sway. Time 0 is the rest pose baked at load.
+pub fn cannon_center(visual: &BugVisual, time: f32) -> Option<[f32; 3]> {
+    let cannon = part_named(visual, "cannon")?;
+    tail_end_at(visual, cannon, time)
+}
+
 fn tail_end(visual: &BugVisual, cannon: &VisualPart) -> Option<[f32; 3]> {
+    tail_end_at(visual, cannon, 0.0)
+}
+
+fn tail_end_at(visual: &BugVisual, cannon: &VisualPart, time: f32) -> Option<[f32; 3]> {
     let tail = part_named(visual, "tail")?;
     if tail.segment_cap == 0 || tail.segment_scale <= 0.0 || tail.joint_span <= 0.0 {
         return None;
@@ -455,11 +531,12 @@ fn tail_end(visual: &BugVisual, cannon: &VisualPart) -> Option<[f32; 3]> {
         } else {
             [0.0, -len * tail.joint_span, 0.0]
         };
-        let pitch = if i == 0 { tail.base_pitch } else { step * tail.curl_share };
+        let sway = (time * tail.sway_rate + i as f32 * tail.sway_spread).sin() * tail.sway_amp;
+        let pitch = (if i == 0 { tail.base_pitch } else { step * tail.curl_share }) + sway;
         pos = add3(pos, rotate_q(rot, local_pos));
         rot = quat_mul(rot, quat_x(pitch));
     }
-    let gem_r = cannon.size.first().copied().unwrap_or(0.7) * 0.5;
+    let gem_r = cannon.size.first().copied().filter(|r| *r > 0.0)? * 0.5;
     let along = [0.0, -(len * tail.segment_scale + gem_r + tail.tip_gap), 0.0];
     Some(add3(pos, rotate_q(rot, along)))
 }

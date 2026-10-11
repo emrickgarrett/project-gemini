@@ -16,9 +16,32 @@ jobs:
       - name: native client libraries
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libvulkan-dev libasound2-dev libudev-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev
+          sudo apt-get install -y pkg-config libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libvulkan-dev libasound2-dev libudev-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev ffmpeg
       - name: tests
         run: cargo test --workspace
+      - name: bugshots match committed stills
+        run: |
+          cargo run -p gemini-meshes --bin bugshots -- --out /tmp/bugshots-ci
+          python3 - << 'PY'
+          import subprocess, sys
+          from pathlib import Path
+          fresh = Path("/tmp/bugshots-ci")
+          committed = Path("art/bugs")
+          names = sorted(p.name for p in committed.glob("*.png"))
+          got = sorted(p.name for p in fresh.glob("*.png"))
+          if names != got:
+              sys.exit(f"bugshot set mismatch\ncommitted {names}\nfresh {got}")
+          def raw(path):
+              return subprocess.check_output(
+                  ["ffmpeg", "-v", "error", "-i", str(path), "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+              )
+          for name in names:
+              a = raw(committed / name)
+              b = raw(fresh / name)
+              if a != b:
+                  sys.exit(f"{name} does not match a fresh bugshots render ({len(a)} vs {len(b)} bytes)")
+          print(f"{len(names)} bugshots match")
+          PY
       - name: wasm webgl2
         run: cargo build -p gemini-client --target wasm32-unknown-unknown --profile wasm-release
       - name: wasm webgpu

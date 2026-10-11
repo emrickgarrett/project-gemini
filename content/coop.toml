@@ -1,0 +1,29 @@
+# Co-op rules (M2). Player-hosted; backend validates currency.
+[lobby]
+max_players = 8
+min_players = 1
+
+[join_in_progress]
+allowed_during = "breather_only"     # joiners spawn at the next breather, never mid-wave
+upgrade_catchup = "match_lowest"     # joiner gets as many run-upgrade picks as the squad's lowest player
+catchup_pick_mode = "choose_from_3"  # each catch-up pick is a normal 1-of-3 offer
+budget_rescale = "next_wave"         # waves.toml per_extra_player applies from the next wave start
+
+[reconnect]
+slot_hold_seconds = 90               # keep slot, hero and run upgrades
+downed_on_return = false             # returns at full hp at the squad's location
+
+[revive]
+# revive_time from controller.toml, scaled by number of revivers
+multi_reviver_speedup = 0.35         # each extra reviver adds +35% speed, max 2 extra
+bleedout_pause_while_reviving = true
+squad_wipe = "all_downed"            # match ends when everyone is down at once
+
+[currency_share]
+# backend formula per player; no splitting between players
+credit = "per_round_present"         # you earn a round's currency only for rounds you were in at its start
+leave_keeps_earned = true            # already-credited rounds are kept
+host_leave = "match_ends_rounds_kept"
+
+[friendly_fire]
+enabled = false

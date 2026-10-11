@@ -7,8 +7,8 @@ mod preview;
 mod visual;
 
 pub use pose::{pose, AnimInput, Pose, Xform};
-pub use preview::{missing_glow_keys, painted_pixels, raster, raster_bug, still};
-pub use visual::{bug, catalog, flat_shaded, EnemyVisual, Gate, Joint, Part};
+pub use preview::{missing_glow_keys, painted_pixels, raster, raster_bug, raster_crown, still, still_open};
+pub use visual::{bug, catalog, flat_shaded, EnemyVisual, Gate, Joint, Part, ShotCamera};
 
 #[derive(Clone, Debug)]
 pub struct MeshData {
@@ -178,7 +178,7 @@ mod tests {
     fn anchors_follow_the_visual_table() {
         let sp = bug("spitter");
         let sac = sp.parts.iter().find(|p| p.name == "sac").expect("sac");
-        assert!(near(sac.rest_pos, [0.0, 1.05, -0.25], 0.02), "{:?}", sac.rest_pos);
+        assert!(near(sac.rest_pos, [0.0, 1.02, -0.02], 0.02), "{:?}", sac.rest_pos);
         assert!(sac.emissive);
         let gland = bug("brood_mother").parts.iter().find(|p| p.name == "gland").expect("gland");
         assert!(near(gland.rest_pos, [0.0, 0.9, 2.0], 0.02));

@@ -1,0 +1,11 @@
+# Cosmetic-only. No stats. Rarity sets crate weight (banners.toml) only.
+categories = ["hero_skin", "weapon_skin", "glove", "jetpack_trail", "emote", "name_card", "kill_effect"]
+seen_in = { hero_skin = "lobby, reveal, teammates, emotes", weapon_skin = "first person", glove = "first person", jetpack_trail = "everyone, in match", emote = "third-person camera", name_card = "lobby, scoreboard", kill_effect = "first person" }
+palette_rule = "never use bug acid green #7CFF3A or magenta #FF2BD6 as a dominant color"
+dupes = "convert_to_cosmetic_shards"
+shard_shop = true                   # spend shards on a chosen cosmetic, so dupes always progress
+[shard_cost]
+common = 20
+rare = 60
+epic = 200
+legendary = 600

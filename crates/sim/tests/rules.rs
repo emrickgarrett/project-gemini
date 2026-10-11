@@ -346,6 +346,22 @@ fn spitter_at(z: f32) -> gemini_sim::sim::Enemy {
         open_left: 0.0,
         just_opened: false,
         pods: Vec::new(),
+        anim_time: 0.0,
+        cycle_left: 0.0,
+        warn_left: 0.0,
+        warn_sfx: false,
+        warn_pod: 255,
+        reserved: 0,
+        enraged: false,
+        invuln: 0.0,
+        tail_hp: 0.0,
+        tail_broken: false,
+        acid_cd: 0.0,
+        acid_warn: 0.0,
+        scythe_cd: 0.0,
+        reinforce_cd: 0.0,
+        reinforce_warn: 0.0,
+        cue: gemini_sim::sim::EnemyCue::None,
     }
 }
 
@@ -376,6 +392,22 @@ fn hurt(sim: &mut Sim, content: &Content) {
         open_left: 0.0,
         just_opened: false,
         pods: Vec::new(),
+        anim_time: 0.0,
+        cycle_left: 0.0,
+        warn_left: 0.0,
+        warn_sfx: false,
+        warn_pod: 255,
+        reserved: 0,
+        enraged: false,
+        invuln: 0.0,
+        tail_hp: 0.0,
+        tail_broken: false,
+        acid_cd: 0.0,
+        acid_warn: 0.0,
+        scythe_cd: 0.0,
+        reinforce_cd: 0.0,
+        reinforce_warn: 0.0,
+        cue: gemini_sim::sim::EnemyCue::None,
     });
     sim.step(content, PlayerInput::default());
 }
@@ -452,6 +484,22 @@ fn bug(kind: gemini_sim::content::EnemyKind) -> gemini_sim::sim::Enemy {
         open_left: 0.0,
         just_opened: false,
         pods: Vec::new(),
+        anim_time: 0.0,
+        cycle_left: 0.0,
+        warn_left: 0.0,
+        warn_sfx: false,
+        warn_pod: 255,
+        reserved: 0,
+        enraged: false,
+        invuln: 0.0,
+        tail_hp: 0.0,
+        tail_broken: false,
+        acid_cd: 0.0,
+        acid_warn: 0.0,
+        scythe_cd: 0.0,
+        reinforce_cd: 0.0,
+        reinforce_warn: 0.0,
+        cue: gemini_sim::sim::EnemyCue::None,
     }
 }
 
@@ -501,7 +549,7 @@ fn spitter_sac_pop_cancels_charge_same_tick() {
     let mut spit = bug(EnemyKind::Spitter);
     spit.id = 11;
     spit.ai = AiState::Telegraph { left: 0.8 };
-    spit.vel.y = 1.0;
+    spit.cue = gemini_sim::sim::EnemyCue::Charge;
     spit.weak_mult = content.bug(EnemyKind::Spitter).hitbox.weak().unwrap().mult;
     let book = content.bug(EnemyKind::Spitter);
     let sac = book.hitbox.weak().unwrap().offset;
@@ -520,6 +568,45 @@ fn spitter_sac_pop_cancels_charge_same_tick() {
     assert!(sim.sounds.iter().any(|s| s.id == *pop && s.owner == 11));
     assert!(sim.stops.iter().any(|s| s.id == *charge && s.owner == 11));
     assert!(sim.pings.iter().any(|p| p.weak));
+}
+
+#[test]
+fn hatch_fan_and_spawn_radius_come_from_bosses() {
+    let content = Content::embedded();
+    for id in ["brood_mother", "hive_tyrant"] {
+        let boss = content.boss(id).unwrap();
+        assert!((boss.fan_step - 1.7).abs() < 1e-4, "{id} fan {}", boss.fan_step);
+        assert!((boss.spawn_radius - 2.2).abs() < 1e-4, "{id} radius {}", boss.spawn_radius);
+    }
+    let base = gemini_sim::content::embedded_sources();
+    let bosses = include_str!("../../../content/bosses.toml")
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("hatch_fan_step"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let err = Content::parse(&gemini_sim::content::Sources {
+        waves: base.waves,
+        difficulty: base.difficulty,
+        controller: base.controller,
+        run_upgrades: base.run_upgrades,
+        endless: base.endless,
+        currency: base.currency,
+        banners: base.banners,
+        duplicate_ranks: base.duplicate_ranks,
+        bosses: &bosses,
+        weapons: base.weapons,
+        hero: base.hero,
+        arena: base.arena,
+        presentation: base.presentation,
+        combat: base.combat,
+        palette: base.palette,
+        music: base.music,
+        audio: base.audio,
+        bugs: base.bugs,
+        crate_reveal: base.crate_reveal,
+    })
+    .expect_err("missing hatch_fan_step");
+    assert!(err.contains("hatch_fan_step"), "{err}");
 }
 
 #[test]
@@ -603,7 +690,7 @@ fn weakpoint_hitboxes_overlap_their_glowing_parts() {
     let content = Content::embedded();
     let brood = &content.bug(EnemyKind::BroodMother).visual;
     assert_eq!(brood.bud_color, "brood_sac");
-    assert_eq!(brood.grown_color, "swarmer_glow");
+    assert_eq!(brood.grown_color, "bud_glow");
 
     let mut saw = 0;
     for (bug, row) in content.bugs.rows() {
@@ -657,15 +744,102 @@ fn missing_weakpoint_anchor_fails_content_load() {
             music: base.music,
             audio: base.audio,
             bugs,
+            crate_reveal: base.crate_reveal,
         })
     };
 
-    let misspelled = bugs.replacen("name = \"abdomen\"", "name = \"abdomenn\"", 1);
+    let misspelled = bugs.replacen("anchor = \"abdomen\"", "anchor = \"abdomenn\"", 1);
     let err = load(&misspelled).expect_err("a misspelled anchor must fail load");
     assert!(err.contains("abdomenn"), "{err}");
     assert!(err.contains("does not resolve"), "{err}");
 
-    let missing = bugs.replacen("name = \"abdomen\"", "name = \"\"", 1);
+    let missing = bugs.replacen("anchor = \"abdomen\"", "anchor = \"\"", 1);
+    let missing = missing.replacen("name = \"abdomen\"", "name = \"\"", 1);
     let err = load(&missing).expect_err("a weak point with no name must fail load");
     assert!(err.contains("no anchor name"), "{err}");
+
+    let authored = bugs.replacen(
+        "anchor = \"abdomen\", shape = \"sphere\", radius = 0.15",
+        "anchor = \"abdomen\", shape = \"sphere\", radius = 0.15, offset = [0, 0.35, -0.25]",
+        1,
+    );
+    let err = load(&authored).expect_err("an authored weak-point offset must fail load");
+    assert!(err.contains("must not author an offset"), "{err}");
+}
+
+#[test]
+fn crate_reveal_reads_tease_and_fakeout() {
+    let reveal = &Content::embedded().crate_reveal;
+    assert!(reveal.fakeout_enabled);
+    for (id, tease) in [
+        ("common", "sfx/crate_tease.ogg"),
+        ("rare", "sfx/crate_tease.ogg"),
+        ("epic", "sfx/crate_tease.ogg"),
+        ("legendary", "sfx/crate_tease_legendary.ogg"),
+    ] {
+        assert_eq!(reveal.tease(id), Some(tease), "{id}");
+        let tier = reveal.tier(id).unwrap();
+        assert_eq!(tier.fakeout_window, [2.6, 3.0], "{id}");
+    }
+    assert!((reveal.tier("rare").unwrap().fakeout_chance - 0.15).abs() < 1e-4);
+    assert!((reveal.tier("epic").unwrap().fakeout_chance - 0.2).abs() < 1e-4);
+    assert_eq!(reveal.tier("common").unwrap().fakeout_chance, 0.0);
+    assert!(reveal.fakeout_open("rare", 2.8));
+    assert!(reveal.fakeout_open("epic", 2.7));
+    assert!(!reveal.fakeout_open("common", 2.8));
+    assert!(!reveal.fakeout_open("legendary", 2.8));
+}
+
+#[test]
+fn every_emitted_sound_resolves_to_a_mix_file() {
+    let content = Content::embedded();
+    let mut ids = vec![
+        "wave".to_string(),
+        "shot".into(),
+        "ability".into(),
+        "hit".into(),
+        "hurt".into(),
+        "downed".into(),
+        "pickup".into(),
+        "reload".into(),
+        "jump".into(),
+        "dash".into(),
+        "swarmer_crowd".into(),
+        content.bugs.feedback.weakpoint_hit.clone(),
+    ];
+    for (_, row) in content.bugs.rows() {
+        for id in [
+            &row.audio.footstep,
+            &row.audio.attack,
+            &row.audio.charge,
+            &row.audio.fire,
+            &row.audio.sac_pop,
+            &row.audio.shell_open,
+        ] {
+            if !id.is_empty() {
+                ids.push(id.clone());
+            }
+        }
+    }
+    for boss in &content.bosses {
+        for id in [
+            &boss.intro_sfx,
+            &boss.death_sfx,
+            &boss.fizzle_sfx,
+            &boss.charge_sfx,
+            &boss.hatch_sfx,
+            &boss.acid_sfx,
+            &boss.scythe_sfx,
+        ] {
+            if !id.is_empty() {
+                ids.push(id.clone());
+            }
+        }
+    }
+    let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+    for id in ids {
+        let sfx = content.sfx(&id).unwrap_or_else(|| panic!("{id} does not resolve in audio_mix.toml"));
+        let path = root.join(&sfx.path);
+        assert!(path.is_file(), "{id} resolved to {} but that file is missing", path.display());
+    }
 }

@@ -1,0 +1,13 @@
+source_take (boss_loop): brood_take2.mp3
+bpm: 137.67
+beats_per_bar: 4
+loop_bars: 16
+sample_rate: 48000
+boss_loop_start_s: 27.9567
+boss_loop_sample_length: 1338815
+boss_enrage_source: enrage_take2.mp3
+boss_enrage_source_bpm: 138.59
+boss_enrage_stretch_ratio: 1.006653 (rubberband via ffmpeg, pitch and formants preserved, crisp/percussive transients; ~0 cents)
+boss_enrage_start_s: 86.4340
+boss_enrage_sample_length: 1338815
+key_estimate: E minor/major (boss_loop E minor; enrage take E major, runner-up E minor)
