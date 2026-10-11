@@ -482,6 +482,83 @@ mod tests {
     }
 
     #[test]
+    fn open_brute_pods_and_tyrant_spikes() {
+        let brute = bug("brute");
+        let plates = brute.parts.iter().position(|p| p.name == "shell_plates").unwrap();
+        let cracks = brute.parts.iter().position(|p| p.name == "cracks").unwrap();
+        let shut = pose(
+            brute,
+            AnimInput {
+                time: 0.2,
+                moving: false,
+                charging: false,
+                vulnerable: false,
+                phase: 0,
+                frenzy: false,
+                preview_glow: false,
+                regrow: 0,
+            },
+            &[],
+        );
+        let open = pose(
+            brute,
+            AnimInput {
+                time: 0.2,
+                moving: false,
+                charging: false,
+                vulnerable: true,
+                phase: 0,
+                frenzy: false,
+                preview_glow: false,
+                regrow: 0,
+            },
+            &[],
+        );
+        assert!((shut.xforms[plates].scale[0] - 1.0).abs() < 1e-4);
+        assert!(!shut.xforms[cracks].visible);
+        assert!(open.xforms[plates].scale[0] > 1.4);
+        assert!(open.xforms[cracks].scale[0] > 1.4);
+        assert!(open.xforms[cracks].visible);
+        assert!(open.xforms[cracks].glow > 3.0);
+
+        let brood = bug("brood_mother");
+        assert_eq!(brood.parts.iter().filter(|p| p.name.starts_with("pod")).count(), 6);
+        let pod = brood.parts.iter().find(|p| p.name == "pod0").unwrap();
+        let rad = pod
+            .mesh
+            .positions
+            .iter()
+            .map(|p| p[0].abs().max(p[1].abs()).max(p[2].abs()))
+            .fold(0.0_f32, f32::max);
+        assert!(rad > 0.6, "pod radius {rad}");
+        let posed = pose(
+            brood,
+            AnimInput {
+                time: 0.2,
+                moving: false,
+                charging: false,
+                vulnerable: false,
+                phase: 0,
+                frenzy: false,
+                preview_glow: false,
+                regrow: 0,
+            },
+            &[],
+        );
+        let p0 = brood.parts.iter().position(|p| p.name == "pod0").unwrap();
+        assert!(posed.xforms[p0].glow > 2.0);
+
+        let vein = bug("hive_tyrant").parts.iter().find(|p| p.name == "vein0").unwrap();
+        let thick = vein
+            .mesh
+            .positions
+            .iter()
+            .map(|p| (p[0] * p[0] + p[2] * p[2]).sqrt())
+            .fold(0.0_f32, f32::max);
+        assert!(thick < 0.06, "leg spike thickness {thick}");
+    }
+
+    #[test]
     fn catalog_is_shared() {
         let a = bug("swarmer") as *const EnemyVisual;
         let b = bug("swarmer") as *const EnemyVisual;

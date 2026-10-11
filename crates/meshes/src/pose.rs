@@ -95,6 +95,8 @@ pub fn pose(visual: &EnemyVisual, anim: AnimInput, prev_lift: &[f32]) -> Pose {
                 if part.emissive {
                     glow = if anim.charging && visual.sac_charge_glow > 0.0 {
                         visual.sac_charge_glow
+                    } else if part.name.starts_with("pod") {
+                        3.0
                     } else if visual.glow_pulse > 0.0 {
                         1.0 + 0.15 * (anim.time * visual.glow_pulse).sin()
                     } else {
@@ -112,7 +114,14 @@ pub fn pose(visual: &EnemyVisual, anim: AnimInput, prev_lift: &[f32]) -> Pose {
                 euler[0] += (anim.time * part.sway_rate + index as f32 * part.sway_spread).sin() * part.sway_amp;
             }
             Joint::Static => {
-                if part.emissive && visual.glow_pulse > 0.0 {
+                // Open shell: plates and the fissures spread off the carapace. The
+                // crack glow crosses the hot-material threshold in the client.
+                if anim.vulnerable && (part.name == "shell_plates" || part.name == "cracks") {
+                    scale = [1.55, 1.55, 1.55];
+                }
+                if part.name == "cracks" && anim.vulnerable {
+                    glow = 4.0;
+                } else if part.emissive && visual.glow_pulse > 0.0 {
                     glow = 1.0 + 0.12 * (anim.time * visual.glow_pulse).sin();
                 }
             }

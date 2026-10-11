@@ -437,6 +437,34 @@ fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cat
             grown_scale: 0.0,
             grown_glow: 0.0,
         });
+        if spec.part == "shell" {
+            let rear = req(id, &spec.name, "rear_open", spec.rear_open)?;
+            if dens.plates > 0 {
+                parts.push(Part {
+                    name: "shell_plates".into(),
+                    parent: Some(idx),
+                    rest_pos: [0.0, 0.0, 0.0],
+                    rest_euler: [0.0, 0.0, 0.0],
+                    mesh: Arc::new(dorsal_plates(&size, dens, rear)),
+                    palette: palette.clone(),
+                    emissive: false,
+                    joint: Joint::Static,
+                    mesh_key: format!("{id}:shell_plates"),
+                    gate: Gate::Always,
+                    foot: None,
+                    grows: false,
+                    grow_slot: None,
+                    pod_slot: None,
+                    sway_rate: 0.0,
+                    sway_spread: 0.0,
+                    sway_amp: 0.0,
+                    swing_hz: 0.0,
+                    swing_amp: 0.0,
+                    grown_scale: 0.0,
+                    grown_glow: 0.0,
+                });
+            }
+        }
         if let Some(limb) = limb.as_ref() {
             let len = size[1];
             let rad = size[0] * limb.rad;
@@ -964,7 +992,8 @@ fn add_veins(parts: &mut Vec<Part>, id: &str, spec: &VPart) -> Result<(), String
     if legs.is_empty() {
         return Err(format!("{id} {} has no legs to attach to", spec.name));
     }
-    let mesh = Arc::new(segment_mesh(1.05, 0.11, 0.04, 4));
+    // Thin enough that the head and chest sac stay readable past the legs.
+    let mesh = Arc::new(segment_mesh(0.55, 0.04, 0.012, 4));
     for (n, idx) in legs.iter().enumerate() {
         let parent_r = parts[*idx]
             .mesh
@@ -1016,8 +1045,7 @@ fn sac_anchor_from(id: &str, parts: &[Part]) -> Result<([f32; 3], [f32; 3]), Str
     Ok((sac.rest_pos, [max[0] * 0.92, max[1] * 0.92, max[2] * 0.92]))
 }
 
-/// Round shell plus dorsal plates. Each plate is shorter than its slot and lifted
-/// off the surface, so neighboring plates never share a face.
+/// Round shell. Dorsal plates are a sibling mesh so the open pose can spread them.
 fn dome_shell(size: &[f32; 3], dens: &Dens, rear_open: bool) -> MeshData {
     let mut mesh = MeshData::new();
     let radii = shell_radii(size, rear_open);
@@ -1027,9 +1055,16 @@ fn dome_shell(size: &[f32; 3], dens: &Dens, rear_open: bool) -> MeshData {
     } else {
         geom::gem(&mut mesh, [0.0, 0.0, 0.0], radii, dens.slices, dens.stacks, WHITE);
     }
+    mesh
+}
+
+/// Plates sit shorter than their slot and lifted off the shell, so neighbors never share a face.
+fn dorsal_plates(size: &[f32; 3], dens: &Dens, rear_open: bool) -> MeshData {
+    let mut mesh = MeshData::new();
     if dens.plates == 0 {
         return mesh;
     }
+    let radii = shell_radii(size, rear_open);
     let gap = plate_gap(radii[1]);
     let arch = plate_arch(radii[1]);
     for (n, (z, y, spacing)) in dorsal_bands(&radii, dens.plates, rear_open).into_iter().enumerate() {
@@ -1361,14 +1396,14 @@ fn jagged_crack(mesh: &mut MeshData, radii: &[f32; 3], side: f32, seam_z: f32, n
     for i in 0..=steps {
         let t = i as f32 / steps as f32;
         let zig = if i % 2 == 0 { -1.0 } else { 1.0 };
-        let z = seam_z + zig * radii[2] * 0.04;
+        let z = seam_z + zig * radii[2] * 0.08;
         let x = side * radii[0] * (0.2 + t * 0.7);
         let y = shell_surface_y(radii, x, z);
         let out = normalize([x, y.max(0.02), z]);
-        let lift = plate_gap(radii[1]) + plate_arch(radii[1]) + 0.05;
+        let lift = plate_gap(radii[1]) + plate_arch(radii[1]) + 0.14;
         pts.push([x + out[0] * lift, y + out[1] * lift + 0.03, z + out[2] * lift]);
     }
-    let half = (radii[0] * 0.05).max(0.035);
+    let half = (radii[0] * 0.16).max(0.09);
     for w in pts.windows(2) {
         ribbon(mesh, w[0], w[1], half);
     }
