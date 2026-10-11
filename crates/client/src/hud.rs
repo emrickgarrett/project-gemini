@@ -389,6 +389,25 @@ pub fn draw(
         }
     }
 
+    if game.sim.host_away && !matches!(game.sim.phase, Phase::Victory | Phase::Defeat) {
+        commands.spawn((
+            Text::new("HOST AWAY"),
+            TextFont::from_font_size(28.0),
+            TextColor(white),
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(28.0),
+                left: Val::Percent(50.0),
+                margin: UiRect::new(Val::Px(-70.0), Val::Auto, Val::Auto, Val::Auto),
+                padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.05, 0.05, 0.08, 0.9)),
+            ChildOf(root),
+            HudNode,
+        ));
+    }
+
     let end = match game.sim.phase {
         Phase::Victory => Some("VICTORY\nENTER"),
         Phase::Defeat => Some("DEFEAT\nENTER"),

@@ -1569,6 +1569,7 @@ fn coop_table_rejects_missing_keys() {
     assert_eq!(content.coop.squad_wipe, "all_downed");
     assert_eq!(content.coop.currency_credit, "per_round_present");
     assert_eq!(content.coop.host_leave, "match_ends_rounds_kept");
+    assert!((content.coop.host_away_seconds - 60.0).abs() < 1e-3);
     assert!(!content.coop.friendly_fire);
     assert!(!content.coop.downed_on_return);
     assert!(content.coop.bleedout_pause_while_reviving);
@@ -1591,6 +1592,18 @@ fn coop_table_rejects_missing_keys() {
         .join("\n");
     let err = Content::parse(&sources_with(&base, &stripped_extra)).expect_err("missing max_extra_revivers");
     assert!(err.contains("max_extra_revivers"), "{err}");
+
+    let stripped_away = base
+        .coop
+        .lines()
+        .filter(|line| !line.contains("away_seconds"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let err = Content::parse(&sources_with(&base, &stripped_away)).expect_err("missing away_seconds");
+    assert!(err.contains("away_seconds"), "{err}");
+    let zero_away = base.coop.replace("away_seconds = 60", "away_seconds = 0");
+    let err = Content::parse(&sources_with(&base, &zero_away)).expect_err("zero away_seconds");
+    assert!(err.contains("away_seconds"), "{err}");
 
     let unknown = format!("{}\n[extra]\nnope = 1\n", base.coop);
     let err = Content::parse(&sources_with(&base, &unknown)).expect_err("unknown table");
@@ -1715,6 +1728,60 @@ fn reconnect_holds_the_slot_then_expires() {
     assert_eq!(sim.credits.get(&token), Some(&vec![1]));
     assert!(sim.players.iter().any(|player| player.is_host && player.connected));
     assert!(matches!(sim.phase, Phase::Breather { .. }));
+}
+
+#[test]
+fn host_away_freezes_enemies_and_timers_then_ends_like_a_host_leave() {
+    let content = Content::embedded();
+    let mut sim = Sim::new(&content, "normal", 8);
+    quiet_breather(&mut sim);
+    sim.phase = Phase::Combat;
+    sim.director.parked = true;
+    sim.director.pool = 0.0;
+    let token = sim.players[0].token;
+    let credited = sim.credits.get(&token).cloned().unwrap();
+    sim.players[0].ability_cd = 8.0;
+    let mut enemy = bug(gemini_sim::content::EnemyKind::Swarmer);
+    enemy.pos = Vec3::new(2.0, 0.0, 4.0);
+    enemy.vel = Vec3::new(4.0, 0.0, 0.0);
+    enemy.warn_left = 1.4;
+    sim.enemies.push(enemy);
+    sim.step(&content, PlayerInput::default());
+    let time = sim.time;
+    let tick = sim.tick;
+    let pos = sim.enemies[0].pos;
+    let warn = sim.enemies[0].warn_left;
+    let cd = sim.players[0].ability_cd;
+    assert!(time > 0.0);
+
+    sim.set_host_away(&content, true);
+    for _ in 0..40 {
+        sim.step(&content, PlayerInput::default());
+    }
+    assert!((sim.time - time).abs() < 1e-6, "sim clock {}", sim.time);
+    assert_eq!(sim.tick, tick);
+    assert_eq!(sim.enemies[0].pos, pos);
+    assert!((sim.enemies[0].warn_left - warn).abs() < 1e-6);
+    assert!((sim.players[0].ability_cd - cd).abs() < 1e-6);
+    assert!(matches!(sim.phase, Phase::Combat));
+
+    sim.tick_host_away(&content, content.coop.host_away_seconds - 0.5);
+    assert!(matches!(sim.phase, Phase::Combat), "still paused inside the away window");
+    assert!((sim.time - time).abs() < 1e-6);
+    sim.tick_host_away(&content, 0.5);
+    assert!(matches!(sim.phase, Phase::Defeat));
+    assert!(!sim.players[0].connected);
+    assert_eq!(sim.credits.get(&token).unwrap(), &credited);
+
+    let mut resumed = Sim::new(&content, "normal", 9);
+    quiet_breather(&mut resumed);
+    resumed.phase = Phase::Combat;
+    resumed.director.parked = true;
+    resumed.set_host_away(&content, true);
+    resumed.set_host_away(&content, false);
+    let before = resumed.time;
+    resumed.step(&content, PlayerInput::default());
+    assert!(resumed.time > before, "returning clears the pause");
 }
 
 #[test]

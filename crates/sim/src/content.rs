@@ -1883,6 +1883,8 @@ pub struct CoopRules {
     pub currency_credit: String,
     pub leave_keeps_earned: bool,
     pub host_leave: String,
+    /// Real seconds a hidden host tab may stay paused before the match ends.
+    pub host_away_seconds: f32,
     pub friendly_fire: bool,
 }
 
@@ -1898,6 +1900,7 @@ fn load_coop(text: &str) -> Result<CoopRules, String> {
             "revive",
             "currency_share",
             "friendly_fire",
+            "host",
         ],
         "coop.toml",
     )?;
@@ -1946,6 +1949,12 @@ fn load_coop(text: &str) -> Result<CoopRules, String> {
     let budget_rescale = req_string(join, "budget_rescale", "coop.toml join_in_progress")?;
     let squad_wipe = req_string(revive, "squad_wipe", "coop.toml revive")?;
     let currency_credit = req_string(currency, "credit", "coop.toml currency_share")?;
+    let host = req_table(root, "host", "coop.toml")?;
+    expect_keys(host, &["away_seconds"], "coop.toml host")?;
+    let host_away_seconds = req_f32(host, "away_seconds", "coop.toml host")?;
+    if host_away_seconds <= 0.0 {
+        return Err("coop.toml host away_seconds must be > 0".into());
+    }
     let host_leave = req_string(currency, "host_leave", "coop.toml currency_share")?;
     expect_tag(&join_allowed_during, "breather_only", "coop.toml allowed_during")?;
     expect_tag(&upgrade_catchup, "match_lowest", "coop.toml upgrade_catchup")?;
@@ -1977,6 +1986,7 @@ fn load_coop(text: &str) -> Result<CoopRules, String> {
         currency_credit,
         leave_keeps_earned: req_bool(currency, "leave_keeps_earned", "coop.toml currency_share")?,
         host_leave,
+        host_away_seconds,
         friendly_fire: req_bool(fire, "enabled", "coop.toml friendly_fire")?,
     })
 }

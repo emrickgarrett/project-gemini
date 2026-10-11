@@ -335,6 +335,11 @@ pub struct Sim {
     pub pending_vents: Vec<PendingVent>,
     /// Seconds every living player has stayed on a jetpack perch.
     pub all_perched_for: f32,
+    /// Host tab is hidden. Match clocks stay put until the tab returns or the away timer ends the match.
+    #[serde(default)]
+    pub host_away: bool,
+    #[serde(default)]
+    pub host_away_left: f32,
     /// Joiners waiting for the next breather. Counted toward the lobby cap.
     #[serde(default)]
     pub pending_joins: Vec<PendingJoin>,
@@ -404,6 +409,8 @@ impl Sim {
             endless_mode: false,
             pending_vents: Vec::new(),
             all_perched_for: 0.0,
+            host_away: false,
+            host_away_left: 0.0,
             pending_joins: Vec::new(),
             credits: BTreeMap::new(),
             next_token: 2,
@@ -529,6 +536,14 @@ impl Sim {
     }
 
     pub fn step_peers(&mut self, content: &Content, inputs: &[PlayerInput]) {
+        if self.host_away {
+            self.sounds.clear();
+            self.stops.clear();
+            self.pings.clear();
+            self.music.clear();
+            self.landed_pulse = 0.0;
+            return;
+        }
         self.sounds.clear();
         self.stops.clear();
         self.pings.clear();
@@ -682,6 +697,37 @@ impl Sim {
             ));
         }
         Ok(token)
+    }
+
+    /// Pause while the host tab is hidden. Coming back clears the pause. The away clock is real time, not sim time.
+    pub fn set_host_away(&mut self, content: &Content, away: bool) {
+        if matches!(self.phase, Phase::Victory | Phase::Defeat) {
+            return;
+        }
+        if away {
+            if !self.host_away {
+                self.host_away = true;
+                self.host_away_left = content.coop.host_away_seconds;
+            }
+        } else {
+            self.host_away = false;
+        }
+    }
+
+    /// Count real elapsed seconds while the host is away. At zero the match ends the same way a host leave does.
+    pub fn tick_host_away(&mut self, content: &Content, dt: f32) {
+        if !self.host_away || matches!(self.phase, Phase::Victory | Phase::Defeat) {
+            return;
+        }
+        self.host_away_left -= dt.max(0.0);
+        if self.host_away_left > 0.0 {
+            return;
+        }
+        self.host_away = false;
+        if let Some(player) = self.players.iter().find(|player| player.is_host) {
+            let token = player.token;
+            let _ = self.disconnect_token(content, token);
+        }
     }
 
     pub fn disconnect_token(&mut self, content: &Content, token: u64) -> Result<(), String> {

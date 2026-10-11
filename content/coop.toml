@@ -26,5 +26,8 @@ credit = "per_round_present"         # you earn a round's currency only for roun
 leave_keeps_earned = true            # already-credited rounds are kept
 host_leave = "match_ends_rounds_kept"
 
+[host]
+away_seconds = 60                    # hidden host tab pauses the match, then ends it like a host leave
+
 [friendly_fire]
 enabled = false

@@ -3,7 +3,7 @@
 use bevy::input::gamepad::{Gamepad, GamepadAxis, GamepadButton};
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
-use bevy::window::{CursorGrabMode, CursorOptions};
+use bevy::window::{CursorGrabMode, CursorOptions, Window};
 
 #[cfg(not(target_arch = "wasm32"))]
 use gemini_meshes::raster_bug;
@@ -174,6 +174,7 @@ pub fn gather_and_step(
     motion: Res<AccumulatedMouseMotion>,
     gamepads: Query<&Gamepad>,
     mut cursor: Query<&mut CursorOptions>,
+    windows: Query<&Window>,
     mut next: ResMut<NextState<AppState>>,
 ) {
     if keys.just_pressed(KeyCode::Escape) {
@@ -288,6 +289,17 @@ pub fn gather_and_step(
         upgrade_choice: choice,
         using_gamepad: using_pad,
     };
+
+    let host = game.local().map(|player| player.is_host).unwrap_or(false);
+    if host && !windows.is_empty() {
+        let focused = windows.iter().all(|window| window.focused);
+        let dt = time.delta_secs();
+        let Game { content, sim, .. } = &mut *game;
+        sim.set_host_away(content, !focused);
+        if sim.host_away {
+            sim.tick_host_away(content, dt);
+        }
+    }
 
     clock.acc += time.delta_secs();
     let max_steps = game.content.controller.sim.max_sim_steps_per_frame;
