@@ -56,19 +56,69 @@ pub fn still_open(id: &str, panel: u32) -> (u32, u32, Vec<u8>) {
     compose(id, panel, cam)
 }
 
-/// First-person still of the shared arm mesh. `accent` is the starter hero's trim.
-pub fn raster_viewmodel(width: u32, height: u32, accent: [f32; 4]) -> Vec<u8> {
+/// Inputs for a first-person still. Offset and FOV come from the hero row.
+#[derive(Clone, Copy, Debug)]
+pub struct ViewmodelFrame {
+    pub accent: [f32; 4],
+    pub offset: [f32; 3],
+    pub fov: f32,
+    pub overdrive: bool,
+}
+
+/// First-person still. The camera sits at the origin looking down -Z, matching the overlay camera.
+pub fn raster_viewmodel(width: u32, height: u32, frame: &ViewmodelFrame) -> Vec<u8> {
     let vm = crate::viewmodel();
     let palette = palette_of();
-    let shift = crate::viewmodel_offset();
-    let parts = [
+    let shift = frame.offset;
+    let orange = frame.accent;
+    let mut parts = vec![
         (shifted(&vm.teal, shift), palette("hero_teal"), false),
         (shifted(&vm.cobalt, shift), palette("hero_cobalt"), false),
         (shifted(&vm.white, shift), palette("hero_white"), false),
-        (shifted(&vm.accent, shift), accent, false),
-        (shifted(&vm.core, shift), palette("shots_player"), true),
     ];
-    draw_parts(&parts, [0.0, 0.02, 0.04], [-0.02, -0.12, -1.0], 36.0, width, height)
+    if frame.overdrive {
+        parts.push((shifted(&vm.barrel, shift), orange, true));
+        parts.push((shifted(&vm.accent, shift), orange, true));
+        parts.push((shifted(&vm.core, shift), orange, true));
+        let mut flash = crate::MeshData::new();
+        let tip = [
+            shift[0] + crate::muzzle_local()[0],
+            shift[1] + crate::muzzle_local()[1],
+            shift[2] + crate::muzzle_local()[2],
+        ];
+        crate::geom::gem(&mut flash, tip, [0.07, 0.07, 0.16], 8, 6, [1.0, 1.0, 1.0, 1.0]);
+        crate::geom::gem(&mut flash, tip, [0.16, 0.16, 0.04], 8, 4, [1.0, 1.0, 1.0, 1.0]);
+        parts.push((flash, [1.0, 0.72, 0.28, 1.0], true));
+    } else {
+        parts.push((shifted(&vm.barrel, shift), palette("hero_cobalt"), false));
+        parts.push((shifted(&vm.accent, shift), orange, false));
+        parts.push((shifted(&vm.core, shift), palette("shots_player"), true));
+    }
+    let mut rgb = draw_parts(&parts, [0.0, 0.0, 0.0], [0.0, 0.0, -1.0], frame.fov, width, height);
+    if frame.overdrive {
+        edge_tint(&mut rgb, width.max(8), height.max(8), orange);
+    }
+    rgb
+}
+
+fn edge_tint(color: &mut [u8], w: u32, h: u32, orange: [f32; 4]) {
+    let dye = [orange[0] * 255.0, orange[1] * 255.0, orange[2] * 255.0];
+    for y in 0..h {
+        for x in 0..w {
+            let nx = (x as f32 + 0.5) / w as f32;
+            let ny = (y as f32 + 0.5) / h as f32;
+            let edge = ((nx - 0.5).abs() * 2.0).max((ny - 0.5).abs() * 2.0);
+            if edge < 0.78 {
+                continue;
+            }
+            let t = ((edge - 0.78) / 0.22).clamp(0.0, 1.0) * 0.34;
+            let i = ((y * w + x) * 3) as usize;
+            for c in 0..3 {
+                let src = color[i + c] as f32;
+                color[i + c] = (src * (1.0 - t) + dye[c] * t).round() as u8;
+            }
+        }
+    }
 }
 
 fn shifted(mesh: &crate::MeshData, by: [f32; 3]) -> crate::MeshData {

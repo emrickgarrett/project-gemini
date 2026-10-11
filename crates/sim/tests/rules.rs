@@ -979,6 +979,10 @@ fn vex_overdrive_comes_from_characters() {
     assert!((content.hero.overdrive_fire_rate - 0.35).abs() < 1e-4);
     assert!(content.hero.infinite_magazine);
     assert!((content.hero.kill_cd_refund - 1.0).abs() < 1e-4);
+    let off = content.hero.viewmodel_offset;
+    assert!(off[0] > 0.0 && off[1] < 0.0, "viewmodel should sit lower right, got {off:?}");
+    assert!((off[0] - 0.36).abs() < 1e-4 && (off[1] + 0.22).abs() < 1e-4 && (off[2] + 0.48).abs() < 1e-4);
+    assert!((content.hero.viewmodel_fov - 40.0).abs() < 1e-4);
     assert!(content.weapon("coil_rifle").is_none());
     let gun = content.weapon("pulse_rifle").unwrap();
     assert!((gun.fire_interval - 1.0 / 9.0).abs() < 1e-4);
@@ -1014,6 +1018,39 @@ fn vex_overdrive_comes_from_characters() {
     })
     .expect_err("missing overdrive duration");
     assert!(err.contains("duration"), "{err}");
+
+    let load_hero = |hero: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            waves: base.waves,
+            difficulty: base.difficulty,
+            controller: base.controller,
+            run_upgrades: base.run_upgrades,
+            endless: base.endless,
+            currency: base.currency,
+            banners: base.banners,
+            duplicate_ranks: base.duplicate_ranks,
+            bosses: base.bosses,
+            weapons: base.weapons,
+            hero,
+            arena: base.arena,
+            presentation: base.presentation,
+            combat: base.combat,
+            palette: base.palette,
+            music: base.music,
+            audio: base.audio,
+            bugs: base.bugs,
+            crate_reveal: base.crate_reveal,
+        })
+    };
+    let text = include_str!("../../../content/characters.toml");
+    for key in ["viewmodel_offset", "viewmodel_fov"] {
+        let stripped = text.lines().filter(|line| !line.contains(key)).collect::<Vec<_>>().join("\n");
+        let err = load_hero(&stripped).expect_err(key);
+        assert!(err.contains(key), "{err}");
+    }
+    let zero = text.replace("viewmodel_fov = 40", "viewmodel_fov = 0");
+    let err = load_hero(&zero).expect_err("zero viewmodel fov");
+    assert!(err.contains("viewmodel_fov"), "{err}");
 
     let mut sim = Sim::new(&content, "normal", 2);
     assert!((sim.players[0].max_hp - content.hero.max_hp).abs() < 1e-3);

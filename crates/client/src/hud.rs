@@ -39,7 +39,7 @@ pub fn draw(
     time: Res<Time>,
     // Only the root. Despawning it already despawns `HudNode` children.
     old: Query<Entity, (With<HudNode>, Without<ChildOf>)>,
-    camera: Query<(&Camera, &GlobalTransform)>,
+    camera: Query<(&Camera, &GlobalTransform), With<IsDefaultUiCamera>>,
     mut floaters: Query<(Entity, &mut Floater, &mut Node), Without<HudFill>>,
     mut shape: Local<HudShape>,
     mut labels: Query<&mut Text, With<HudLabel>>,
@@ -107,14 +107,16 @@ pub fn draw(
     let ready = cd <= 0.0;
     let boss_id = boss.map(|enemy| enemy.kind.name()).unwrap_or("");
     let upgrade_sig: String = player.upgrades.keys().cloned().collect();
+    let overdrive = player.overdrive_left > 0.0;
     let key = format!(
-        "{:?}|{boss_id}|{}|{upgrade_sig}|{}|{}|{}|{}",
+        "{:?}|{boss_id}|{}|{upgrade_sig}|{}|{}|{}|{}|{}",
         std::mem::discriminant(&game.sim.phase),
         player.downed as u8,
         (hp * 14.0) as i32,
         (fuel * 14.0) as i32,
         if ready { 14 } else { ((1.0 - cd / max_cd) * 14.0) as i32 },
         notches.len(),
+        overdrive as u8,
     );
     if !old.is_empty() && shape.key == key {
         if let Ok(mut text) = labels.single_mut() {
@@ -145,6 +147,46 @@ pub fn draw(
             PlayPiece,
         ))
         .id();
+    if overdrive {
+        let wash = Color::srgba(accent_rgb[0], accent_rgb[1], accent_rgb[2], 0.22);
+        let band = 64.0;
+        for node in [
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                height: Val::Px(band),
+                ..default()
+            },
+            Node {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(0.0),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                height: Val::Px(band),
+                ..default()
+            },
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                bottom: Val::Px(0.0),
+                left: Val::Px(0.0),
+                width: Val::Px(band),
+                ..default()
+            },
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                bottom: Val::Px(0.0),
+                right: Val::Px(0.0),
+                width: Val::Px(band),
+                ..default()
+            },
+        ] {
+            commands.spawn((node, BackgroundColor(wash), ChildOf(root), HudNode));
+        }
+    }
     commands.spawn((
         Text::new(label),
         TextFont::from_font_size(22.0),
