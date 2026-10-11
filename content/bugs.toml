@@ -8,6 +8,11 @@
 # Design "phase 1" is the first phase (sim phase index 0, above the first
 # threshold). The hive cannon follows the visual part named "cannon"
 # (phase_max = 1). The tail entry owns the chain pitch, joint, and segment cap.
+#
+# A weak-point hitbox has to cover its glowing mesh. The mesh test fails when
+# the hitbox radius is under that mesh radius times hitbox_margin.
+
+hitbox_margin = 1.1
 
 [feedback]
 weakpoint_hit = "weakpoint_hit"
@@ -106,7 +111,7 @@ spines = 0
 
 [spitter.hitbox]
 body = { shape = "capsule", radius = 0.4, height = 1.4, offset = [0, 0.8, 0] }
-weakpoint = { name = "sac", anchor = "sac", shape = "sphere", radius = 0.32, mult = 2.0, grows_during_charge = 1.25 }
+weakpoint = { name = "sac", anchor = "sac", shape = "sphere", radius = 0.36, mult = 2.0, grows_during_charge = 1.25 }
 sac_pop_cancels_shot = true
 charge_seconds = 1.0
 
@@ -121,7 +126,7 @@ height = 1.8
 lod_distance = 34.0
 parts = [
   { name="shell",    part="shell",    shape="sphere",  size=[1.55,1.7,1.55], offset=[0,1.12,0], color="brute_amber", rear_open=false },
-  { name="cracks",   part="decal",    shape="decal",   on="shell", color="brute_cracks", emissive=true, active_when="vulnerable", patch=[0.28, 0.1, 0.22], patch_floor=0.05 },
+  { name="cracks",   part="decal",    shape="decal",   on="shell", color="brute_cracks", emissive=true, patch=[0.28, 0.1, 0.22], patch_floor=0.05 },
   { name="horn",     part="horn",     shape="cone",    size=[0.12,0.34], offset=[0,1.7,0.62], tilt_deg=28, color="brute_amber" },
   { name="forelimb", part="forelimb", shape="capsule", size=[0.48,0.72], offset=[0.95,1.15,0.95], color="brute_amber", mirror=true, aim=[0.42, -0.08, 1.2], seg=0.5, rad=0.92, taper=0.74, blade=0.48, blade_euler=[0.85, 0.2, 0.35], blade_r=[1.05, 0.4], swing_hz=2.2, swing_amp=0.18 },
   { name="leg",      part="leg",      shape="capsule", size=[0.16,0.8], count=4, ring_radius=0.75, color="brute_amber", layout="paired", hip=0.46, femur=0.46, femur_lod=0.92, tibia=0.40, foot=0.16 },
@@ -169,7 +174,7 @@ spines = 0
 
 [brute.hitbox]
 body = { shape = "box", half_extents = [0.8, 0.9, 1.1], offset = [0, 0.9, 0] }
-weakpoint = { name = "cracks", anchor = "cracks", shape = "box", half_extents = [0.5, 0.3, 0.4], mult = 2.5, active_only_when = "vulnerable" }
+weakpoint = { name = "cracks", anchor = "cracks", shape = "box", half_extents = [0.75, 0.50, 0.62], mult = 2.5, active_only_when = "vulnerable" }
 armor_mult_when_closed = 0.5
 vulnerable_after_charge = 2.0
 
@@ -188,7 +193,7 @@ parts = [
   { name="crown", part="crown", shape="cone",   size=[0.15,0.5], count=5, on="head", color="brute_amber", spread=[2.6, 0.25, 1.6], crown_pitch=0.85 },
   { name="gland", part="gem",   shape="sphere", size=[0.5,0.45,0.4], offset=[0,0.9,2.0], color="spitter_glow", emissive=true },
   { name="sac",   part="gem",   shape="sphere", size=[3.0,2.4,3.4], offset=[0,1.8,-0.6], color="brood_sac" },
-  { name="pod",   part="pod",   shape="sphere", size=[1.45,1.7,1.45], count=6, on="sac", ring_radius=0.78, color="swarmer_glow", emissive=true, ring_phase=0.0, sink=1.18, ny_floor=0.2, ring_turn=0.4 },
+  { name="pod",   part="pod",   shape="sphere", size=[1.0,1.15,1.0], count=6, on="sac", ring_radius=0.78, color="swarmer_glow", emissive=true, ring_phase=0.0, sink=1.18, ny_floor=0.2, ring_turn=0.4 },
   { name="bud",   part="bud",   shape="sphere", size=[0.52,0.46,0.52], count=6, on="sac", ring_radius=0.8, color="brood_sac", emissive=false, grows_into_pod_on="enrage", ring_phase=0.5, sink=1.32, ny_floor=0.55, ring_turn=0.4, grown_scale=2.4, grown_glow=2.2 },
   { name="leg",   part="leg",   shape="capsule", size=[0.28,1.7], count=6, ring_radius=2.85, color="brute_amber", layout="radial", hip_scale=0.95, plant_scale=1.55, ring_phase=0.35, hip=0.42, femur=0.46, femur_lod=0.92, tibia=0.40, foot=0.16 },
 ]
@@ -228,7 +233,7 @@ spines = 0
 [brood_mother.hitbox]
 body = { shape = "capsule", radius = 1.6, height = 4.0, offset = [0, 1.8, 0] }
 weakpoint = { name = "gland", anchor = "gland", shape = "sphere", radius = 0.5 }
-pod = { shape = "sphere", radius = 0.35 }
+pod = { shape = "sphere", radius = 0.65 }
 
 [brood_mother.audio]
 footstep = "brood_footstep"
@@ -285,7 +290,7 @@ spines = 0
 [hive_tyrant.hitbox]
 body = { shape = "capsule", radius = 2.0, height = 5.0, offset = [0, 2.5, 0] }
 core = { anchor = "core", shape = "sphere", radius = 0.7 }
-cannon = { shape = "sphere", radius = 0.6, anchor = "cannon" }
+cannon = { shape = "sphere", radius = 0.83, anchor = "cannon" }
 
 [hive_tyrant.audio]
 footstep = "tyrant_footstep"

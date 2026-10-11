@@ -11,7 +11,7 @@ use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use gemini_meshes::{catalog, missing_glow_keys, painted_pixels, raster_bug, still, still_open};
+use gemini_meshes::{catalog, missing_glow_keys, missing_glow_keys_open, painted_pixels, raster_bug, still, still_open};
 
 fn main() {
     let mut out = "art/bugs".to_string();
@@ -46,7 +46,7 @@ fn main() {
         }
         let (ow, oh, open) = still_open(&visual.id, panel);
         let open_painted = painted_pixels(&open);
-        let open_missing = missing_glow_keys(&visual.id, &open);
+        let open_missing = missing_glow_keys_open(&visual.id, &open);
         if open_painted < 800 || !open_missing.is_empty() {
             eprintln!(
                 "{}_open still failed ({open_painted} px, missing glow {open_missing:?})",

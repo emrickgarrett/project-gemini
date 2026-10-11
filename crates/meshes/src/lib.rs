@@ -8,7 +8,7 @@ mod visual;
 
 pub use pose::{pose, AnimInput, Pose, Xform};
 pub use preview::{
-    missing_glow_keys, painted_pixels, raster, raster_bug, raster_crown, raster_viewmodel, still, still_open,
+    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_viewmodel, still, still_open,
     ViewmodelFrame,
 };
 pub use visual::{bug, catalog, flat_shaded, EnemyVisual, Gate, Joint, Part, ShotCamera};
@@ -195,6 +195,18 @@ fn rifle(vm: &mut Viewmodel, ink: [f32; 4]) {
         std::f32::consts::FRAC_PI_2,
         0.0,
     );
+    // Orange stripe along the top of the cobalt tube.
+    spoke(
+        &mut vm.accent,
+        0.48,
+        0.016,
+        0.012,
+        6,
+        ink,
+        [0.03, 0.028, -0.54],
+        std::f32::consts::FRAC_PI_2,
+        0.0,
+    );
     spoke(
         &mut vm.cobalt,
         0.16,
@@ -359,6 +371,8 @@ mod tests {
                     frenzy: false,
                     preview_glow: false,
                     regrow: 0,
+                hatch_pod: 255,
+                hatch_charge: 0.0,
                 },
                 &prev,
             );
@@ -383,6 +397,8 @@ mod tests {
                 frenzy: false,
                 preview_glow: false,
                 regrow: 0,
+                hatch_pod: 255,
+                hatch_charge: 0.0,
             },
             &[],
         );
@@ -397,6 +413,8 @@ mod tests {
                 frenzy: false,
                 preview_glow: false,
                 regrow: 0,
+                hatch_pod: 255,
+                hatch_charge: 0.0,
             },
             &[],
         );
@@ -450,6 +468,8 @@ mod tests {
                 frenzy: false,
                 preview_glow: false,
                 regrow: 2,
+                hatch_pod: 255,
+                hatch_charge: 0.0,
             },
             &[],
         );
@@ -464,8 +484,10 @@ mod tests {
     #[test]
     fn open_brute_pods_and_tyrant_spikes() {
         let brute = bug("brute");
-        let plates = brute.parts.iter().position(|p| p.name == "shell_plates").unwrap();
+        let left = brute.parts.iter().position(|p| p.name == "shell_plates_l").unwrap();
+        let right = brute.parts.iter().position(|p| p.name == "shell_plates_r").unwrap();
         let cracks = brute.parts.iter().position(|p| p.name == "cracks").unwrap();
+        let core = brute.parts.iter().position(|p| p.name == "core").unwrap();
         let shut = pose(
             brute,
             AnimInput {
@@ -477,6 +499,8 @@ mod tests {
                 frenzy: false,
                 preview_glow: false,
                 regrow: 0,
+                hatch_pod: 255,
+                hatch_charge: 0.0,
             },
             &[],
         );
@@ -491,15 +515,20 @@ mod tests {
                 frenzy: false,
                 preview_glow: false,
                 regrow: 0,
+                hatch_pod: 255,
+                hatch_charge: 0.0,
             },
             &[],
         );
-        assert!((shut.xforms[plates].scale[0] - 1.0).abs() < 1e-4);
-        assert!(!shut.xforms[cracks].visible);
-        assert!(open.xforms[plates].scale[0] > 1.4);
-        assert!(open.xforms[cracks].scale[0] > 1.4);
-        assert!(open.xforms[cracks].visible);
-        assert!(open.xforms[cracks].glow > 3.0);
+        let shut_gap = shut.xforms[right].pos[0] - shut.xforms[left].pos[0];
+        let open_gap = open.xforms[right].pos[0] - open.xforms[left].pos[0];
+        assert!(shut_gap.abs() < 0.05, "shut plates share an origin, gap {shut_gap}");
+        assert!(open_gap > shut_gap + 0.5, "open gap {open_gap} shut {shut_gap}");
+        assert!(shut.xforms[cracks].visible);
+        assert!(shut.xforms[cracks].glow < 1.0, "shut cracks should stay dim");
+        assert!(!shut.xforms[core].visible);
+        assert!(open.xforms[core].visible);
+        assert!(open.xforms[core].glow > 3.0);
 
         let brood = bug("brood_mother");
         assert_eq!(brood.parts.iter().filter(|p| p.name.starts_with("pod")).count(), 6);
@@ -510,7 +539,7 @@ mod tests {
             .iter()
             .map(|p| p[0].abs().max(p[1].abs()).max(p[2].abs()))
             .fold(0.0_f32, f32::max);
-        assert!(rad > 0.6, "pod radius {rad}");
+        assert!((rad - 0.575).abs() < 0.05, "pod radius {rad}");
         let posed = pose(
             brood,
             AnimInput {
@@ -522,11 +551,30 @@ mod tests {
                 frenzy: false,
                 preview_glow: false,
                 regrow: 0,
+                hatch_pod: 255,
+                hatch_charge: 0.0,
             },
             &[],
         );
         let p0 = brood.parts.iter().position(|p| p.name == "pod0").unwrap();
         assert!(posed.xforms[p0].glow > 2.0);
+        let charged = pose(
+            brood,
+            AnimInput {
+                time: 0.2,
+                moving: false,
+                charging: false,
+                vulnerable: false,
+                phase: 0,
+                frenzy: false,
+                preview_glow: false,
+                regrow: 0,
+                hatch_pod: 0,
+                hatch_charge: 1.0,
+            },
+            &[],
+        );
+        assert!(charged.xforms[p0].glow > posed.xforms[p0].glow + 1.0);
 
         let vein = bug("hive_tyrant").parts.iter().find(|p| p.name == "vein0").unwrap();
         let thick = vein
@@ -543,5 +591,79 @@ mod tests {
         let a = bug("swarmer") as *const EnemyVisual;
         let b = bug("swarmer") as *const EnemyVisual;
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn weakpoint_hitboxes_cover_the_glow_mesh() {
+        let text = include_str!("../../../content/bugs.toml");
+        let root: toml::Value = toml::from_str(text).expect("bugs.toml");
+        let margin = root
+            .get("hitbox_margin")
+            .and_then(|v| v.as_float())
+            .expect("hitbox_margin") as f32;
+        assert!((margin - 1.1).abs() < 1e-6, "hitbox_margin {margin}");
+        for visual in catalog() {
+            let hit = root
+                .get(&visual.id)
+                .and_then(|row| row.get("hitbox"))
+                .unwrap_or_else(|| panic!("{} hitbox", visual.id));
+            for key in ["weakpoint", "core", "cannon", "tail"] {
+                let Some(shape) = hit.get(key) else { continue };
+                let Some(anchor) = shape
+                    .get("anchor")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| shape.get("name").and_then(|v| v.as_str()))
+                else {
+                    continue;
+                };
+                let Some(part) = visual.parts.iter().find(|p| p.name == anchor) else {
+                    continue;
+                };
+                if !part.emissive {
+                    continue;
+                }
+                let mesh_r = mesh_radius(&part.mesh);
+                let hit_r = shape_radius(shape);
+                assert!(
+                    hit_r + 1e-3 >= mesh_r * margin,
+                    "{} {key} hitbox {hit_r:.3} < mesh {mesh_r:.3} * {margin}",
+                    visual.id
+                );
+            }
+            if let Some(shape) = hit.get("pod") {
+                let part = visual
+                    .parts
+                    .iter()
+                    .find(|p| p.name == "pod0")
+                    .unwrap_or_else(|| panic!("{} pod mesh", visual.id));
+                let mesh_r = mesh_radius(&part.mesh);
+                let hit_r = shape_radius(shape);
+                assert!(
+                    hit_r + 1e-3 >= mesh_r * margin,
+                    "{} pod hitbox {hit_r:.3} < mesh {mesh_r:.3} * {margin}",
+                    visual.id
+                );
+            }
+        }
+    }
+
+    fn mesh_radius(mesh: &MeshData) -> f32 {
+    mesh.positions
+        .iter()
+        .map(|p| (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt())
+        .fold(0.0, f32::max)
+}
+
+fn shape_radius(shape: &toml::Value) -> f32 {
+    let kind = shape.get("shape").and_then(|v| v.as_str()).unwrap_or("sphere");
+    if kind == "box" {
+        let halves = shape
+            .get("half_extents")
+            .and_then(|v| v.as_array())
+            .expect("box half_extents");
+        let sum: f64 = halves.iter().map(|v| v.as_float().unwrap_or(0.0).powi(2)).sum();
+        return sum.sqrt() as f32;
+    }
+    shape.get("radius").and_then(|v| v.as_float()).unwrap_or(0.0) as f32
     }
 }

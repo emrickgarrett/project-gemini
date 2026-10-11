@@ -261,9 +261,9 @@ pub fn scene(
         (upload(&mut meshes, &vm.white), mat_of(&bank, "hero_white", false, false), None),
         (
             upload(&mut meshes, &vm.barrel),
-            trim_idle.clone(),
+            cobalt_idle.clone(),
             Some(BarrelGlow {
-                idle: trim_idle.clone(),
+                idle: cobalt_idle,
                 hot: barrel_hot.clone(),
             }),
         ),
@@ -333,7 +333,7 @@ pub fn sync(
 
     for enemy in game.sim.enemies.iter().filter(|e| e.alive) {
         if !links.bugs.contains_key(&enemy.id) {
-            let link = spawn_bug(&mut commands, &bank, &game, enemy.kind, enemy.id);
+            let link = spawn_bug(&mut commands, &bank, &game, &mut materials, enemy.kind, enemy.id);
             links.bugs.insert(enemy.id, link);
             links.feet.insert(enemy.id, Vec::new());
         }
@@ -353,6 +353,17 @@ pub fn sync(
             _ => false,
         };
         let prev = links.feet.get(&enemy.id).cloned().unwrap_or_default();
+        let (hatch_pod, hatch_charge) = if enemy.kind == EnemyKind::BroodMother && enemy.warn_pod != 255 && enemy.warn_left > 0.0 {
+            let tele = game
+                .content
+                .boss("brood_mother")
+                .map(|def| def.hatch_telegraph)
+                .unwrap_or(1.0)
+                .max(0.05);
+            (enemy.warn_pod, (1.0 - enemy.warn_left / tele).clamp(0.0, 1.0))
+        } else {
+            (255, 0.0)
+        };
         let posed = pose(
             visual,
             AnimInput {
@@ -368,6 +379,8 @@ pub fn sync(
                 } else {
                     0
                 },
+                hatch_pod,
+                hatch_charge,
             },
             &prev,
         );
@@ -401,6 +414,13 @@ pub fn sync(
                     Visibility::Inherited
                 };
                 let want_hot = (part.emissive || part.grows) && xf.glow > 1.5;
+                if part.emissive && part.pod_slot.is_some() {
+                    let rgb = game.content.palette.key("swarmer_glow");
+                    let mul = 2.8 + xf.glow * 1.7;
+                    if let Some(mut material) = materials.get_mut(&part.hot) {
+                        material.emissive = LinearRgba::rgb(rgb[0] * mul, rgb[1] * mul, rgb[2] * mul);
+                    }
+                }
                 if want_hot != part.hot_on {
                     part.hot_on = want_hot;
                     let handle = if want_hot { part.hot.clone() } else { part.rest.clone() };
@@ -518,7 +538,14 @@ pub fn sync(
     }
 }
 
-fn spawn_bug(commands: &mut Commands, bank: &Bank, game: &Game, kind: EnemyKind, id: u32) -> BugLink {
+fn spawn_bug(
+    commands: &mut Commands,
+    bank: &Bank,
+    game: &Game,
+    materials: &mut Assets<StandardMaterial>,
+    kind: EnemyKind,
+    id: u32,
+) -> BugLink {
     let visual = gemini_meshes::bug(kind.name());
     let shell = visual
         .parts
@@ -545,13 +572,18 @@ fn spawn_bug(commands: &mut Commands, bank: &Bank, game: &Game, kind: EnemyKind,
             part.palette.as_str()
         };
         let rest = mat_of(bank, rest_key, part.emissive && !bud, false);
-        let hot = if bud && !colors.grown_color.is_empty() {
+        let mut hot = if bud && !colors.grown_color.is_empty() {
             mat_of(bank, &colors.grown_color, true, true)
         } else if part.emissive {
             mat_of(bank, &part.palette, true, true)
         } else {
             rest.clone()
         };
+        if part.pod_slot.is_some() && part.emissive {
+            if let Some(src) = materials.get(&hot).cloned() {
+                hot = materials.add(src);
+            }
+        }
         let pod_slot = part.pod_slot;
         let entity = commands
             .spawn((

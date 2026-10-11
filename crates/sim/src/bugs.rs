@@ -10,6 +10,8 @@ use crate::math::Vec3;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct BugBook {
+    /// Weak-point hitbox radius must be at least this times the glowing mesh radius.
+    pub hitbox_margin: f32,
     pub feedback: Feedback,
     pub swarmer: BugRow,
     pub spitter: BugRow,

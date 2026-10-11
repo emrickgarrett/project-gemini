@@ -15,18 +15,20 @@ pub fn still_anim() -> AnimInput {
         time: 0.15,
         moving: false,
         charging: false,
-        vulnerable: true,
+        vulnerable: false,
         phase: 0,
         frenzy: false,
         preview_glow: true,
         regrow: 0,
+        hatch_pod: 255,
+        hatch_charge: 0.0,
     }
 }
 
 pub fn raster_bug(id: &str, width: u32, height: u32) -> Vec<u8> {
     let visual = bug(id);
     let palette = palette_of();
-    draw(visual, &palette, width, height, false, None)
+    draw(visual, &palette, width, height, false, false, None)
 }
 
 /// Color still from a visual that authors `camera_open` (the brute's open shell).
@@ -36,16 +38,16 @@ pub fn raster_crown(id: &str, width: u32, height: u32) -> Vec<u8> {
     let cam = visual
         .camera_open
         .unwrap_or_else(|| panic!("{id} has no camera_open"));
-    draw(visual, &palette, width, height, false, Some((cam.eye, cam.target, cam.fov)))
+    draw(visual, &palette, width, height, false, true, Some((cam.eye, cam.target, cam.fov)))
 }
 
 pub fn raster(visual: &EnemyVisual, palette: &dyn Fn(&str) -> [f32; 4], width: u32, height: u32) -> Vec<u8> {
-    draw(visual, palette, width, height, false, None)
+    draw(visual, palette, width, height, false, false, None)
 }
 
 /// Color panel on the left, untextured silhouette on the right. Each panel is square.
 pub fn still(id: &str, panel: u32) -> (u32, u32, Vec<u8>) {
-    compose(id, panel, None)
+    compose(id, panel, false, None)
 }
 
 /// Same paired still as `still`, using `camera_open` when the bug authors one.
@@ -53,7 +55,7 @@ pub fn still(id: &str, panel: u32) -> (u32, u32, Vec<u8>) {
 pub fn still_open(id: &str, panel: u32) -> (u32, u32, Vec<u8>) {
     let visual = bug(id);
     let cam = visual.camera_open.map(|c| (c.eye, c.target, c.fov));
-    compose(id, panel, cam)
+    compose(id, panel, true, cam)
 }
 
 /// Inputs for a first-person still. Offset and FOV come from the hero row.
@@ -76,9 +78,10 @@ pub fn raster_viewmodel(width: u32, height: u32, frame: &ViewmodelFrame) -> Vec<
         (shifted(&vm.cobalt, shift), palette("hero_cobalt"), false),
         (shifted(&vm.white, shift), palette("hero_white"), false),
     ];
-    // Barrel and stripes stay accent orange. The side strip stays teal and emissive.
-    parts.push((shifted(&vm.barrel, shift), orange, frame.overdrive));
-    parts.push((shifted(&vm.accent, shift), orange, frame.overdrive));
+    // Idle barrel is cobalt. Overdrive turns the whole tube orange. The stripe stays accent.
+    let barrel_color = if frame.overdrive { orange } else { palette("hero_cobalt") };
+    parts.push((shifted(&vm.barrel, shift), barrel_color, frame.overdrive));
+    parts.push((shifted(&vm.accent, shift), orange, true));
     parts.push((shifted(&vm.core, shift), palette("hero_teal"), true));
     if frame.overdrive {
         let mut flash = crate::MeshData::new();
@@ -183,12 +186,12 @@ fn draw_parts(
     color
 }
 
-fn compose(id: &str, panel: u32, camera: Option<([f32; 3], [f32; 3], f32)>) -> (u32, u32, Vec<u8>) {
+fn compose(id: &str, panel: u32, open_shell: bool, camera: Option<([f32; 3], [f32; 3], f32)>) -> (u32, u32, Vec<u8>) {
     let panel = panel.max(8);
     let visual = bug(id);
     let palette = palette_of();
-    let color = draw(visual, &palette, panel, panel, false, camera);
-    let sil = draw(visual, &palette, panel, panel, true, camera);
+    let color = draw(visual, &palette, panel, panel, false, open_shell, camera);
+    let sil = draw(visual, &palette, panel, panel, true, open_shell, camera);
     let w = panel * 2;
     let mut out = vec![0u8; (w * panel * 3) as usize];
     for y in 0..panel {
@@ -205,9 +208,20 @@ fn compose(id: &str, panel: u32, camera: Option<([f32; 3], [f32; 3], f32)>) -> (
 
 /// Palette keys of visible glow parts that contributed no exact-color pixels.
 pub fn missing_glow_keys(id: &str, rgb: &[u8]) -> Vec<String> {
+    glow_keys(id, rgb, false)
+}
+
+/// Glow check for the open-shell still. The core is hidden while the plates are shut.
+pub fn missing_glow_keys_open(id: &str, rgb: &[u8]) -> Vec<String> {
+    glow_keys(id, rgb, true)
+}
+
+fn glow_keys(id: &str, rgb: &[u8], open_shell: bool) -> Vec<String> {
     let visual = bug(id);
     let palette = palette_of();
-    let posed = pose(visual, still_anim(), &[]);
+    let mut anim = still_anim();
+    anim.vulnerable = open_shell;
+    let posed = pose(visual, anim, &[]);
     let mut keys = Vec::new();
     for (part, xf) in visual.parts.iter().zip(posed.xforms.iter()) {
         if part.emissive && xf.visible && !keys.contains(&part.palette) {
@@ -232,6 +246,7 @@ fn draw(
     width: u32,
     height: u32,
     silhouette: bool,
+    open_shell: bool,
     camera: Option<([f32; 3], [f32; 3], f32)>,
 ) -> Vec<u8> {
     let w = width.max(8);
@@ -241,7 +256,9 @@ fn draw(
         color.extend_from_slice(&BG);
     }
     let mut depth = vec![f32::INFINITY; (w * h) as usize];
-    let posed = pose(visual, still_anim(), &[]);
+    let mut anim = still_anim();
+    anim.vulnerable = open_shell;
+    let posed = pose(visual, anim, &[]);
     let (eye, target, fov_deg) = camera.unwrap_or((visual.camera.eye, visual.camera.target, visual.camera.fov));
     let forward = norm(sub(target, eye));
     let right = norm(cross(forward, [0.0, 1.0, 0.0]));

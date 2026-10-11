@@ -190,6 +190,8 @@ fn sculpt(id: &str, row: &Row) -> Result<EnemyVisual, String> {
             frenzy: false,
             preview_glow: false,
             regrow: 0,
+            hatch_pod: 255,
+            hatch_charge: 0.0,
         },
         &[],
     );
@@ -440,17 +442,48 @@ fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cat
         if spec.part == "shell" {
             let rear = req(id, &spec.name, "rear_open", spec.rear_open)?;
             if dens.plates > 0 {
+                for (name, side) in [("shell_plates_l", -1.0_f32), ("shell_plates_r", 1.0)] {
+                    parts.push(Part {
+                        name: name.into(),
+                        parent: Some(idx),
+                        rest_pos: [0.0, 0.0, 0.0],
+                        rest_euler: [0.0, 0.0, 0.0],
+                        mesh: Arc::new(flank_plates(&size, dens, rear, side)),
+                        palette: palette.clone(),
+                        emissive: false,
+                        joint: Joint::Static,
+                        mesh_key: format!("{id}:{name}"),
+                        gate: Gate::Always,
+                        foot: None,
+                        grows: false,
+                        grow_slot: None,
+                        pod_slot: None,
+                        sway_rate: 0.0,
+                        sway_spread: 0.0,
+                        sway_amp: 0.0,
+                        swing_hz: 0.0,
+                        swing_amp: 0.0,
+                        grown_scale: 0.0,
+                        grown_glow: 0.0,
+                    });
+                }
+                // Magenta core between the plates. Hidden until the shell opens.
+                let core_dens = Dens {
+                    slices: 8,
+                    stacks: 4,
+                    ..Dens::small()
+                };
                 parts.push(Part {
-                    name: "shell_plates".into(),
+                    name: "core".into(),
                     parent: Some(idx),
-                    rest_pos: [0.0, 0.0, 0.0],
+                    rest_pos: [0.0, 0.92, 0.08],
                     rest_euler: [0.0, 0.0, 0.0],
-                    mesh: Arc::new(dorsal_plates(&size, dens, rear)),
-                    palette: palette.clone(),
-                    emissive: false,
+                    mesh: Arc::new(gem_mesh([0.55, 0.38, 0.62], &core_dens)),
+                    palette: "brute_cracks".into(),
+                    emissive: true,
                     joint: Joint::Static,
-                    mesh_key: format!("{id}:shell_plates"),
-                    gate: Gate::Always,
+                    mesh_key: format!("{id}:core"),
+                    gate: Gate::Vulnerable,
                     foot: None,
                     grows: false,
                     grow_slot: None,
@@ -843,6 +876,7 @@ fn add_sac_orbs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) -> R
             center[2] + nz * radii[2] * sink,
         ];
         let name = if nestled { format!("bud{i}") } else { format!("pod{i}") };
+        let pod_slot = if nestled { None } else { Some(i) };
         parts.push(Part {
             name,
             parent: None,
@@ -857,7 +891,7 @@ fn add_sac_orbs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) -> R
             foot: None,
             grows: nestled,
             grow_slot: if nestled { Some(i) } else { None },
-            pod_slot: if nestled { None } else { Some(i) },
+            pod_slot,
             sway_rate: 0.0,
             sway_spread: 0.0,
             sway_amp: 0.0,
@@ -866,6 +900,33 @@ fn add_sac_orbs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) -> R
             grown_scale,
             grown_glow,
         });
+        if !nestled {
+            let toward = normalize([center[0] - pos[0], center[1] - pos[1], center[2] - pos[2]]);
+            let pod_r = size[0].max(size[1]).max(size[2]) * 0.5;
+            parts.push(Part {
+                name: format!("collar{i}"),
+                parent: None,
+                rest_pos: pos,
+                rest_euler: [0.0, 0.0, 0.0],
+                mesh: Arc::new(collar_mesh(toward, pod_r * 0.72, pod_r * 0.95, pod_r * 0.5)),
+                palette: "spitter_carapace".into(),
+                emissive: false,
+                joint: Joint::Static,
+                mesh_key: format!("{id}:collar{i}"),
+                gate: Gate::Always,
+                foot: None,
+                grows: false,
+                grow_slot: None,
+                pod_slot,
+                sway_rate: 0.0,
+                sway_spread: 0.0,
+                sway_amp: 0.0,
+                swing_hz: 0.0,
+                swing_amp: 0.0,
+                grown_scale: 0.0,
+                grown_glow: 0.0,
+            });
+        }
     }
     Ok(())
 }
@@ -931,8 +992,7 @@ fn add_crown(parts: &mut Vec<Part>, id: &str, spec: &VPart, _dens: &Dens) -> Res
 }
 
 fn add_decal(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, shell: [f32; 3], shell_size: [f32; 3]) {
-    // Four to six jagged fissures down each flank, on the front plate seams so the
-    // three-quarter camera sees both sides.
+    // Thin lines in the closed seam. The open pose reveals the core instead of widening these.
     let radii = shell_radii(&shell_size, false);
     let bands = dorsal_bands(&radii, dens.plates.max(6), false);
     let mut seams = Vec::new();
@@ -950,10 +1010,8 @@ fn add_decal(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, shell: 
         }
     }
     let mut mesh = MeshData::new();
-    for side in [-1.0_f32, 1.0] {
-        for (n, seam) in seams.iter().copied().enumerate() {
-            jagged_crack(&mut mesh, &radii, side, seam, n);
-        }
+    for seam in seams {
+        seam_line(&mut mesh, &radii, seam);
     }
     parts.push(Part {
         name: spec.name.clone(),
@@ -1058,8 +1116,9 @@ fn dome_shell(size: &[f32; 3], dens: &Dens, rear_open: bool) -> MeshData {
     mesh
 }
 
-/// Plates sit shorter than their slot and lifted off the shell, so neighbors never share a face.
-fn dorsal_plates(size: &[f32; 3], dens: &Dens, rear_open: bool) -> MeshData {
+/// One flank of the carapace. The two flanks meet on the midline while shut
+/// and the open pose slides them apart.
+fn flank_plates(size: &[f32; 3], dens: &Dens, rear_open: bool, side: f32) -> MeshData {
     let mut mesh = MeshData::new();
     if dens.plates == 0 {
         return mesh;
@@ -1067,12 +1126,14 @@ fn dorsal_plates(size: &[f32; 3], dens: &Dens, rear_open: bool) -> MeshData {
     let radii = shell_radii(size, rear_open);
     let gap = plate_gap(radii[1]);
     let arch = plate_arch(radii[1]);
+    let x = side * radii[0] * 0.32;
+    let width = radii[0] * 0.5;
     for (n, (z, y, spacing)) in dorsal_bands(&radii, dens.plates, rear_open).into_iter().enumerate() {
         geom::plate(
             &mut mesh,
-            [0.0, y + gap, z],
-            (spacing * 0.64).max(0.02),
-            radii[0] * if rear_open { 0.62 } else { 1.02 },
+            [x, y + gap, z],
+            (spacing * 0.7).max(0.02),
+            width,
             arch,
             dens.nu.max(1),
             dens.nv.max(1),
@@ -1081,7 +1142,7 @@ fn dorsal_plates(size: &[f32; 3], dens: &Dens, rear_open: bool) -> MeshData {
         if dens.spines > 0 && n % 2 == 0 && (n as u32) < dens.spines * 2 {
             geom::spine(
                 &mut mesh,
-                [0.0, y + gap + arch + 0.012, z],
+                [x, y + gap + arch + 0.012, z],
                 radii[1] * 0.28,
                 radii[0] * 0.05,
                 WHITE,
@@ -1389,31 +1450,51 @@ fn curved_blade(length: f32, width: f32, thick: f32) -> MeshData {
     mesh
 }
 
-/// One fissure: a zigzag of thin ribbons along a plate seam, plus a short branch.
-fn jagged_crack(mesh: &mut MeshData, radii: &[f32; 3], side: f32, seam_z: f32, n: usize) {
-    let steps = 6;
+/// A thin line sitting in the closed plate seam, above the shell and under the open core.
+/// Dark collar where a pod meets the sac. `toward` points from the pod center into the sac.
+fn collar_mesh(toward: [f32; 3], along: f32, outer: f32, inner: f32) -> MeshData {
+    let n = normalize(toward);
+    let hint = if n[1].abs() < 0.85 { [0.0, 1.0, 0.0] } else { [1.0, 0.0, 0.0] };
+    let side = normalize(cross(n, hint));
+    let bin = cross(n, side);
+    let c = [n[0] * along, n[1] * along, n[2] * along];
+    let mut mesh = MeshData::new();
+    let steps = 8u32;
+    let ring = |ang: f32, rad: f32| {
+        let (s, co) = ang.sin_cos();
+        [
+            c[0] + (side[0] * co + bin[0] * s) * rad,
+            c[1] + (side[1] * co + bin[1] * s) * rad,
+            c[2] + (side[2] * co + bin[2] * s) * rad,
+        ]
+    };
+    for i in 0..steps {
+        let a0 = i as f32 / steps as f32 * std::f32::consts::TAU;
+        let a1 = (i + 1) as f32 / steps as f32 * std::f32::consts::TAU;
+        geom::add_quad(&mut mesh, ring(a0, outer), ring(a1, outer), ring(a1, inner), ring(a0, inner), WHITE);
+    }
+    mesh
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+fn seam_line(mesh: &mut MeshData, radii: &[f32; 3], seam_z: f32) {
+    let steps = 4;
     let mut pts = Vec::with_capacity(steps + 1);
+    let lift = plate_gap(radii[1]) + plate_arch(radii[1]) + 0.045;
     for i in 0..=steps {
         let t = i as f32 / steps as f32;
         let zig = if i % 2 == 0 { -1.0 } else { 1.0 };
-        let z = seam_z + zig * radii[2] * 0.08;
-        let x = side * radii[0] * (0.2 + t * 0.7);
-        let y = shell_surface_y(radii, x, z);
-        let out = normalize([x, y.max(0.02), z]);
-        let lift = plate_gap(radii[1]) + plate_arch(radii[1]) + 0.14;
-        pts.push([x + out[0] * lift, y + out[1] * lift + 0.03, z + out[2] * lift]);
+        let x = zig * radii[0] * 0.035;
+        let z = seam_z + (t - 0.5) * radii[2] * 0.16;
+        let y = shell_surface_y(radii, x, z) + lift;
+        pts.push([x, y, z]);
     }
-    let half = (radii[0] * 0.16).max(0.09);
     for w in pts.windows(2) {
-        ribbon(mesh, w[0], w[1], half);
+        ribbon(mesh, w[0], w[1], 0.028);
     }
-    let mid = pts[3];
-    let branch = [
-        mid[0] + side * radii[0] * 0.12,
-        mid[1] - radii[1] * 0.08,
-        mid[2] + radii[2] * 0.08 * if n % 2 == 0 { 1.0 } else { -1.0 },
-    ];
-    ribbon(mesh, mid, branch, half * 0.75);
 }
 
 fn ribbon(mesh: &mut MeshData, a: [f32; 3], b: [f32; 3], half_w: f32) {
@@ -1422,23 +1503,13 @@ fn ribbon(mesh: &mut MeshData, a: [f32; 3], b: [f32; 3], half_w: f32) {
     let len = (dx * dx + dz * dz).sqrt().max(1e-4);
     let px = -dz / len * half_w;
     let pz = dx / len * half_w;
-    let lift = half_w * 0.55;
+    let lift = half_w * 0.35;
     geom::add_quad(
         mesh,
         [a[0] - px, a[1] + lift, a[2] - pz],
         [a[0] + px, a[1] + lift, a[2] + pz],
         [b[0] + px, b[1] + lift, b[2] + pz],
         [b[0] - px, b[1] + lift, b[2] - pz],
-        WHITE,
-    );
-    // A low fin so the fissure reads from the three-quarter camera, not only from above.
-    let fin = half_w * 2.4;
-    geom::add_quad(
-        mesh,
-        [a[0], a[1], a[2]],
-        [a[0], a[1] + fin, a[2]],
-        [b[0], b[1] + fin, b[2]],
-        [b[0], b[1], b[2]],
         WHITE,
     );
 }
