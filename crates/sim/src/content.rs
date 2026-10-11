@@ -729,6 +729,9 @@ fn load_bosses(text: &str) -> Result<Vec<BossDef>, String> {
     if brood.hatch_fan_step <= 0.0 {
         return Err("brood_mother hatch_fan_step must be > 0".into());
     }
+    if brood.hatch_telegraph <= 0.0 {
+        return Err("brood_mother hatch_telegraph must be > 0".into());
+    }
     if brood.spawn_radius <= 0.0 {
         return Err("brood_mother spawn_radius must be > 0".into());
     }
@@ -907,6 +910,8 @@ pub struct Hero {
     /// Camera-local viewmodel position. +X is screen right, -Y is screen down.
     pub viewmodel_offset: [f32; 3],
     pub viewmodel_fov: f32,
+    /// How many 60 Hz frames the muzzle glow fades across. Authored as 2 or 3.
+    pub muzzle_flash_frames: u32,
 }
 
 fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>), String> {
@@ -963,6 +968,7 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>), String> {
         kill_cd_refund: req_f32(ability, "kill_cd_refund", "overdrive")?,
         viewmodel_offset: req_vec3(row, "viewmodel_offset", starter)?,
         viewmodel_fov: req_f32(row, "viewmodel_fov", starter)?,
+        muzzle_flash_frames: req_u32(row, "muzzle_flash_frames", starter)?,
     };
     if hero.ability_cooldown <= 0.0 || hero.overdrive_duration <= 0.0 {
         return Err("overdrive cooldown and duration must be > 0".into());
@@ -976,6 +982,11 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>), String> {
     if hero.viewmodel_fov <= 1.0 || hero.viewmodel_fov >= 170.0 {
         return Err(format!(
             "characters.toml {starter} viewmodel_fov must be between 1 and 170"
+        ));
+    }
+    if !(2..=3).contains(&hero.muzzle_flash_frames) {
+        return Err(format!(
+            "characters.toml {starter} muzzle_flash_frames must be 2 or 3"
         ));
     }
     parse_accent(&hero.accent)?;

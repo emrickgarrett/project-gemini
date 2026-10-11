@@ -14,6 +14,7 @@ passive = "kills during overdrive refund 1s of cooldown"
 fantasy = "the all-rounder; easiest to pick up"
 viewmodel_offset = [0.44, -0.28, -0.48]   # camera space: +X right, -Y down, tip off center
 viewmodel_fov = 40
+muzzle_flash_frames = 3          # display frames at 60 Hz; must be 2 or 3
 
 [[hero]]
 id = "nyra"

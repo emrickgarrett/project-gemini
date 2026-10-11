@@ -675,6 +675,60 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
     .expect_err("spawn_radius inside the body");
     assert!(err.contains("spawn_radius"), "{err}");
     assert!(err.contains("body radius"), "{err}");
+
+    assert!((brood.hatch_telegraph - 1.5).abs() < 1e-4, "telegraph {}", brood.hatch_telegraph);
+    let zero = include_str!("../../../content/bosses.toml").replace("hatch_telegraph = 1.5", "hatch_telegraph = 0");
+    let err = Content::parse(&gemini_sim::content::Sources {
+        waves: base.waves,
+        difficulty: base.difficulty,
+        controller: base.controller,
+        run_upgrades: base.run_upgrades,
+        endless: base.endless,
+        currency: base.currency,
+        banners: base.banners,
+        duplicate_ranks: base.duplicate_ranks,
+        bosses: &zero,
+        weapons: base.weapons,
+        hero: base.hero,
+        arena: base.arena,
+        presentation: base.presentation,
+        combat: base.combat,
+        palette: base.palette,
+        music: base.music,
+        audio: base.audio,
+        bugs: base.bugs,
+        crate_reveal: base.crate_reveal,
+    })
+    .expect_err("zero hatch telegraph");
+    assert!(err.contains("hatch_telegraph"), "{err}");
+    let missing = include_str!("../../../content/bosses.toml")
+        .lines()
+        .filter(|line| !line.contains("hatch_telegraph"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let err = Content::parse(&gemini_sim::content::Sources {
+        waves: base.waves,
+        difficulty: base.difficulty,
+        controller: base.controller,
+        run_upgrades: base.run_upgrades,
+        endless: base.endless,
+        currency: base.currency,
+        banners: base.banners,
+        duplicate_ranks: base.duplicate_ranks,
+        bosses: &missing,
+        weapons: base.weapons,
+        hero: base.hero,
+        arena: base.arena,
+        presentation: base.presentation,
+        combat: base.combat,
+        palette: base.palette,
+        music: base.music,
+        audio: base.audio,
+        bugs: base.bugs,
+        crate_reveal: base.crate_reveal,
+    })
+    .expect_err("missing hatch telegraph");
+    assert!(err.contains("hatch_telegraph"), "{err}");
 }
 
 #[test]
@@ -991,6 +1045,7 @@ fn vex_overdrive_comes_from_characters() {
     assert!(off[0] > 0.0 && off[1] < 0.0, "viewmodel should sit lower right, got {off:?}");
     assert!((off[0] - 0.44).abs() < 1e-4 && (off[1] + 0.28).abs() < 1e-4 && (off[2] + 0.48).abs() < 1e-4);
     assert!((content.hero.viewmodel_fov - 40.0).abs() < 1e-4);
+    assert_eq!(content.hero.muzzle_flash_frames, 3);
     assert!(content.weapon("coil_rifle").is_none());
     let gun = content.weapon("pulse_rifle").unwrap();
     assert!((gun.fire_interval - 1.0 / 9.0).abs() < 1e-4);
@@ -1051,7 +1106,7 @@ fn vex_overdrive_comes_from_characters() {
         })
     };
     let text = include_str!("../../../content/characters.toml");
-    for key in ["viewmodel_offset", "viewmodel_fov"] {
+    for key in ["viewmodel_offset", "viewmodel_fov", "muzzle_flash_frames"] {
         let stripped = text.lines().filter(|line| !line.contains(key)).collect::<Vec<_>>().join("\n");
         let err = load_hero(&stripped).expect_err(key);
         assert!(err.contains(key), "{err}");
@@ -1059,6 +1114,9 @@ fn vex_overdrive_comes_from_characters() {
     let zero = text.replace("viewmodel_fov = 40", "viewmodel_fov = 0");
     let err = load_hero(&zero).expect_err("zero viewmodel fov");
     assert!(err.contains("viewmodel_fov"), "{err}");
+    let long = text.replace("muzzle_flash_frames = 3", "muzzle_flash_frames = 8");
+    let err = load_hero(&long).expect_err("flash longer than three frames");
+    assert!(err.contains("muzzle_flash_frames"), "{err}");
 
     let mut sim = Sim::new(&content, "normal", 2);
     assert!((sim.players[0].max_hp - content.hero.max_hp).abs() < 1e-3);

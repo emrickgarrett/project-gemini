@@ -102,15 +102,14 @@ pub fn raster_viewmodel(width: u32, height: u32, frame: &ViewmodelFrame) -> Vec<
     parts.push((shifted(&vm.accent, shift), orange, true));
     parts.push((shifted(&vm.core, shift), palette("hero_teal"), true));
     if frame.overdrive {
-        let mut flash = crate::MeshData::new();
         let tip = [
             shift[0] + crate::muzzle_local()[0],
             shift[1] + crate::muzzle_local()[1],
             shift[2] + crate::muzzle_local()[2],
         ];
-        crate::geom::gem(&mut flash, tip, [0.035, 0.035, 0.08], 8, 6, [1.0, 1.0, 1.0, 1.0]);
-        crate::geom::gem(&mut flash, tip, [0.08, 0.08, 0.02], 8, 4, [1.0, 1.0, 1.0, 1.0]);
-        parts.push((flash, [1.0, 0.72, 0.28, 1.0], true));
+        let mut glow = crate::muzzle_glow();
+        crate::geom::translate(&mut glow, tip);
+        parts.push((glow, [1.0, 0.72, 0.28, 1.0], true));
     }
     let mut rgb = draw_parts(&parts, [0.0, 0.0, 0.0], [0.0, 0.0, -1.0], frame.fov, width, height);
     if frame.overdrive {

@@ -79,6 +79,13 @@ pub fn muzzle_local() -> [f32; 3] {
     [0.03, -0.005, -1.28]
 }
 
+/// Round muzzle glow, centered on the origin. Not a camera-facing octagon.
+pub fn muzzle_glow() -> MeshData {
+    let mut mesh = MeshData::new();
+    geom::gem(&mut mesh, [0.0, 0.0, 0.0], [0.045, 0.045, 0.045], 16, 10, [1.0, 1.0, 1.0, 1.0]);
+    mesh
+}
+
 pub fn viewmodel() -> Viewmodel {
     let mut vm = Viewmodel {
         teal: MeshData::new(),
@@ -665,6 +672,22 @@ mod tests {
             content.bugs.hitbox_margin
         );
         eprintln!("pod mesh radius {mesh_r:.4} hitbox radius {hit_r:.4}");
+    }
+
+    #[test]
+    fn muzzle_glow_is_a_round_sphere() {
+        let mesh = muzzle_glow();
+        let mut extent = [0.0f32; 3];
+        for p in &mesh.positions {
+            for axis in 0..3 {
+                extent[axis] = extent[axis].max(p[axis].abs());
+            }
+        }
+        for axis in extent {
+            assert!((axis - 0.045).abs() < 1e-4, "extent {extent:?}");
+        }
+        let flat = extent[0].max(extent[1]).max(extent[2]) - extent[0].min(extent[1]).min(extent[2]);
+        assert!(flat < 1e-4, "muzzle glow is a flat disc {extent:?}");
     }
 
     #[test]

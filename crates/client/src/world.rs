@@ -83,6 +83,8 @@ pub(crate) struct Bank {
     acid: Handle<Mesh>,
     pickup: Handle<Mesh>,
     flash: Handle<Mesh>,
+    /// Round emissive muzzle glow. Hit pings keep `flash`.
+    muzzle: Handle<Mesh>,
     ring: Handle<Mesh>,
     barrel_hot: Handle<StandardMaterial>,
 }
@@ -143,6 +145,7 @@ pub fn scene(
     bank.acid = upload(&mut meshes, &gemini_meshes::tracer(acid));
     bank.pickup = upload(&mut meshes, &gemini_meshes::pickup_beam(accent));
     bank.flash = upload(&mut meshes, &gemini_meshes::gun_core(white));
+    bank.muzzle = upload(&mut meshes, &gemini_meshes::muzzle_glow());
     let mut ring = MeshData::new();
     // A flat faceted ring: two discs would be solid. A thin torus-like prism reads as a ring.
     for i in 0..10 {
@@ -357,10 +360,9 @@ pub fn sync(
             let tele = game
                 .content
                 .boss("brood_mother")
-                .map(|def| def.hatch_telegraph)
-                .unwrap_or(1.0)
-                .max(0.05);
-            (enemy.warn_pod, (1.0 - enemy.warn_left / tele).clamp(0.0, 1.0))
+                .expect("brood_mother is missing")
+                .hatch_telegraph;
+            (enemy.warn_pod, hatch_fraction(tele, enemy.warn_left))
         } else {
             (255, 0.0)
         };
@@ -524,13 +526,14 @@ pub fn sync(
     let accent = game.content.palette.key("accent");
     for (entity, mut flash, mut xf, mat) in &mut flashes {
         flash.life -= dt;
-        xf.scale *= 1.0 + dt * 4.0;
         if flash.fade > 0.0 {
             let t = (flash.life / flash.fade).clamp(0.0, 1.0);
             if let Some(mut material) = materials.get_mut(&mat.0) {
                 material.base_color = Color::srgba(accent[0], accent[1], accent[2], t);
                 material.emissive = LinearRgba::rgb(accent[0] * 8.0 * t, accent[1] * 8.0 * t, accent[2] * 8.0 * t);
             }
+        } else {
+            xf.scale *= 1.0 + dt * 4.0;
         }
         if flash.life <= 0.0 {
             commands.entity(entity).despawn();
@@ -678,9 +681,8 @@ pub fn sync_viewmodel(
     let offset = game.content.hero.viewmodel_offset;
     let tip = gemini_meshes::muzzle_local();
     let accent = game.content.palette.key("accent");
-    // About half the old 0.55 flash, emissive so the viewmodel bloom picks it up.
-    // 3/60 s is three frames at 60 Hz.
-    let life = 3.0 / 60.0;
+    let frames = game.content.hero.muzzle_flash_frames;
+    let life = frames as f32 / 60.0;
     let flash_mat = materials.add(StandardMaterial {
         base_color: Color::srgba(accent[0], accent[1], accent[2], 1.0),
         emissive: LinearRgba::rgb(accent[0] * 8.0, accent[1] * 8.0, accent[2] * 8.0),
@@ -689,9 +691,9 @@ pub fn sync_viewmodel(
         ..default()
     });
     commands.spawn((
-        Mesh3d(bank.flash.clone()),
+        Mesh3d(bank.muzzle.clone()),
         MeshMaterial3d(flash_mat),
-        Transform::from_xyz(offset[0] + tip[0], offset[1] + tip[1], offset[2] + tip[2]).with_scale(Vec3::splat(0.27)),
+        Transform::from_xyz(offset[0] + tip[0], offset[1] + tip[1], offset[2] + tip[2]),
         RenderLayers::layer(1),
         Flash { life, fade: life },
         PlayPiece,
@@ -771,6 +773,15 @@ fn box_at(center: [f32; 3], size: [f32; 3]) -> MeshData {
     mesh
 }
 
+/// Charge 0 at the start of the telegraph, 1 as warn_left hits 0.
+/// A non-positive duration panics.
+fn hatch_fraction(telegraph: f32, warn_left: f32) -> f32 {
+    if telegraph <= 0.0 {
+        panic!("brood_mother hatch_telegraph must be > 0");
+    }
+    (1.0 - warn_left / telegraph).clamp(0.0, 1.0)
+}
+
 fn bevy_ring_box(mesh: &mut MeshData, center: [f32; 3], size: [f32; 3]) {
     let piece = box_at(center, size);
     let base = mesh.positions.len() as u32;
@@ -778,4 +789,23 @@ fn bevy_ring_box(mesh: &mut MeshData, center: [f32; 3], size: [f32; 3]) {
     mesh.normals.extend_from_slice(&piece.normals);
     mesh.colors.extend_from_slice(&piece.colors);
     mesh.indices.extend(piece.indices.iter().map(|i| i + base));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hatch_fraction;
+
+    #[test]
+    fn hatch_charge_follows_the_loaded_telegraph() {
+        let mid = hatch_fraction(1.5, 0.75);
+        assert!((mid - 0.5).abs() < 1e-4, "{mid}");
+        assert!((hatch_fraction(1.5, 1.5) - 0.0).abs() < 1e-4);
+        assert!((hatch_fraction(1.5, 0.0) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    #[should_panic(expected = "hatch_telegraph must be > 0")]
+    fn zero_hatch_telegraph_is_a_hard_failure() {
+        hatch_fraction(0.0, 0.4);
+    }
 }
