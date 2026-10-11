@@ -529,18 +529,40 @@ fn add_legs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, body_hei
     let foot_mesh = Arc::new(segment_mesh(foot_len, radius * 0.7, radius * 0.28, 4));
     // Hips sit on the underside of the body. Feet plant wide of the shell.
     let hip_y = body_height * hip;
-    // Brood and the tyrant plant all six legs around the body, not in two files.
-    let radial = matches!(id, "brood_mother" | "hive_tyrant");
+    let layout = spec.layout.as_str();
+    if layout.is_empty() {
+        return Err(format!("{id} {} is missing layout", spec.name));
+    }
+    let radial = match layout {
+        "radial" => true,
+        "paired" => false,
+        other => return Err(format!("{id} {} layout \"{other}\" is unknown", spec.name)),
+    };
+    let hip_scale = if radial {
+        req(id, &spec.name, "hip_scale", spec.hip_scale)?
+    } else {
+        0.0
+    };
+    let plant_scale = if radial {
+        req(id, &spec.name, "plant_scale", spec.plant_scale)?
+    } else {
+        0.0
+    };
+    let phase = if radial {
+        req(id, &spec.name, "ring_phase", spec.ring_phase)?
+    } else {
+        0.0
+    };
     for i in 0..count {
         let side = if i % 2 == 0 { 1.0 } else { -1.0 };
         let row = i / 2;
         let t = if rows <= 1 { 0.5 } else { row as f32 / (rows as f32 - 1.0) };
         let along = 0.42 - t;
         let (hip, plant) = if radial {
-            let ang = i as f32 / count as f32 * std::f32::consts::TAU + 0.35;
+            let ang = i as f32 / count as f32 * std::f32::consts::TAU + phase;
             (
-                [ang.cos() * ring * 0.95, hip_y, ang.sin() * ring * 0.95],
-                [ang.cos() * ring * 1.55, 0.0, ang.sin() * ring * 1.55],
+                [ang.cos() * ring * hip_scale, hip_y, ang.sin() * ring * hip_scale],
+                [ang.cos() * ring * plant_scale, 0.0, ang.sin() * ring * plant_scale],
             )
         } else {
             (
@@ -1622,6 +1644,15 @@ struct VPart {
     tibia: Option<f32>,
     #[serde(default)]
     foot: Option<f32>,
+    /// "paired" or "radial". Required on a leg; empty fails the sculpt.
+    #[serde(default)]
+    layout: String,
+    /// Radial hip distance, as a fraction of ring_radius.
+    #[serde(default)]
+    hip_scale: Option<f32>,
+    /// Radial foot distance, as a fraction of ring_radius.
+    #[serde(default)]
+    plant_scale: Option<f32>,
     #[serde(default)]
     ring_phase: Option<f32>,
     #[serde(default)]
