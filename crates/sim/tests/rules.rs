@@ -658,6 +658,7 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         bugs: base.bugs,
         crate_reveal: base.crate_reveal,
         coop: base.coop,
+        cosmetics: base.cosmetics,
     })
     .expect_err("missing hatch_fan_step");
     assert!(err.contains("hatch_fan_step"), "{err}");
@@ -684,6 +685,7 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         bugs: base.bugs,
         crate_reveal: base.crate_reveal,
         coop: base.coop,
+        cosmetics: base.cosmetics,
     })
     .expect_err("spawn_radius inside the body");
     assert!(err.contains("spawn_radius"), "{err}");
@@ -883,6 +885,7 @@ fn missing_weakpoint_anchor_fails_content_load() {
             bugs,
             crate_reveal: base.crate_reveal,
             coop: base.coop,
+        cosmetics: base.cosmetics,
         })
     };
 
@@ -1042,6 +1045,7 @@ fn leg_layout_comes_from_bugs() {
         bugs: &bugs,
         crate_reveal: base.crate_reveal,
         coop: base.coop,
+        cosmetics: base.cosmetics,
     })
     .expect_err("missing layout");
     assert!(err.contains("layout"), "{err}");
@@ -1101,6 +1105,7 @@ fn vex_overdrive_comes_from_characters() {
         bugs: base.bugs,
         crate_reveal: base.crate_reveal,
         coop: base.coop,
+        cosmetics: base.cosmetics,
     })
     .expect_err("missing overdrive duration");
     assert!(err.contains("duration"), "{err}");
@@ -1127,6 +1132,7 @@ fn vex_overdrive_comes_from_characters() {
             bugs: base.bugs,
             crate_reveal: base.crate_reveal,
             coop: base.coop,
+        cosmetics: base.cosmetics,
         })
     };
     let text = include_str!("../../../content/characters.toml");
@@ -1269,6 +1275,7 @@ fn arena_01_vents_perches_and_pickups() {
             bugs: base.bugs,
             crate_reveal: base.crate_reveal,
             coop: base.coop,
+        cosmetics: base.cosmetics,
         })
     };
     for key in [
@@ -1456,6 +1463,7 @@ fn sources_with<'a>(base: &'a gemini_sim::content::Sources<'a>, coop: &'a str) -
         bugs: base.bugs,
         crate_reveal: base.crate_reveal,
         coop,
+        cosmetics: base.cosmetics,
     }
 }
 
@@ -1704,4 +1712,52 @@ fn overdrive_is_per_player_and_the_killer_gets_the_refund() {
     let killer = sim.players.iter().find(|player| player.id == mate_id).unwrap();
     assert!((host.ability_cd - ticked).abs() < 1e-3, "assist cd {}", host.ability_cd);
     assert!((killer.ability_cd - refunded).abs() < 1e-3, "killer cd {}", killer.ability_cd);
+}
+
+#[test]
+fn crate_pulls_are_the_only_persistent_power() {
+    let content = Content::embedded();
+    assert_eq!(content.roster, ["vex", "nyra", "brakk", "kip"]);
+    assert!(content.cosmetics.shard_shop);
+    assert_eq!(content.cosmetics.shard_cost.legendary, 600);
+
+    let mut profile = gemini_sim::Profile::new(9);
+    profile.credits = content.banners.cost.single as f32;
+    let pull = profile.pull(&content).expect("one pull");
+    assert!(pull.powered);
+    assert_eq!(pull.rank, 2);
+    assert_eq!(profile.rank, 2);
+    let err = profile.pull(&content).expect_err("a pull needs credits");
+    assert!(err.contains("credits"), "{err}");
+
+    profile.credits = content.banners.cost.single as f32 * 20.0;
+    profile.since_legendary = content.banners.pity.legendary_hard - 1;
+    let forced = profile.pull(&content).unwrap();
+    assert_eq!(forced.rarity, "legendary");
+    assert!(forced.powered);
+    while profile.rank < 6 {
+        profile.credits += content.banners.cost.single as f32;
+        let again = profile.pull(&content).unwrap();
+        assert!(again.powered);
+    }
+    let shards_before = profile.shards;
+    profile.credits += content.banners.cost.single as f32;
+    let past = profile.pull(&content).unwrap();
+    assert!(!past.powered);
+    assert_eq!(past.rank, 6);
+    assert!(past.shards > 0);
+    assert!(profile.shards > shards_before);
+
+    let mut earned = Sim::new(&content, "normal", 3);
+    earned.players[0].upgrades.insert("glass_cannon".into(), 1);
+    earned.apply_persistent_rank(&content, profile.rank);
+    let ranked_hp = earned.players[0].max_hp;
+
+    let mut fresh = Sim::new(&content, "normal", 4);
+    fresh.apply_persistent_rank(&content, profile.rank);
+    assert!(fresh.players[0].upgrades.is_empty(), "run upgrades clear every match");
+    assert_eq!(fresh.duplicate_rank, 6);
+    assert!((fresh.players[0].max_hp - ranked_hp).abs() < 1e-3);
+    let base = Sim::new(&content, "normal", 5);
+    assert!(fresh.players[0].max_hp > base.players[0].max_hp);
 }

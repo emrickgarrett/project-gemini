@@ -30,6 +30,9 @@ pub struct Content {
     pub bugs: crate::bugs::BugBook,
     pub crate_reveal: CrateReveal,
     pub coop: CoopRules,
+    /// `[[hero]]` ids in file order. Only the starter is playable.
+    pub roster: Vec<String>,
+    pub cosmetics: Cosmetics,
 }
 
 pub struct Sources<'a> {
@@ -53,6 +56,7 @@ pub struct Sources<'a> {
     pub bugs: &'a str,
     pub crate_reveal: &'a str,
     pub coop: &'a str,
+    pub cosmetics: &'a str,
 }
 
 pub fn embedded_sources() -> Sources<'static> {
@@ -77,6 +81,7 @@ pub fn embedded_sources() -> Sources<'static> {
         bugs: include_str!("../../../content/bugs.toml"),
         crate_reveal: include_str!("../../../content/crate_reveal.toml"),
         coop: include_str!("../../../content/coop.toml"),
+        cosmetics: include_str!("../../../content/cosmetics.toml"),
     }
 }
 
@@ -107,13 +112,14 @@ impl Content {
             src.bugs,
             src.crate_reveal,
             src.coop,
+            src.cosmetics,
         ]);
         let mut bugs: crate::bugs::BugBook = parse("bugs.toml", src.bugs)?;
         crate::bugs::bind_weak_anchors(&mut bugs).map_err(|err| format!("bugs.toml: {err}"))?;
         crate::bugs::require_leg_layout(&bugs).map_err(|err| format!("bugs.toml: {err}"))?;
         let bosses = load_bosses(src.bosses).map_err(|err| format!("bosses.toml: {err}"))?;
         require_spawn_clearance(&bosses, &bugs).map_err(|err| format!("bosses.toml: {err}"))?;
-        let (hero, guns) = load_characters(src.hero)?;
+        let (hero, guns, roster) = load_characters(src.hero)?;
         let mut weapons = parse::<WeaponFile>("weapons.toml", src.weapons)?;
         weapons.weapon = guns;
         Ok(Self {
@@ -135,6 +141,7 @@ impl Content {
             bosses,
             weapons,
             hero,
+            roster,
             arena: load_arena(src.arena).map_err(|err| format!("arena_01.toml: {err}"))?,
             presentation: parse("presentation.toml", src.presentation)?,
             combat: parse("combat.toml", src.combat)?,
@@ -152,6 +159,7 @@ impl Content {
             bugs,
             crate_reveal: parse("crate_reveal.toml", src.crate_reveal)?,
             coop: load_coop(src.coop).map_err(|err| format!("coop.toml: {err}"))?,
+            cosmetics: load_cosmetics(src.cosmetics).map_err(|err| format!("cosmetics.toml: {err}"))?,
         })
     }
 
@@ -569,6 +577,33 @@ pub struct BannerCost {
     pub ten_pull: u32,
 }
 
+#[derive(Clone, Debug)]
+pub struct Cosmetics {
+    pub dupes: String,
+    pub shard_shop: bool,
+    pub shard_cost: ShardCost,
+}
+
+#[derive(Clone, Debug)]
+pub struct ShardCost {
+    pub common: u32,
+    pub rare: u32,
+    pub epic: u32,
+    pub legendary: u32,
+}
+
+impl Cosmetics {
+    pub fn shards_for(&self, rarity: &str) -> u32 {
+        match rarity {
+            "common" => self.shard_cost.common,
+            "rare" => self.shard_cost.rare,
+            "epic" => self.shard_cost.epic,
+            "legendary" => self.shard_cost.legendary,
+            _ => 0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct DuplicateRanks {
     pub power_per_rank: f32,
@@ -931,7 +966,7 @@ pub struct Hero {
     pub muzzle_flash_radius: f32,
 }
 
-fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>), String> {
+fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>), String> {
     let root: toml::Value = toml::from_str(text).map_err(|err| err.to_string())?;
     let table = root.as_table().ok_or_else(|| "characters.toml is not a table".to_string())?;
     let heroes = table
@@ -950,6 +985,18 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>), String> {
         .get("weapons")
         .and_then(|v| v.as_table())
         .ok_or_else(|| "characters.toml is missing [weapons]".to_string())?;
+    let mut roster = Vec::new();
+    for hero in heroes {
+        let id = hero
+            .get("id")
+            .and_then(|v| v.as_str())
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| "characters.toml [[hero]] is missing id".to_string())?;
+        if roster.iter().any(|have| have == id) {
+            return Err(format!("characters.toml duplicate hero id {id}"));
+        }
+        roster.push(id.to_string());
+    }
     let row = heroes
         .iter()
         .find(|hero| hero.get("id").and_then(|v| v.as_str()) == Some(starter))
@@ -1013,7 +1060,52 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>), String> {
         ));
     }
     parse_accent(&hero.accent)?;
-    Ok((hero, vec![primary, sidearm]))
+    Ok((hero, vec![primary, sidearm], roster))
+}
+
+fn load_cosmetics(text: &str) -> Result<Cosmetics, String> {
+    let root: toml::Value = toml::from_str(text).map_err(|err| err.to_string())?;
+    let table = root.as_table().ok_or_else(|| "cosmetics.toml is not a table".to_string())?;
+    let dupes = table
+        .get("dupes")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "cosmetics.toml is missing dupes".to_string())?;
+    if dupes != "convert_to_cosmetic_shards" {
+        return Err("cosmetics.toml dupes must be convert_to_cosmetic_shards".into());
+    }
+    let shard_shop = table
+        .get("shard_shop")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| "cosmetics.toml shard_shop must be a bool".to_string())?;
+    let cost = table
+        .get("shard_cost")
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| "cosmetics.toml is missing shard_cost".to_string())?;
+    expect_keys(
+        cost,
+        &["common", "rare", "epic", "legendary"],
+        "cosmetics.toml shard_cost",
+    )?;
+    let shard = |key: &str| -> Result<u32, String> {
+        let n = cost
+            .get(key)
+            .and_then(|v| v.as_integer())
+            .ok_or_else(|| format!("cosmetics.toml shard_cost is missing {key}"))?;
+        if n < 0 {
+            return Err(format!("cosmetics.toml shard_cost {key} must be >= 0"));
+        }
+        Ok(n as u32)
+    };
+    Ok(Cosmetics {
+        dupes: dupes.to_string(),
+        shard_shop,
+        shard_cost: ShardCost {
+            common: shard("common")?,
+            rare: shard("rare")?,
+            epic: shard("epic")?,
+            legendary: shard("legendary")?,
+        },
+    })
 }
 
 fn parse_accent(hex: &str) -> Result<(), String> {

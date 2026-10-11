@@ -105,10 +105,21 @@ impl SimClock {
     }
 }
 
-pub fn boot(mut commands: Commands, pending: Res<PendingDifficulty>, mut clock: ResMut<SimClock>, launch: Res<Launch>) {
+/// Crate-pull rank. Survives match start; run upgrades do not.
+#[derive(Resource)]
+pub struct Account(pub gemini_sim::Profile);
+
+pub fn boot(
+    mut commands: Commands,
+    pending: Res<PendingDifficulty>,
+    mut clock: ResMut<SimClock>,
+    launch: Res<Launch>,
+    account: Res<Account>,
+) {
     clock.reset();
     let content = Content::embedded();
-    let sim = Sim::new(&content, &pending.0, 7);
+    let mut sim = Sim::new(&content, &pending.0, 7);
+    sim.apply_persistent_rank(&content, account.0.rank);
     let (sim, token, link) = open_link(&launch, &content, sim);
     let fov = content.controller.camera.fov_default;
     commands.insert_resource(Game {
