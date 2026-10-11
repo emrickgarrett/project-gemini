@@ -107,7 +107,7 @@ fn sculpt(id: &str, row: &Row) -> EnemyVisual {
             }
             "capsule" if spec.chain => add_tail(&mut parts, id, spec, &dens),
             "sphere" | "capsule" | "cone" | "box" => {
-                add_body_part(&mut parts, id, spec, &dens);
+                add_body_part(&mut parts, id, spec, &dens, &row.visual.parts);
             }
             "decal" => add_decal(&mut parts, id, spec, &dens, shell_anchor, shell_size),
             _ => {}
@@ -135,7 +135,9 @@ fn sculpt(id: &str, row: &Row) -> EnemyVisual {
                     add_legs(&mut low_parts, id, spec, &low, row.visual.height);
                 }
                 "capsule" if spec.chain => add_tail(&mut low_parts, id, spec, &low),
-                "sphere" | "capsule" | "cone" | "box" => add_body_part(&mut low_parts, id, spec, &low),
+                "sphere" | "capsule" | "cone" | "box" => {
+                    add_body_part(&mut low_parts, id, spec, &low, &row.visual.parts)
+                }
                 _ => {}
             }
         }
@@ -192,7 +194,7 @@ fn sculpt(id: &str, row: &Row) -> EnemyVisual {
     baked
 }
 
-fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) {
+fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalog: &[VPart]) {
     if spec.name == "pod" {
         add_sac_orbs(parts, id, spec, dens, false);
         return;
@@ -206,7 +208,7 @@ fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) {
         return;
     }
     if spec.name == "cannon" || spec.at.as_deref() == Some("tail_end") {
-        add_cannon(parts, id, spec, dens);
+        add_cannon(parts, id, spec, dens, catalog);
         return;
     }
     let gate = spec.gate();
@@ -425,24 +427,37 @@ fn add_legs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, body_hei
 }
 
 fn add_tail(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) {
-    let count = spec.count.max(1).min(if dens.plates == 0 { 3 } else { 12 });
-    let len = spec.size.get(1).copied().unwrap_or(0.8);
+    if spec.segment_cap == 0 || spec.segment_scale <= 0.0 || spec.joint_span <= 0.0 {
+        return;
+    }
+    let Some(len) = spec.size.get(1).copied() else {
+        return;
+    };
+    let count = spec.count.max(1).min(spec.segment_cap);
     let radius = spec.size.first().copied().unwrap_or(0.3);
-    let mesh = Arc::new(segment_mesh(len * 0.9, radius, radius * 0.78, dens.sides.max(4)));
+    let mesh = Arc::new(segment_mesh(
+        len * spec.segment_scale,
+        radius,
+        radius * 0.78,
+        dens.sides.max(4),
+    ));
     // Limb mesh points along -Y. Positive X rotation swings that toward -Z and then up,
     // so the chain curls over the back instead of pitching forward.
-    // The sim's tail-end anchor uses this pitch (2.05), curl share (0.70), and joint span (0.82).
     let step = spec.curl_deg.to_radians() / count as f32;
-    let base = 2.05_f32;
     let mut parent = None;
     for i in 0..count {
         let idx = parts.len();
-        let pos = if i == 0 { spec.offset } else { [0.0, -len * 0.82, 0.0] };
+        let pos = if i == 0 {
+            spec.offset
+        } else {
+            [0.0, -len * spec.joint_span, 0.0]
+        };
+        let pitch = if i == 0 { spec.base_pitch } else { step * spec.curl_share };
         parts.push(Part {
             name: format!("tail{i}"),
             parent,
             rest_pos: pos,
-            rest_euler: [if i == 0 { base } else { step * 0.70 }, 0.0, 0.0],
+            rest_euler: [pitch, 0.0, 0.0],
             mesh: mesh.clone(),
             palette: spec.color.clone(),
             emissive: false,
@@ -455,30 +470,24 @@ fn add_tail(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) {
     }
 }
 
-fn add_cannon(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) {
+fn add_cannon(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalog: &[VPart]) {
     let parent = parts.iter().rposition(|p| p.name.starts_with("tail"));
+    let tail = catalog.iter().find(|part| part.name == "tail");
+    let tip_gap = tail.map(|part| part.tip_gap).unwrap_or(0.0);
     let size = size3(spec);
     let rad = size[0] * 0.5;
     let mut mesh = gem_mesh([rad, rad, rad * 0.92], dens);
     // Barrel continues along the tail (-Y) and sits clear of the last segment's cap.
     let mut nozzle = cone_z(rad * 1.15, rad * 0.48, dens.sides.max(5));
     geom::rotate_x(&mut nozzle, std::f32::consts::FRAC_PI_2);
-    geom::translate(&mut nozzle, [0.0, -(rad + 0.02), 0.0]);
+    geom::translate(&mut nozzle, [0.0, -(rad + tip_gap), 0.0]);
     geom::append(&mut mesh, &nozzle);
-    let seg_len = parent
-        .map(|i| {
-            parts[i]
-                .mesh
-                .positions
-                .iter()
-                .map(|p| -p[1])
-                .fold(0.0_f32, f32::max)
-        })
-        .unwrap_or(0.4);
-    let pos = if parent.is_some() {
-        [0.0, -(seg_len + rad + 0.02), 0.0]
-    } else {
-        spec.offset
+    let pos = match (parent, tail) {
+        (Some(_), Some(tail)) => {
+            let len = tail.size.get(1).copied().unwrap_or(0.0);
+            [0.0, -(len * tail.segment_scale + rad + tip_gap), 0.0]
+        }
+        _ => spec.offset,
     };
     parts.push(Part {
         name: "cannon".into(),
@@ -1100,6 +1109,18 @@ struct VPart {
     chain: bool,
     #[serde(default)]
     curl_deg: f32,
+    #[serde(default)]
+    base_pitch: f32,
+    #[serde(default)]
+    curl_share: f32,
+    #[serde(default)]
+    joint_span: f32,
+    #[serde(default)]
+    segment_scale: f32,
+    #[serde(default)]
+    tip_gap: f32,
+    #[serde(default)]
+    segment_cap: u32,
     #[serde(default)]
     at: Option<String>,
     #[serde(default)]

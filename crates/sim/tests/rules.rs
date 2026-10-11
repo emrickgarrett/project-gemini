@@ -504,7 +504,7 @@ fn spitter_sac_pop_cancels_charge_same_tick() {
     spit.vel.y = 1.0;
     spit.weak_mult = content.bug(EnemyKind::Spitter).hitbox.weak().unwrap().mult;
     let book = content.bug(EnemyKind::Spitter);
-    let sac = gemini_sim::bugs::resolved_offset(&book.visual, book.hitbox.weak().unwrap(), "sac");
+    let sac = book.hitbox.weak().unwrap().offset;
     sim.enemies.push(spit);
     sim.projectiles.push(coil(
         Vec3::new(sac[0], sac[1], sac[2] - 1.5),
@@ -558,7 +558,7 @@ fn brute_shell_and_hive_tail_follow_the_table() {
 
     sim.enemies[0].hp = 500.0;
     let book = content.bug(EnemyKind::Brute);
-    let cracks = gemini_sim::bugs::resolved_offset(&book.visual, book.hitbox.weak().unwrap(), "cracks");
+    let cracks = book.hitbox.weak().unwrap().offset;
     sim.projectiles.push(coil(
         Vec3::new(cracks[0], cracks[1] + 2.2, cracks[2]),
         Vec3::new(0.0, -140.0, 0.0),
@@ -575,7 +575,7 @@ fn brute_shell_and_hive_tail_follow_the_table() {
     hive.phase = 0;
     let book = content.bug(EnemyKind::HiveTyrant);
     let cannon = book.hitbox.cannon.as_ref().expect("hive cannon");
-    let tail = gemini_sim::bugs::resolved_offset(&book.visual, cannon, "cannon");
+    let tail = cannon.offset;
     sim.enemies.push(hive);
     sim.projectiles.push(coil(
         Vec3::new(tail[0] - 2.0, tail[1], tail[2]),
@@ -598,70 +598,74 @@ fn brute_shell_and_hive_tail_follow_the_table() {
 
 #[test]
 fn weakpoint_hitboxes_overlap_their_glowing_parts() {
-    use gemini_sim::bugs::{glow_bounds, hit_bounds, place_shape, resolved_offset};
+    use gemini_sim::bugs::{glow_bounds, hit_bounds, visual_anchor};
     use gemini_sim::content::EnemyKind;
     let content = Content::embedded();
     let brood = &content.bug(EnemyKind::BroodMother).visual;
     assert_eq!(brood.bud_color, "brood_sac");
     assert_eq!(brood.grown_color, "swarmer_glow");
 
-    let cases = [
-        (EnemyKind::Swarmer, "abdomen"),
-        (EnemyKind::Spitter, "sac"),
-        (EnemyKind::Brute, "cracks"),
-        (EnemyKind::BroodMother, "gland"),
-        (EnemyKind::HiveTyrant, "core"),
-        (EnemyKind::HiveTyrant, "cannon"),
-    ];
-    for (kind, name) in cases {
-        let book = content.bug(kind);
-        let shape = match name {
-            "core" => book.hitbox.core.as_ref().expect("core"),
-            "cannon" => book.hitbox.cannon.as_ref().expect("cannon"),
-            _ => book.hitbox.weakpoint.as_ref().expect(name),
-        };
-        let part = book
-            .visual
-            .parts
-            .iter()
-            .find(|part| part.name == name)
-            .unwrap_or_else(|| panic!("{name} missing from the visual table"));
-        let glow = glow_bounds(&book.visual, name).unwrap_or_else(|| panic!("{name} has no glowing volume"));
-        let hit = hit_bounds(&book.visual, shape, name);
-        assert!(
-            hit.overlaps(glow),
-            "{name} hitbox {hit:?} does not overlap its glowing part {glow:?}"
-        );
-        let center = resolved_offset(&book.visual, shape, name);
-        if part.offset != [0.0, 0.0, 0.0] {
-            assert_eq!(center, part.offset, "{name} must sit on the part's anchor, not the gameplay offset");
-        } else if let Some(host_name) = &part.on {
-            let host = book
-                .visual
-                .parts
-                .iter()
-                .find(|part| part.name == *host_name)
-                .unwrap_or_else(|| panic!("{name} host {host_name} missing"));
-            let crown = host.offset[1] + host.size[1] * 0.5;
-            assert!((center[0] - host.offset[0]).abs() < 1e-3 && (center[2] - host.offset[2]).abs() < 1e-3);
-            assert!((center[1] - crown).abs() < 1e-3, "{name} must sit on {host_name}'s crown, got {center:?}");
-        } else if part.at.as_deref() == Some("tail_end") {
-            let tail = book.visual.parts.iter().find(|part| part.name == "tail").expect("tail");
-            assert!(center != shape.offset, "cannon must leave the gameplay fallback");
-            assert!(center[1] > tail.offset[1] + 1.0, "cannon must clear the tail root, got {center:?}");
+    let mut saw = 0;
+    for (bug, row) in content.bugs.rows() {
+        for (slot, shape) in row.hitbox.anchored() {
+            saw += 1;
+            let name = shape.anchor.as_str();
+            let anchor = visual_anchor(&row.visual, name)
+                .unwrap_or_else(|| panic!("{bug} {slot} anchor {name:?} did not resolve after load"));
+            assert_eq!(
+                shape.offset, anchor,
+                "{bug} {slot} was not baked from its visual anchor"
+            );
+            let glow = glow_bounds(&row.visual, name)
+                .unwrap_or_else(|| panic!("{bug} {slot} anchor {name} has no glowing volume"));
+            let hit = hit_bounds(shape);
+            assert!(
+                hit.overlaps(glow),
+                "{bug} {slot} hitbox {hit:?} does not overlap its glowing part {glow:?}"
+            );
+            if let Some(part) = row.visual.parts.iter().find(|part| part.name == name) {
+                if let Some(phase) = part.phase_max {
+                    assert_eq!(shape.active_phase, phase, "{bug} {slot} phase");
+                }
+            }
         }
     }
+    assert!(saw >= 6, "expected every glowing weak point, saw {saw}");
+}
 
-    let hive = content.bug(EnemyKind::HiveTyrant);
-    let cannon = place_shape(&hive.visual, hive.hitbox.cannon.as_ref().unwrap(), "cannon");
-    assert_eq!(cannon.active_phase, 1, "the cannon follows the visual part's phase");
+#[test]
+fn missing_weakpoint_anchor_fails_content_load() {
+    let base = gemini_sim::content::embedded_sources();
+    let bugs = include_str!("../../../content/bugs.toml");
+    let load = |bugs: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            waves: base.waves,
+            difficulty: base.difficulty,
+            controller: base.controller,
+            run_upgrades: base.run_upgrades,
+            endless: base.endless,
+            currency: base.currency,
+            banners: base.banners,
+            duplicate_ranks: base.duplicate_ranks,
+            bosses: base.bosses,
+            weapons: base.weapons,
+            hero: base.hero,
+            arena: base.arena,
+            presentation: base.presentation,
+            combat: base.combat,
+            palette: base.palette,
+            music: base.music,
+            audio: base.audio,
+            bugs,
+        })
+    };
 
-    let mut unnamed = hive.hitbox.core.clone().unwrap();
-    unnamed.anchor.clear();
-    unnamed.name.clear();
-    assert_eq!(
-        resolved_offset(&hive.visual, &unnamed, ""),
-        unnamed.offset,
-        "a hit shape with no named part keeps its offset"
-    );
+    let misspelled = bugs.replacen("name = \"abdomen\"", "name = \"abdomenn\"", 1);
+    let err = load(&misspelled).expect_err("a misspelled anchor must fail load");
+    assert!(err.contains("abdomenn"), "{err}");
+    assert!(err.contains("does not resolve"), "{err}");
+
+    let missing = bugs.replacen("name = \"abdomen\"", "name = \"\"", 1);
+    let err = load(&missing).expect_err("a weak point with no name must fail load");
+    assert!(err.contains("no anchor name"), "{err}");
 }

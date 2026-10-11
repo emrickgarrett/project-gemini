@@ -1864,29 +1864,24 @@ fn gather_enemy_hits(
                 *best = Some((t, spot));
             }
         };
-        let body = crate::bugs::place_shape(&book.visual, &book.hitbox.body, "");
-        if let Some(t) = shape_hit(&body, enemy, p0, p1, projectile.radius, 1.0) {
+        if let Some(t) = shape_hit(&book.hitbox.body, enemy, p0, p1, projectile.radius, 1.0) {
             consider(&mut best, t, HitSpot::Body);
         }
         if let Some(cannon) = &book.hitbox.cannon {
-            let cannon = crate::bugs::place_shape(&book.visual, cannon, "cannon");
             if crate::bugs::phase_allows(cannon.active_phase, enemy.phase) {
-                if let Some(t) = shape_hit(&cannon, enemy, p0, p1, projectile.radius, 1.0) {
+                if let Some(t) = shape_hit(cannon, enemy, p0, p1, projectile.radius, 1.0) {
                     consider(&mut best, t, HitSpot::Body);
                 }
             }
         }
         if let Some(tail) = &book.hitbox.tail {
-            let tail = crate::bugs::place_shape(&book.visual, tail, "tail");
             if crate::bugs::phase_allows(tail.active_phase, enemy.phase) {
-                if let Some(t) = shape_hit(&tail, enemy, p0, p1, projectile.radius, 1.0) {
+                if let Some(t) = shape_hit(tail, enemy, p0, p1, projectile.radius, 1.0) {
                     consider(&mut best, t, HitSpot::Body);
                 }
             }
         }
         if let Some(weak) = book.hitbox.weak() {
-            let implicit = if book.hitbox.weakpoint.is_some() { "" } else { "core" };
-            let weak = crate::bugs::place_shape(&book.visual, weak, implicit);
             let gated = weak.active_only_when == "vulnerable" && !enemy.weak_exposed;
             if !gated && crate::bugs::phase_allows(weak.active_phase, enemy.phase) {
                 let grow = if charging && weak.grows_during_charge > 1.0 {
@@ -2022,9 +2017,7 @@ fn weak_world(content: &Content, enemy: &Enemy) -> Vec3 {
     let Some(shape) = book.hitbox.weak() else {
         return enemy.pos;
     };
-    let implicit = if book.hitbox.weakpoint.is_some() { "" } else { "core" };
-    let placed = crate::bugs::place_shape(&book.visual, shape, implicit);
-    enemy.pos + rotate_y(enemy.yaw, placed.offset_vec())
+    enemy.pos + rotate_y(enemy.yaw, shape.offset_vec())
 }
 
 fn pod_world(content: &Content, enemy: &Enemy, index: usize) -> Vec3 {

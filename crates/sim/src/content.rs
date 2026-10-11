@@ -30,53 +30,56 @@ pub struct Content {
     pub bugs: crate::bugs::BugBook,
 }
 
-pub struct Sources {
-    pub waves: &'static str,
-    pub difficulty: &'static str,
-    pub controller: &'static str,
-    pub run_upgrades: &'static str,
-    pub endless: &'static str,
-    pub currency: &'static str,
-    pub banners: &'static str,
-    pub duplicate_ranks: &'static str,
-    pub bosses: &'static str,
-    pub weapons: &'static str,
-    pub hero: &'static str,
-    pub arena: &'static str,
-    pub presentation: &'static str,
-    pub combat: &'static str,
-    pub palette: &'static str,
-    pub music: &'static str,
-    pub audio: &'static str,
-    pub bugs: &'static str,
+pub struct Sources<'a> {
+    pub waves: &'a str,
+    pub difficulty: &'a str,
+    pub controller: &'a str,
+    pub run_upgrades: &'a str,
+    pub endless: &'a str,
+    pub currency: &'a str,
+    pub banners: &'a str,
+    pub duplicate_ranks: &'a str,
+    pub bosses: &'a str,
+    pub weapons: &'a str,
+    pub hero: &'a str,
+    pub arena: &'a str,
+    pub presentation: &'a str,
+    pub combat: &'a str,
+    pub palette: &'a str,
+    pub music: &'a str,
+    pub audio: &'a str,
+    pub bugs: &'a str,
+}
+
+pub fn embedded_sources() -> Sources<'static> {
+    Sources {
+        waves: include_str!("../../../content/waves.toml"),
+        difficulty: include_str!("../../../content/difficulty.toml"),
+        controller: include_str!("../../../content/controller.toml"),
+        run_upgrades: include_str!("../../../content/run_upgrades.toml"),
+        endless: include_str!("../../../content/endless.toml"),
+        currency: include_str!("../../../content/currency.toml"),
+        banners: include_str!("../../../content/banners.toml"),
+        duplicate_ranks: include_str!("../../../content/duplicate_ranks.toml"),
+        bosses: include_str!("../../../content/bosses.toml"),
+        weapons: include_str!("../../../content/weapons.toml"),
+        hero: include_str!("../../../content/hero.toml"),
+        arena: include_str!("../../../content/arena.toml"),
+        presentation: include_str!("../../../content/presentation.toml"),
+        combat: include_str!("../../../content/combat.toml"),
+        palette: include_str!("../../../content/palette.toml"),
+        music: include_str!("../../../content/music.toml"),
+        audio: include_str!("../../../content/audio.toml"),
+        bugs: include_str!("../../../content/bugs.toml"),
+    }
 }
 
 impl Content {
     pub fn embedded() -> Self {
-        Self::parse(&Sources {
-            waves: include_str!("../../../content/waves.toml"),
-            difficulty: include_str!("../../../content/difficulty.toml"),
-            controller: include_str!("../../../content/controller.toml"),
-            run_upgrades: include_str!("../../../content/run_upgrades.toml"),
-            endless: include_str!("../../../content/endless.toml"),
-            currency: include_str!("../../../content/currency.toml"),
-            banners: include_str!("../../../content/banners.toml"),
-            duplicate_ranks: include_str!("../../../content/duplicate_ranks.toml"),
-            bosses: include_str!("../../../content/bosses.toml"),
-            weapons: include_str!("../../../content/weapons.toml"),
-            hero: include_str!("../../../content/hero.toml"),
-            arena: include_str!("../../../content/arena.toml"),
-            presentation: include_str!("../../../content/presentation.toml"),
-            combat: include_str!("../../../content/combat.toml"),
-            palette: include_str!("../../../content/palette.toml"),
-            music: include_str!("../../../content/music.toml"),
-            audio: include_str!("../../../content/audio.toml"),
-            bugs: include_str!("../../../content/bugs.toml"),
-        })
-        .expect("embedded content tables")
+        Self::parse(&embedded_sources()).expect("embedded content tables")
     }
 
-    pub fn parse(src: &Sources) -> Result<Self, String> {
+    pub fn parse(src: &Sources<'_>) -> Result<Self, String> {
         let fingerprint = fnv_cat(&[
             src.waves,
             src.difficulty,
@@ -97,6 +100,8 @@ impl Content {
             src.audio,
             src.bugs,
         ]);
+        let mut bugs: crate::bugs::BugBook = parse("bugs.toml", src.bugs)?;
+        crate::bugs::bind_weak_anchors(&mut bugs).map_err(|err| format!("bugs.toml: {err}"))?;
         Ok(Self {
             fingerprint,
             waves: parse("waves.toml", src.waves)?,
@@ -116,7 +121,7 @@ impl Content {
             palette: parse("palette.toml", src.palette)?,
             music: parse("music.toml", src.music)?,
             audio: parse("audio.toml", src.audio)?,
-            bugs: parse("bugs.toml", src.bugs)?,
+            bugs,
         })
     }
 
@@ -921,13 +926,10 @@ pub fn currency_reward(
 }
 
 pub fn weakpoint_of(content: &Content, kind: EnemyKind) -> Weakpoint {
-    let book = content.bug(kind);
-    let shape = book.hitbox.weak().expect("bug weak volume");
-    let implicit = if book.hitbox.weakpoint.is_some() { "" } else { "core" };
-    let placed = crate::bugs::place_shape(&book.visual, shape, implicit);
+    let shape = content.bug(kind).hitbox.weak().expect("bug weak volume");
     Weakpoint {
-        offset: placed.offset,
-        radius: placed.bounding_radius().max(placed.radius),
+        offset: shape.offset,
+        radius: shape.bounding_radius().max(shape.radius),
     }
 }
 

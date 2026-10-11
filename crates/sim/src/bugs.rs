@@ -1,7 +1,7 @@
 //! Designer bug volumes and the art-lead visual guide.
-//! Weak-point centers come from the named part in `visual`. Size and the
-//! damage multiplier stay on `hitbox`; its offset is the fallback. The mesh
-//! crate is not consulted.
+//! Weak-point centers are the named part in `visual`. Loading fails when that
+//! name is missing or does not resolve. Size and the damage multiplier stay
+//! on `hitbox`. The mesh crate is not consulted.
 
 use serde::Deserialize;
 
@@ -27,6 +27,26 @@ impl BugBook {
             EnemyKind::BroodMother => &self.brood_mother,
             EnemyKind::HiveTyrant => &self.hive_tyrant,
         }
+    }
+
+    pub fn rows(&self) -> [(&str, &BugRow); 5] {
+        [
+            ("swarmer", &self.swarmer),
+            ("spitter", &self.spitter),
+            ("brute", &self.brute),
+            ("brood_mother", &self.brood_mother),
+            ("hive_tyrant", &self.hive_tyrant),
+        ]
+    }
+
+    fn rows_mut(&mut self) -> [(&str, &mut BugRow); 5] {
+        [
+            ("swarmer", &mut self.swarmer),
+            ("spitter", &mut self.spitter),
+            ("brute", &mut self.brute),
+            ("brood_mother", &mut self.brood_mother),
+            ("hive_tyrant", &mut self.hive_tyrant),
+        ]
     }
 }
 
@@ -89,6 +109,24 @@ pub struct VisualPart {
     pub chain: bool,
     #[serde(default)]
     pub curl_deg: f32,
+    /// Rest pitch of the first tail segment, radians.
+    #[serde(default)]
+    pub base_pitch: f32,
+    /// Share of `curl_deg / count` applied as pitch on each later segment.
+    #[serde(default)]
+    pub curl_share: f32,
+    /// Child joint, as a fraction of the segment length along local -Y.
+    #[serde(default)]
+    pub joint_span: f32,
+    /// Sculpted segment length, as a fraction of the authored length.
+    #[serde(default)]
+    pub segment_scale: f32,
+    /// Gap between the last segment tip and the cannon gem.
+    #[serde(default)]
+    pub tip_gap: f32,
+    /// Shared segment count cap. Zero means the chain is not authored.
+    #[serde(default)]
+    pub segment_cap: u32,
     #[serde(default)]
     pub at: Option<String>,
 }
@@ -156,6 +194,60 @@ impl BugHitbox {
     pub fn pod_radius(&self) -> f32 {
         self.pod.as_ref().map(|p| p.radius).unwrap_or(0.35)
     }
+
+    /// Weak volumes whose centers must come from a visual part.
+    pub fn anchored(&self) -> Vec<(&str, &ShapeDef)> {
+        let mut slots = Vec::new();
+        for (slot, shape) in [
+            ("weakpoint", self.weakpoint.as_ref()),
+            ("core", self.core.as_ref()),
+            ("cannon", self.cannon.as_ref()),
+            ("tail", self.tail.as_ref()),
+        ] {
+            if let Some(shape) = shape {
+                slots.push((slot, shape));
+            }
+        }
+        slots
+    }
+}
+
+/// Bake every weak-point center from its visual anchor. A missing or unknown
+/// name is a content error; the authored offset is not a fallback.
+pub fn bind_weak_anchors(book: &mut BugBook) -> Result<(), String> {
+    for (bug, row) in book.rows_mut() {
+        bind_row(bug, row)?;
+    }
+    Ok(())
+}
+
+fn bind_row(bug: &str, row: &mut BugRow) -> Result<(), String> {
+    let BugRow { visual, hitbox, audio: _ } = row;
+    bind_slot(bug, "weakpoint", visual, &mut hitbox.weakpoint)?;
+    bind_slot(bug, "core", visual, &mut hitbox.core)?;
+    bind_slot(bug, "cannon", visual, &mut hitbox.cannon)?;
+    bind_slot(bug, "tail", visual, &mut hitbox.tail)?;
+    Ok(())
+}
+
+fn bind_slot(bug: &str, slot: &str, visual: &BugVisual, shape: &mut Option<ShapeDef>) -> Result<(), String> {
+    let Some(shape) = shape.as_mut() else {
+        return Ok(());
+    };
+    let offset = resolved_offset(visual, shape).map_err(|err| format!("{bug} {slot} {err}"))?;
+    if shape.anchor.is_empty() {
+        shape.anchor.clone_from(&shape.name);
+    }
+    if shape.name.is_empty() {
+        shape.name.clone_from(&shape.anchor);
+    }
+    shape.offset = offset;
+    if shape.active_phase == 0 {
+        if let Some(phase) = part_named(visual, &shape.anchor).and_then(|part| part.phase_max) {
+            shape.active_phase = phase;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -177,7 +269,8 @@ pub struct ShapeDef {
     pub half_extents: [f32; 3],
     #[serde(default)]
     pub offset: [f32; 3],
-    /// Visual part whose anchor supplies the center. Empty keeps `offset`.
+    /// Visual part whose anchor supplies the center. Empty falls through to `name`.
+    /// A weak point with neither, or with a name that is not a visual part, fails load.
     #[serde(default)]
     pub anchor: String,
     #[serde(default)]
@@ -262,13 +355,13 @@ pub fn part_named<'a>(visual: &'a BugVisual, name: &str) -> Option<&'a VisualPar
     visual.parts.iter().find(|part| part.name == name)
 }
 
-fn part_key<'a>(shape: &'a ShapeDef, implicit: &'a str) -> &'a str {
+fn anchor_name(shape: &ShapeDef) -> Option<&str> {
     if !shape.anchor.is_empty() {
-        shape.anchor.as_str()
+        Some(shape.anchor.as_str())
     } else if !shape.name.is_empty() {
-        shape.name.as_str()
+        Some(shape.name.as_str())
     } else {
-        implicit
+        None
     }
 }
 
@@ -290,28 +383,12 @@ pub fn visual_anchor(visual: &BugVisual, name: &str) -> Option<[f32; 3]> {
     None
 }
 
-/// Hit center: the named part's anchor, or the gameplay offset when that part has none.
-pub fn resolved_offset(visual: &BugVisual, shape: &ShapeDef, implicit: &str) -> [f32; 3] {
-    let name = part_key(shape, implicit);
-    if !name.is_empty() {
-        if let Some(anchor) = visual_anchor(visual, name) {
-            return anchor;
-        }
-    }
-    shape.offset
-}
-
-/// Copy of `shape` with its center (and, when unset, its phase) taken from the visual part.
-pub fn place_shape(visual: &BugVisual, shape: &ShapeDef, implicit: &str) -> ShapeDef {
-    let mut placed = shape.clone();
-    placed.offset = resolved_offset(visual, shape, implicit);
-    if placed.active_phase == 0 {
-        let name = part_key(shape, implicit);
-        if let Some(phase) = part_named(visual, name).and_then(|part| part.phase_max) {
-            placed.active_phase = phase;
-        }
-    }
-    placed
+/// Hit center of a weak point. A missing or unknown anchor name is an error.
+pub fn resolved_offset(visual: &BugVisual, shape: &ShapeDef) -> Result<[f32; 3], String> {
+    let Some(name) = anchor_name(shape) else {
+        return Err("weak point has no anchor name".into());
+    };
+    visual_anchor(visual, name).ok_or_else(|| format!("anchor \"{name}\" does not resolve to a visual part"))
 }
 
 /// Volume of the glowing part named in the visual table.
@@ -331,15 +408,14 @@ pub fn glow_bounds(visual: &BugVisual, name: &str) -> Option<PartBounds> {
     Some(bounds_at(center, half))
 }
 
-/// Volume of a hit shape after its center is resolved from the visual anchor.
-pub fn hit_bounds(visual: &BugVisual, shape: &ShapeDef, implicit: &str) -> PartBounds {
-    let placed = place_shape(visual, shape, implicit);
-    let half = match placed.shape.as_str() {
-        "box" => placed.half_extents,
-        "capsule" => [placed.radius, placed.height * 0.5, placed.radius],
-        _ => [placed.radius, placed.radius, placed.radius],
+/// Volume of a hit shape. Weak points already carry the anchor baked at load.
+pub fn hit_bounds(shape: &ShapeDef) -> PartBounds {
+    let half = match shape.shape.as_str() {
+        "box" => shape.half_extents,
+        "capsule" => [shape.radius, shape.height * 0.5, shape.radius],
+        _ => [shape.radius, shape.radius, shape.radius],
     };
-    bounds_at(placed.offset, half)
+    bounds_at(shape.offset, half)
 }
 
 fn bounds_at(center: [f32; 3], half: [f32; 3]) -> PartBounds {
@@ -359,31 +435,32 @@ fn size_extents(size: &[f32]) -> [f32; 3] {
     }
 }
 
-/// Cannon center for `at = "tail_end"`. The chain is read from the tail part:
-/// the limb points along local -Y, the first pitch swings it over the back,
-/// and `curl_deg` is shared across `count` segments.
+/// Cannon center for `at = "tail_end"`. Pitch, joint, segment length, gap, and
+/// the segment cap are the tail part's fields. A chain with no cap, scale, or
+/// joint is not an anchor.
 fn tail_end(visual: &BugVisual, cannon: &VisualPart) -> Option<[f32; 3]> {
     let tail = part_named(visual, "tail")?;
-    let count = tail.count.max(1);
-    let len = tail.size.get(1).copied().unwrap_or(0.8);
+    if tail.segment_cap == 0 || tail.segment_scale <= 0.0 || tail.joint_span <= 0.0 {
+        return None;
+    }
+    let len = tail.size.get(1).copied()?;
+    let count = tail.count.max(1).min(tail.segment_cap);
     let step = tail.curl_deg.to_radians() / count as f32;
-    // Chain convention shared with the sculpt. These are not mesh imports.
-    const BASE_PITCH: f32 = 2.05;
-    const CURL_SHARE: f32 = 0.70;
-    const JOINT: f32 = 0.82;
-    const SEGMENT: f32 = 0.90;
-    const GAP: f32 = 0.02;
 
     let mut pos = [0.0_f32, 0.0, 0.0];
     let mut rot = [0.0_f32, 0.0, 0.0, 1.0];
     for i in 0..count {
-        let local_pos = if i == 0 { tail.offset } else { [0.0, -len * JOINT, 0.0] };
-        let pitch = if i == 0 { BASE_PITCH } else { step * CURL_SHARE };
+        let local_pos = if i == 0 {
+            tail.offset
+        } else {
+            [0.0, -len * tail.joint_span, 0.0]
+        };
+        let pitch = if i == 0 { tail.base_pitch } else { step * tail.curl_share };
         pos = add3(pos, rotate_q(rot, local_pos));
         rot = quat_mul(rot, quat_x(pitch));
     }
     let gem_r = cannon.size.first().copied().unwrap_or(0.7) * 0.5;
-    let along = [0.0, -(len * SEGMENT + gem_r + GAP), 0.0];
+    let along = [0.0, -(len * tail.segment_scale + gem_r + tail.tip_gap), 0.0];
     Some(add3(pos, rotate_q(rot, along)))
 }
 

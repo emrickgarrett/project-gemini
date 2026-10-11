@@ -4,9 +4,10 @@
 # `audio` names the events. Mix levels live in audio.toml, not in code.
 #
 # Design "phase 1" is the first phase (sim phase index 0, above the first
-# threshold). Weak-point centers come from the named visual part. The offset
-# on a hitbox is only the fallback when that part has no anchor. The hive
-# cannon follows the visual part named "cannon" (phase_max = 1).
+# threshold). A weak-point hitbox names a visual part (`anchor`, or `name`
+# when `anchor` is empty). Loading fails when that name is missing or does
+# not resolve. The hive cannon follows the visual part named "cannon"
+# (phase_max = 1). The tail entry owns the chain pitch, joint, and segment cap.
 
 [feedback]
 weakpoint_hit = "weakpoint_hit"
@@ -124,7 +125,7 @@ parts = [
   { name="head",    shape="cone",    size=[0.6,1.0], offset=[0,5.2,0.9], color="brute_amber" },
   { name="crown",   shape="cone",    size=[0.15,0.8], count=6, on="head", color="brute_amber" },
   { name="scythe",  shape="cone",    size=[0.3,2.8], offset=[1.6,3.8,1.4], tilt_deg=70, color="brute_amber", mirror=true },
-  { name="tail",    shape="capsule", size=[0.4,1.0], count=7, chain=true, offset=[0,2.0,-1.5], curl_deg=200, color="brute_amber" },
+  { name="tail",    shape="capsule", size=[0.4,1.0], count=7, chain=true, offset=[0,2.0,-1.5], curl_deg=200, base_pitch=2.05, curl_share=0.70, joint_span=0.82, segment_scale=0.90, tip_gap=0.02, segment_cap=12, color="brute_amber" },
   { name="cannon",  shape="sphere",  size=[0.7,0.7,0.7], at="tail_end", color="spitter_glow", emissive=true, phase_max=1 },
   { name="veins",   shape="decal",   on="legs", color="swarmer_glow", emissive=true, pulse_phase=2 },
   { name="leg",     shape="capsule", size=[0.35,2.4], count=6, ring_radius=2.2, color="brute_amber" },
@@ -133,7 +134,7 @@ anim = { bob=[0.1, 0.6], leg_swing=12, gait="alternate", frenzy_speed=1.4, phase
 
 [hive_tyrant.hitbox]
 body = { shape = "capsule", radius = 2.0, height = 5.0, offset = [0, 2.5, 0] }
-core = { shape = "sphere", radius = 0.7, offset = [0, 3.0, 1.2] }
+core = { shape = "sphere", radius = 0.7, offset = [0, 3.0, 1.2], anchor = "core" }
 cannon = { shape = "sphere", radius = 0.6, anchor = "cannon" }
 
 [hive_tyrant.audio]
