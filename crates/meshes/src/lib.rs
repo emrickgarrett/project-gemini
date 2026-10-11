@@ -7,7 +7,7 @@ mod preview;
 mod reveal_still;
 mod visual;
 
-pub use reveal_still::paint_reveal;
+pub use reveal_still::{paint_reveal, reveal_still_is_flat, still_color_stats};
 
 pub use pose::{pose, AnimInput, Pose, Xform};
 pub use preview::{
