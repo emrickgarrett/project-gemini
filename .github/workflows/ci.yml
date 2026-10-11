@@ -1,0 +1,25 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+          targets: wasm32-unknown-unknown
+      - name: native client libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libwayland-dev libxkbcommon-dev libvulkan-dev libasound2-dev libudev-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev
+      - name: tests
+        run: cargo test --workspace
+      - name: wasm webgl2
+        run: cargo build -p gemini-client --target wasm32-unknown-unknown --profile wasm-release
+      - name: wasm webgpu
+        run: cargo build -p gemini-client --target wasm32-unknown-unknown --profile wasm-release --features webgpu

@@ -1,0 +1,50 @@
+# Wave budget: base * (1 + 0.25*(w-1)) * 1.03^(w-1) * (1 + 0.6*(players-1)), players re-read at wave start
+[budget]
+base = 20
+linear = 0.25
+compound = 1.03
+per_extra_player = 0.6
+live_enemy_cap = 300          # brood-mother spawns count
+queue_cap_waves = 1.0         # leftover budget carries max 1 wave's budget
+breather_seconds = 20
+upgrade_choices = 3
+boss_hp_per_extra_player = 0.75   # boss hp * (1 + 0.75*(players-1)) at spawn; 6.25x at 8 players
+
+[enemies]
+swarmer = { cost = 1, hp = 30,  dmg = 5,  speed = 7.0 }
+spitter = { cost = 3, hp = 90,  dmg = 15, speed = 4.0, range = 25 }
+brute   = { cost = 8, hp = 400, dmg = 30, speed = 3.0, weakpoint_mult = 2.5 }
+
+# wave, unlocked types, mix weights (swarmer/spitter/brute), boss
+[[wave]] 
+n=1 
+mix=[1.0,0.0,0.0]
+[[wave]] 
+n=2 
+mix=[0.85,0.15,0.0]
+[[wave]] 
+n=3 
+mix=[0.7,0.3,0.0]
+[[wave]] 
+n=4 
+mix=[0.6,0.3,0.1]
+[[wave]] 
+n=5 
+mix=[0.7,0.3,0.0]
+boss="brood_mother"   # hp 4000, spawns 6 swarmers / 8s
+[[wave]] 
+n=6 
+mix=[0.55,0.3,0.15]
+[[wave]] 
+n=7 
+mix=[0.5,0.3,0.2]
+[[wave]] 
+n=8 
+mix=[0.45,0.35,0.2]
+[[wave]] 
+n=9 
+mix=[0.4,0.35,0.25]
+[[wave]] 
+n=10 
+mix=[0.5,0.3,0.2]
+boss="hive_tyrant"    # hp 12000, 3 phases at 66%/33%; match ends or continues to endless

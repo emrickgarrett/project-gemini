@@ -1,0 +1,32 @@
+# Boss bodies referenced by waves.toml `boss` ids.
+# HP, brood spawn count, and hive phase splits are the numbers from the
+# waves.toml comments (comments are not data, so they live here).
+
+[[boss]]
+id = "brood_mother"
+hp = 4000
+speed = 2.4
+dmg = 28
+range = 3.5
+spawn_kind = "swarmer"
+spawn_count = 6
+spawn_interval = 8.0
+weakpoint_mult = 2.0
+# Pod hitboxes live in bugs.toml. This is their HP; the mesh does not own it.
+pod_count = 6
+pod_hp = 100
+
+[[boss]]
+id = "hive_tyrant"
+hp = 12000
+speed = 3.0
+dmg = 24
+range = 24.0
+spawn_kind = "spitter"
+spawn_count = 2
+spawn_interval = 9.0
+weakpoint_mult = 2.0
+# Phase index advances when hp/max drops through these fractions.
+phase_thresholds = [0.66, 0.33]
+phase_speed_mult = [1.0, 1.28, 1.65]
+phase_dmg_mult = [1.0, 1.25, 1.55]

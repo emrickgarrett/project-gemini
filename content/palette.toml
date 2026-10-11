@@ -1,0 +1,47 @@
+# Art-lead palette. Read these in the client; do not duplicate the hex values in code.
+
+[hero]
+teal = "#1FB5A8"
+cobalt = "#1E40AF"
+white = "#F2F2F2"
+accent = "#F97316"
+
+[shots]
+player = "#2DE1D0"
+
+[swarmer]
+shell = "#C67A2E"
+glow = "#7CFF3A"
+
+[spitter]
+carapace = "#4A3540"
+glow = "#FF2BD6"
+
+[brute]
+shell = "#C67A2E"
+cracks = "#FF2BD6"
+
+[arena]
+rock_dark = "#6E6478"
+rock_light = "#8A8296"
+
+[rarity]
+common = "#C0C7D0"
+rare = "#3B82F6"
+epic = "#A855F7"
+legendary = "#FACC15"
+
+[bugs]
+acid = "#7CFF3A"
+amber = "#C67A2E"
+magenta = "#FF2BD6"
+
+# Flat keys the bug visual table addresses by name.
+[keys]
+swarmer_amber = "#C67A2E"
+swarmer_glow = "#7CFF3A"
+spitter_carapace = "#4A3540"
+spitter_glow = "#FF2BD6"
+brute_amber = "#C67A2E"
+brute_cracks = "#FF2BD6"
+brood_sac = "#5A6B2A"

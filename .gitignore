@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+web/pkg
+web/pkg-webgl2
+web/pkg-webgpu
+web/assets
+.DS_Store

@@ -1,0 +1,6 @@
+# Backend-computed per round; host claims are checked against this.
+per_wave = 10                 # * min(wave, 20) * difficulty.currency  (flat after wave 20)
+endless_milestone_every = 10  # past wave 20, +150 * difficulty.currency every 10 waves
+match_complete_bonus = 200    # * difficulty.currency
+boss_kill_bonus = 50
+per_round_cap_mult = 1.25     # reject claims above 1.25x formula

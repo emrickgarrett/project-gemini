@@ -1,0 +1,562 @@
+//! One mesh handle per bug part. Joints pose the instances. Distant bugs swap to the LOD mesh.
+
+use std::collections::HashMap;
+
+use bevy::asset::RenderAssetUsages;
+use bevy::camera::Hdr;
+use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::post_process::bloom::Bloom;
+use bevy::prelude::*;
+use bevy::render::view::Tonemapping;
+
+use gemini_meshes::{pose, AnimInput, MeshData, Rgba};
+use gemini_sim::content::EnemyKind;
+use gemini_sim::math::Vec3 as SimVec;
+use gemini_sim::sim::{AiState, ShotKind};
+
+use crate::audio;
+use crate::session::{FrameFx, Game};
+
+#[derive(Component)]
+pub struct PlayPiece;
+
+#[derive(Component)]
+pub(crate) struct BugRoot {
+    #[allow(dead_code)]
+    id: u32,
+    #[allow(dead_code)]
+    kind: EnemyKind,
+}
+
+#[derive(Component)]
+pub(crate) struct BugPart {
+    #[allow(dead_code)]
+    index: usize,
+    emissive: bool,
+    rest: Handle<StandardMaterial>,
+    hot: Handle<StandardMaterial>,
+    hot_on: bool,
+}
+
+#[derive(Component)]
+pub(crate) struct BugLod;
+
+#[derive(Component)]
+pub(crate) struct Shot {
+    #[allow(dead_code)]
+    id: u32,
+}
+
+#[derive(Component)]
+pub(crate) struct Pickup {
+    #[allow(dead_code)]
+    id: u32,
+}
+
+#[derive(Component)]
+pub(crate) struct Flash {
+    life: f32,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct Bank {
+    meshes: HashMap<String, Handle<Mesh>>,
+    mats: HashMap<String, Handle<StandardMaterial>>,
+    tracer: Handle<Mesh>,
+    acid: Handle<Mesh>,
+    pickup: Handle<Mesh>,
+    flash: Handle<Mesh>,
+    ring: Handle<Mesh>,
+}
+
+#[derive(Resource, Default)]
+pub(crate) struct Links {
+    bugs: HashMap<u32, BugLink>,
+    shots: HashMap<u32, Entity>,
+    pickups: HashMap<u32, Entity>,
+    feet: HashMap<u32, Vec<f32>>,
+}
+
+struct BugLink {
+    root: Entity,
+    parts: Vec<Entity>,
+    lod: Entity,
+}
+
+pub fn scene(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    game: Res<Game>,
+) {
+    let content = &game.content;
+    let mut bank = Bank::default();
+    for visual in gemini_meshes::catalog() {
+        for part in &visual.parts {
+            bank.meshes.entry(part.mesh_key.clone()).or_insert_with(|| upload(&mut meshes, &part.mesh));
+            material(&mut bank, &mut materials, content, &part.palette, part.emissive, false);
+            if part.emissive {
+                material(&mut bank, &mut materials, content, &part.palette, true, true);
+            }
+        }
+        bank.meshes.entry(visual.lod_key.clone()).or_insert_with(|| upload(&mut meshes, &visual.lod));
+        let shell = visual
+            .parts
+            .iter()
+            .find(|p| !p.emissive)
+            .map(|p| p.palette.as_str())
+            .unwrap_or("brute_amber");
+        material(&mut bank, &mut materials, content, shell, false, false);
+    }
+    let teal = rgba(content, "shots_player");
+    let acid = rgba(content, "spitter_glow");
+    let white = rgba(content, "hero_white");
+    let cobalt = rgba(content, "hero_cobalt");
+    let accent = rgba(content, "hero_accent");
+    bank.tracer = upload(&mut meshes, &gemini_meshes::tracer(teal));
+    bank.acid = upload(&mut meshes, &gemini_meshes::tracer(acid));
+    bank.pickup = upload(&mut meshes, &gemini_meshes::pickup_beam(accent));
+    bank.flash = upload(&mut meshes, &gemini_meshes::gun_core(white));
+    let mut ring = MeshData::new();
+    // A flat faceted ring: two discs would be solid. A thin torus-like prism reads as a ring.
+    for i in 0..10 {
+        let a = i as f32 / 10.0 * std::f32::consts::TAU;
+        let x = a.cos() * 0.35;
+        let z = a.sin() * 0.35;
+        bevy_ring_box(&mut ring, [x, 0.0, z], [0.08, 0.02, 0.12]);
+    }
+    bank.ring = upload(&mut meshes, &ring);
+    material(&mut bank, &mut materials, content, "shots_player", true, false);
+    material(&mut bank, &mut materials, content, "spitter_glow", true, false);
+    material(&mut bank, &mut materials, content, "hero_white", true, true);
+    material(&mut bank, &mut materials, content, "hero_accent", true, false);
+    material(&mut bank, &mut materials, content, "hero_cobalt", false, false);
+    material(&mut bank, &mut materials, content, "hero_white", false, false);
+    material(&mut bank, &mut materials, content, "arena_dark", false, false);
+    material(&mut bank, &mut materials, content, "arena_light", false, false);
+
+    let ground = upload(
+        &mut meshes,
+        &box_at([0.0, -0.08, 0.0], [content.arena.half_extent * 2.0, 0.16, content.arena.half_extent * 2.0]),
+    );
+    commands.spawn((
+        Mesh3d(ground),
+        MeshMaterial3d(mat_of(&bank, "arena_dark", false, false)),
+        Transform::IDENTITY,
+        PlayPiece,
+    ));
+    for obstacle in &content.arena.obstacles {
+        let size = [
+            obstacle.max.x - obstacle.min.x,
+            obstacle.max.y - obstacle.min.y,
+            obstacle.max.z - obstacle.min.z,
+        ];
+        let center = [
+            (obstacle.min.x + obstacle.max.x) * 0.5,
+            (obstacle.min.y + obstacle.max.y) * 0.5,
+            (obstacle.min.z + obstacle.max.z) * 0.5,
+        ];
+        let mesh = upload(&mut meshes, &box_at([0.0, 0.0, 0.0], size));
+        commands.spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(mat_of(&bank, "arena_light", false, false)),
+            Transform::from_xyz(center[0], center[1], center[2]),
+            PlayPiece,
+        ));
+    }
+
+    let arms = upload(
+        &mut meshes,
+        &gemini_meshes::arms_and_gun(cobalt, white, accent, teal),
+    );
+    let core = upload(&mut meshes, &gemini_meshes::gun_core(teal));
+    commands.spawn((
+        Camera3d::default(),
+        Hdr,
+        Bloom::NATURAL,
+        Tonemapping::TonyMcMapface,
+        IsDefaultUiCamera,
+        PlayPiece,
+        children![
+            (
+                Mesh3d(arms),
+                MeshMaterial3d(mat_of(&bank, "hero_cobalt", false, false)),
+                Transform::from_xyz(0.15, -0.18, -0.35),
+            ),
+            (
+                Mesh3d(core),
+                MeshMaterial3d(mat_of(&bank, "shots_player", true, false)),
+                Transform::from_xyz(0.0, 0.0, 0.0),
+            ),
+        ],
+    ));
+    commands.insert_resource(bank);
+    commands.insert_resource(Links::default());
+}
+
+pub fn sync(
+    mut commands: Commands,
+    game: Res<Game>,
+    fx: Res<FrameFx>,
+    bank: Res<Bank>,
+    mut links: ResMut<Links>,
+    mut roots: Query<&mut Transform, With<BugRoot>>,
+    mut parts: Query<(&mut BugPart, &mut Transform, &mut Visibility), Without<BugLod>>,
+    mut lods: Query<(&mut Transform, &mut Visibility), (With<BugLod>, Without<BugPart>)>,
+    mut shots: Query<&mut Transform, (With<Shot>, Without<BugRoot>, Without<BugPart>, Without<BugLod>)>,
+    mut flashes: Query<(Entity, &mut Flash, &mut Transform), Without<Shot>>,
+    time: Res<Time>,
+    assets: Res<AssetServer>,
+) {
+    let player = game.sim.players.first().cloned();
+    let eye = player.as_ref().map(|p| p.pos).unwrap_or(SimVec::ZERO);
+    let alive: HashMap<u32, usize> = game
+        .sim
+        .enemies
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.alive)
+        .map(|(i, e)| (e.id, i))
+        .collect();
+
+    let stale: Vec<u32> = links.bugs.keys().copied().filter(|id| !alive.contains_key(id)).collect();
+    for id in stale {
+        if let Some(link) = links.bugs.remove(&id) {
+            commands.entity(link.root).despawn();
+        }
+        links.feet.remove(&id);
+    }
+
+    for enemy in game.sim.enemies.iter().filter(|e| e.alive) {
+        if !links.bugs.contains_key(&enemy.id) {
+            let link = spawn_bug(&mut commands, &bank, &game, enemy.kind, enemy.id);
+            links.bugs.insert(enemy.id, link);
+            links.feet.insert(enemy.id, Vec::new());
+        }
+        let (root, part_ids, lod) = {
+            let link = links.bugs.get(&enemy.id).expect("bug");
+            (link.root, link.parts.clone(), link.lod)
+        };
+        if let Ok(mut xf) = roots.get_mut(root) {
+            xf.translation = bevy::math::Vec3::new(enemy.pos.x, enemy.pos.y, enemy.pos.z);
+            xf.rotation = Quat::from_rotation_y(enemy.yaw);
+        }
+        let visual = gemini_meshes::bug(enemy.kind.name());
+        let moving = enemy.vel.x * enemy.vel.x + enemy.vel.z * enemy.vel.z > 0.05;
+        let charging = match enemy.kind {
+            EnemyKind::Spitter => matches!(enemy.ai, AiState::Telegraph { .. }),
+            EnemyKind::Brute => matches!(enemy.ai, AiState::Telegraph { .. } | AiState::Lunge { .. }),
+            _ => false,
+        };
+        let prev = links.feet.get(&enemy.id).cloned().unwrap_or_default();
+        let posed = pose(
+            visual,
+            AnimInput {
+                time: game.sim.time + enemy.id as f32 * 0.17,
+                moving,
+                charging,
+                vulnerable: enemy.weak_exposed,
+                phase: enemy.phase as u32,
+                frenzy: enemy.kind == EnemyKind::HiveTyrant && enemy.phase >= 1,
+            },
+            &prev,
+        );
+        if let Some(slot) = links.feet.get_mut(&enemy.id) {
+            *slot = posed.foot_lift.clone();
+        }
+        if moving {
+            let name = game.content.bug(enemy.kind).audio.footstep.clone();
+            for _ in &posed.planted {
+                audio::footstep(&mut commands, assets.as_ref(), game.as_ref(), &name, enemy.pos);
+            }
+        }
+        let dist = {
+            let dx = enemy.pos.x - eye.x;
+            let dz = enemy.pos.z - eye.z;
+            (dx * dx + dz * dz).sqrt()
+        };
+        let use_lod = dist > visual.lod_distance;
+        for (entity, xf) in part_ids.iter().zip(posed.xforms.iter()) {
+            if let Ok((mut part, mut local, mut vis)) = parts.get_mut(*entity) {
+                local.translation = bevy::math::Vec3::new(xf.pos[0], xf.pos[1], xf.pos[2]);
+                local.rotation = Quat::from_xyzw(xf.rot[0], xf.rot[1], xf.rot[2], xf.rot[3]);
+                local.scale = bevy::math::Vec3::new(xf.scale[0], xf.scale[1], xf.scale[2]);
+                *vis = if use_lod || !xf.visible { Visibility::Hidden } else { Visibility::Inherited };
+                let want_hot = part.emissive && xf.glow > 1.5;
+                if want_hot != part.hot_on {
+                    part.hot_on = want_hot;
+                    let handle = if want_hot { part.hot.clone() } else { part.rest.clone() };
+                    commands.entity(*entity).insert(MeshMaterial3d(handle));
+                }
+            }
+        }
+        if let Ok((mut local, mut vis)) = lods.get_mut(lod) {
+            local.translation = bevy::math::Vec3::ZERO;
+            *vis = if use_lod { Visibility::Inherited } else { Visibility::Hidden };
+        }
+    }
+
+    // Material hot flag lives on BugPart; the insert above doesn't update the component.
+    // A follow-up query writes hot_on. Done below via HotFlag removal — see sync_hot.
+    let _ = parts;
+
+    let live_shots: HashMap<u32, usize> = game.sim.projectiles.iter().enumerate().map(|(i, p)| (p.id, i)).collect();
+    let stale: Vec<u32> = links.shots.keys().copied().filter(|id| !live_shots.contains_key(id)).collect();
+    for id in stale {
+        if let Some(entity) = links.shots.remove(&id) {
+            commands.entity(entity).despawn();
+        }
+    }
+    for shot in &game.sim.projectiles {
+        let mesh = if shot.kind == ShotKind::Acid { bank.acid.clone() } else { bank.tracer.clone() };
+        let mat = if shot.kind == ShotKind::Acid {
+            mat_of(&bank, "spitter_glow", true, false)
+        } else {
+            mat_of(&bank, "shots_player", true, false)
+        };
+        let entity = if let Some(entity) = links.shots.get(&shot.id).copied() {
+            entity
+        } else {
+            let entity = commands
+                .spawn((
+                    Mesh3d(mesh),
+                    MeshMaterial3d(mat),
+                    Transform::from_xyz(shot.pos.x, shot.pos.y, shot.pos.z),
+                    Shot { id: shot.id },
+                    PlayPiece,
+                ))
+                .id();
+            links.shots.insert(shot.id, entity);
+            entity
+        };
+        if let Ok(mut xf) = shots.get_mut(entity) {
+            xf.translation = bevy::math::Vec3::new(shot.pos.x, shot.pos.y, shot.pos.z);
+            if shot.vel.length_squared() > 1.0 {
+                xf.rotation = Quat::from_rotation_arc(
+                    bevy::math::Vec3::Z,
+                    bevy::math::Vec3::new(shot.vel.x, shot.vel.y, shot.vel.z).normalize(),
+                );
+            }
+        }
+    }
+
+    let live_pick: HashMap<u32, usize> = game.sim.pickups.iter().enumerate().map(|(i, p)| (p.id, i)).collect();
+    let stale: Vec<u32> = links.pickups.keys().copied().filter(|id| !live_pick.contains_key(id)).collect();
+    for id in stale {
+        if let Some(entity) = links.pickups.remove(&id) {
+            commands.entity(entity).despawn();
+        }
+    }
+    for pickup in &game.sim.pickups {
+        if links.pickups.contains_key(&pickup.id) {
+            continue;
+        }
+        let entity = commands
+            .spawn((
+                Mesh3d(bank.pickup.clone()),
+                MeshMaterial3d(mat_of(&bank, "hero_accent", true, false)),
+                Transform::from_xyz(pickup.pos.x, 0.0, pickup.pos.z),
+                Pickup { id: pickup.id },
+                PlayPiece,
+            ))
+            .id();
+        links.pickups.insert(pickup.id, entity);
+    }
+
+    for ping in &fx.pings {
+        let scale = if ping.weak { 1.35 } else { 0.7 };
+        commands.spawn((
+            Mesh3d(bank.flash.clone()),
+            MeshMaterial3d(mat_of(&bank, "hero_white", true, true)),
+            Transform::from_xyz(ping.pos.x, ping.pos.y, ping.pos.z).with_scale(bevy::math::Vec3::splat(scale)),
+            Flash { life: if ping.weak { 0.18 } else { 0.1 } },
+            PlayPiece,
+        ));
+        if ping.weak {
+            commands.spawn((
+                Mesh3d(bank.ring.clone()),
+                MeshMaterial3d(mat_of(&bank, "spitter_glow", true, false)),
+                Transform::from_xyz(ping.pos.x, ping.pos.y, ping.pos.z).with_scale(bevy::math::Vec3::splat(1.8)),
+                Flash { life: 0.22 },
+                PlayPiece,
+            ));
+        }
+    }
+    let dt = time.delta_secs();
+    for (entity, mut flash, mut xf) in &mut flashes {
+        flash.life -= dt;
+        xf.scale *= 1.0 + dt * 4.0;
+        if flash.life <= 0.0 {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+fn spawn_bug(commands: &mut Commands, bank: &Bank, game: &Game, kind: EnemyKind, id: u32) -> BugLink {
+    let visual = gemini_meshes::bug(kind.name());
+    let shell = visual
+        .parts
+        .iter()
+        .find(|p| !p.emissive)
+        .map(|p| p.palette.clone())
+        .unwrap_or_else(|| "brute_amber".into());
+    let root = commands
+        .spawn((
+            Transform::IDENTITY,
+            Visibility::Inherited,
+            BugRoot { id, kind },
+            PlayPiece,
+        ))
+        .id();
+    let mut parts = Vec::new();
+    for (index, part) in visual.parts.iter().enumerate() {
+        let mesh = bank.meshes.get(&part.mesh_key).cloned().unwrap_or_else(|| bank.tracer.clone());
+        let rest = mat_of(bank, &part.palette, part.emissive, false);
+        let hot = if part.emissive {
+            mat_of(bank, &part.palette, true, true)
+        } else {
+            rest.clone()
+        };
+        let entity = commands
+            .spawn((
+                Mesh3d(mesh),
+                MeshMaterial3d(rest.clone()),
+                Transform::from_xyz(part.rest_pos[0], part.rest_pos[1], part.rest_pos[2]),
+                Visibility::Inherited,
+                BugPart {
+                    index,
+                    emissive: part.emissive,
+                    rest,
+                    hot,
+                    hot_on: false,
+                },
+                ChildOf(root),
+            ))
+            .id();
+        parts.push(entity);
+    }
+    let lod_mesh = bank.meshes.get(&visual.lod_key).cloned().unwrap_or_else(|| bank.tracer.clone());
+    let lod = commands
+        .spawn((
+            Mesh3d(lod_mesh),
+            MeshMaterial3d(mat_of(bank, &shell, false, false)),
+            Transform::IDENTITY,
+            Visibility::Hidden,
+            BugLod,
+            ChildOf(root),
+        ))
+        .id();
+    let _ = game;
+    BugLink { root, parts, lod }
+}
+
+pub fn camera(game: Res<Game>, mut cameras: Query<(&mut Transform, &mut Projection), With<Camera3d>>, time: Res<Time>) {
+    let Some(player) = game.sim.players.first() else { return };
+    let eye_y = if player.crouching {
+        game.content.arena.crouch_eye
+    } else {
+        game.content.arena.eye_height
+    };
+    let speed = (player.vel.x * player.vel.x + player.vel.z * player.vel.z).sqrt();
+    let bob = if game.bob && player.grounded && speed > 0.4 {
+        let hz = game.content.presentation.view_bob_hz;
+        let amp = game.content.controller.camera.view_bob_amplitude;
+        (time.elapsed_secs() * hz * std::f32::consts::TAU).sin() * amp
+    } else {
+        0.0
+    };
+    let dip = game.dip * game.content.controller.camera.landing_dip;
+    let mut fov = game.fov;
+    if player.sprinting {
+        fov += game.content.controller.camera.fov_sprint_add;
+    }
+    fov = fov.clamp(game.content.presentation.fov_min, game.content.presentation.fov_max + game.content.controller.camera.fov_sprint_add);
+    for (mut xf, mut proj) in &mut cameras {
+        xf.translation = bevy::math::Vec3::new(player.pos.x, player.pos.y + eye_y + bob - dip, player.pos.z);
+        xf.rotation = Quat::from_rotation_y(game.yaw) * Quat::from_rotation_x(game.pitch);
+        if let Projection::Perspective(persp) = proj.as_mut() {
+            persp.fov = fov.to_radians();
+        }
+    }
+}
+
+fn upload(meshes: &mut Assets<Mesh>, data: &MeshData) -> Handle<Mesh> {
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, data.positions.clone());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, data.normals.clone());
+    let uvs = vec![[0.0, 0.0]; data.positions.len()];
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_indices(Indices::U32(data.indices.clone()));
+    meshes.add(mesh)
+}
+
+fn material(
+    bank: &mut Bank,
+    materials: &mut Assets<StandardMaterial>,
+    content: &gemini_sim::content::Content,
+    key: &str,
+    emissive: bool,
+    hot: bool,
+) -> Handle<StandardMaterial> {
+    let id = format!("{key}:{emissive}:{hot}");
+    if let Some(handle) = bank.mats.get(&id) {
+        return handle.clone();
+    }
+    let rgb = content.palette.key(key);
+    let mul = if hot { 6.0 } else if emissive { 2.4 } else { 0.0 };
+    let handle = materials.add(StandardMaterial {
+        base_color: Color::srgb(rgb[0], rgb[1], rgb[2]),
+        emissive: LinearRgba::rgb(rgb[0] * mul, rgb[1] * mul, rgb[2] * mul),
+        unlit: true,
+        ..default()
+    });
+    bank.mats.insert(id, handle.clone());
+    handle
+}
+
+fn mat_of(bank: &Bank, key: &str, emissive: bool, hot: bool) -> Handle<StandardMaterial> {
+    let id = format!("{key}:{emissive}:{hot}");
+    bank.mats.get(&id).cloned().unwrap_or_else(|| {
+        bank.mats.values().next().cloned().unwrap_or_default()
+    })
+}
+
+fn rgba(content: &gemini_sim::content::Content, key: &str) -> Rgba {
+    Rgba(content.palette.key(key))
+}
+
+fn box_at(center: [f32; 3], size: [f32; 3]) -> MeshData {
+    let mut mesh = MeshData::new();
+    // Local box; caller places it with a transform when center is baked in.
+    let hx = size[0] * 0.5;
+    let hy = size[1] * 0.5;
+    let hz = size[2] * 0.5;
+    let c = [0.7, 0.7, 0.75, 1.0];
+    let faces = [
+        ([0.0, 1.0, 0.0], [[-hx, hy, -hz], [hx, hy, -hz], [hx, hy, hz], [-hx, hy, hz]]),
+        ([0.0, -1.0, 0.0], [[-hx, -hy, hz], [hx, -hy, hz], [hx, -hy, -hz], [-hx, -hy, -hz]]),
+        ([0.0, 0.0, 1.0], [[-hx, -hy, hz], [-hx, hy, hz], [hx, hy, hz], [hx, -hy, hz]]),
+        ([0.0, 0.0, -1.0], [[hx, -hy, -hz], [hx, hy, -hz], [-hx, hy, -hz], [-hx, -hy, -hz]]),
+        ([1.0, 0.0, 0.0], [[hx, -hy, hz], [hx, hy, hz], [hx, hy, -hz], [hx, -hy, -hz]]),
+        ([-1.0, 0.0, 0.0], [[-hx, -hy, -hz], [-hx, hy, -hz], [-hx, hy, hz], [-hx, -hy, hz]]),
+    ];
+    for (n, corners) in faces {
+        let base = mesh.positions.len() as u32;
+        for corner in corners {
+            mesh.positions.push([center[0] + corner[0], center[1] + corner[1], center[2] + corner[2]]);
+            mesh.normals.push(n);
+            mesh.colors.push(c);
+        }
+        mesh.indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    mesh
+}
+
+fn bevy_ring_box(mesh: &mut MeshData, center: [f32; 3], size: [f32; 3]) {
+    let piece = box_at(center, size);
+    let base = mesh.positions.len() as u32;
+    mesh.positions.extend_from_slice(&piece.positions);
+    mesh.normals.extend_from_slice(&piece.normals);
+    mesh.colors.extend_from_slice(&piece.colors);
+    mesh.indices.extend(piece.indices.iter().map(|i| i + base));
+}

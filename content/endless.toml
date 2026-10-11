@@ -1,0 +1,5 @@
+count_cap_wave = 20          # budget stops growing after wave 20
+hp_dmg_growth_per_wave = 0.08  # applied as (1 + 0.08*(w-20)) linear, not compounding, to keep numbers bounded
+boss_every = 10              # alternate brood_mother / hive_tyrant
+modifier_every = 3           # adds one rotating modifier, max 3 active
+modifiers = ["armored(+50% hp, -20% speed)", "frenzied(+30% speed)", "volatile(explode on death, 20 dmg)", "regenerating(2% hp/s)", "shielded spitters", "brute packs"]

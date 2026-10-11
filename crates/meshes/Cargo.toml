@@ -1,0 +1,15 @@
+[package]
+name = "gemini-meshes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Procedural placeholder meshes. No renderer dependency."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+[[bin]]
+name = "bugshots"
+path = "src/bin/bugshots.rs"
