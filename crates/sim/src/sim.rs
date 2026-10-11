@@ -491,7 +491,6 @@ impl Sim {
         self.tick_drones(content, dt);
         self.tick_pickups(content);
         self.tick_boss_logic(content, dt);
-        self.tick_boss_spawns(content);
         self.tick_spawner(content, dt);
         self.reap(content);
         self.tick_downed(content, input.interact_held, dt);
@@ -1547,32 +1546,6 @@ impl Sim {
             }
             if !id.is_empty() {
                 self.sound_at(&id, origin);
-            }
-        }
-    }
-
-    fn tick_boss_spawns(&mut self, content: &Content) {
-        let cap = content.waves.budget.live_enemy_cap as usize;
-        let dt = SIM_DT;
-        for i in 0..self.enemies.len() {
-            if !self.enemies[i].alive || self.enemies[i].spawn_interval <= 0.0 {
-                continue;
-            }
-            self.enemies[i].spawn_acc += dt;
-            if self.enemies[i].spawn_acc < self.enemies[i].spawn_interval {
-                continue;
-            }
-            self.enemies[i].spawn_acc = 0.0;
-            let kind = self.enemies[i].spawn_kind;
-            let count = self.enemies[i].spawn_count;
-            let origin = self.enemies[i].pos;
-            for n in 0..count {
-                if self.enemies.iter().filter(|e| e.alive).count() >= cap {
-                    break;
-                }
-                let ang = n as f32 / count.max(1) as f32 * std::f32::consts::TAU;
-                let pos = origin + Vec3::new(ang.cos() * 2.2, 0.0, ang.sin() * 2.2);
-                self.spawn_trash(content, kind, pos);
             }
         }
     }
