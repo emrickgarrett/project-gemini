@@ -2301,14 +2301,15 @@ fn gather_enemy_hits(
                 }
             }
         }
-        let pod_r = book.hitbox.pod_radius();
-        for (pi, place) in book.hitbox.pods.iter().enumerate() {
-            if enemy.pods.get(pi).copied().unwrap_or(0.0) <= 0.0 {
-                continue;
-            }
-            let center = enemy.pos + rotate_y(enemy.yaw, Vec3::new(place.offset[0], place.offset[1], place.offset[2]));
-            if let Some(t) = segment_hits_sphere(p0, p1, center, pod_r + projectile.radius) {
-                consider(&mut best, t, HitSpot::Pod(pi));
+        if let Some(pod_r) = book.hitbox.pod_radius() {
+            for (pi, place) in book.hitbox.pods.iter().enumerate() {
+                if enemy.pods.get(pi).copied().unwrap_or(0.0) <= 0.0 {
+                    continue;
+                }
+                let center = enemy.pos + rotate_y(enemy.yaw, Vec3::new(place.offset[0], place.offset[1], place.offset[2]));
+                if let Some(t) = segment_hits_sphere(p0, p1, center, pod_r + projectile.radius) {
+                    consider(&mut best, t, HitSpot::Pod(pi));
+                }
             }
         }
         if let Some((t, spot)) = best {

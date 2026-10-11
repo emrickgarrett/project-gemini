@@ -833,6 +833,14 @@ fn missing_weakpoint_anchor_fails_content_load() {
     );
     let err = load(&authored).expect_err("an authored weak-point offset must fail load");
     assert!(err.contains("must not author an offset"), "{err}");
+
+    let no_phase = bugs.replacen("ring_phase=0.0, ", "", 1);
+    let err = load(&no_phase).expect_err("a pod ring without ring_phase must fail load");
+    assert!(err.contains("ring_phase"), "{err}");
+
+    let no_radius = bugs.replacen("pod = { shape = \"sphere\", radius = 0.65 }", "pod = { shape = \"sphere\" }", 1);
+    let err = load(&no_radius).expect_err("a pod hitbox without a radius must fail load");
+    assert!(err.contains("pod radius"), "{err}");
 }
 
 #[test]

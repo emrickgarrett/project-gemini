@@ -658,7 +658,7 @@ mod tests {
 
         let pod = visual.parts.iter().find(|part| part.name == "pod0").unwrap();
         let mesh_r = mesh_radius(&pod.mesh);
-        let hit_r = row.hitbox.pod_radius();
+        let hit_r = row.hitbox.pod_radius().expect("pod radius");
         assert!(
             hit_r + 1e-3 >= mesh_r * content.bugs.hitbox_margin,
             "pod hitbox {hit_r:.3} < mesh {mesh_r:.3} * {}",
