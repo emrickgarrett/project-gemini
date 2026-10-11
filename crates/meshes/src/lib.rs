@@ -1,12 +1,14 @@
 //! Procedural placeholder meshes. One shared mesh set per bug type.
 //! Colors are filled in by the client from `content/palette.toml`.
 
+mod away_still;
 mod geom;
 mod pose;
 mod preview;
 mod reveal_still;
 mod visual;
 
+pub use away_still::{paint_away, AwayShot};
 pub use reveal_still::{paint_reveal, reveal_still_is_flat, still_color_stats};
 
 pub use pose::{pose, AnimInput, Pose, Xform};

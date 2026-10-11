@@ -6,3 +6,30 @@ gamepad_look_deg_per_sec = 130.0
 view_bob_hz = 8.5
 pad_magnetism_blend = 0.45
 pitch_limit_deg = 85.0
+
+[hud.away]
+slate = "arena_dark"
+text = "white"
+bar = "teal"
+count = "white"
+panel_opacity = 0.85
+panel_width = 460.0
+panel_height = 96.0
+panel_top = 36.0
+title_px = 28.0
+row_gap = 10.0
+bar_width = 320.0
+bar_height = 10.0
+count_px = 180.0
+count_scale_from = 1.45
+count_scale_to = 0.8
+world_dim = 0.30
+world_saturation = 0.0
+
+[hud.away.coop]
+text = "HOST AWAY"
+show_timer = true
+
+[hud.away.solo]
+text = "PAUSED"
+show_timer = false

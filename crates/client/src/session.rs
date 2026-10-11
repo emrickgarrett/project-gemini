@@ -1,14 +1,18 @@
 //! Fixed-timestep match. Look and presentation live here; the sim owns the rules.
 
+use std::collections::HashSet;
+
 use bevy::input::gamepad::{Gamepad, GamepadAxis, GamepadButton};
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
-use bevy::window::{CursorGrabMode, CursorOptions, Window};
+use bevy::window::{CursorGrabMode, CursorOptions, WindowOccluded};
 
 #[cfg(not(target_arch = "wasm32"))]
 use gemini_meshes::raster_bug;
 use gemini_sim::audio_mix::SoundEvent;
 use gemini_sim::content::Content;
+use gemini_sim::host_away::{AwayPhase, HostAwayClock};
+use gemini_sim::math::Vec3 as SimVec3;
 use gemini_sim::sim::{HitPing, MusicMoment, Phase, PlayerInput, Sim, SoundStop, SIM_DT};
 
 use crate::AppState;
@@ -133,6 +137,11 @@ pub fn boot(
     let mut sim = Sim::new(&content, &pending.0, 7);
     sim.apply_persistent_rank(&content, account.rank);
     let (sim, token, link) = open_link(&launch, &content, sim);
+    let solo = sim.connected_count() <= 1;
+    let away_view = {
+        let clock = HostAwayClock::new(solo);
+        clock.sample(&content.coop.host_away)
+    };
     let fov = content.controller.camera.fov_default;
     commands.insert_resource(Game {
         content,
@@ -148,6 +157,11 @@ pub fn boot(
     });
     commands.insert_resource(link);
     commands.insert_resource(FrameFx::default());
+    commands.insert_resource(Away {
+        clock: HostAwayClock::new(solo),
+        view: away_view,
+    });
+    commands.insert_resource(Page::default());
 }
 
 fn open_link(launch: &Launch, content: &Content, sim: Sim) -> (Sim, u64, CoopLink) {
@@ -163,18 +177,32 @@ fn open_link(launch: &Launch, content: &Content, sim: Sim) -> (Sim, u64, CoopLin
     }
 }
 
+#[derive(Resource)]
+pub struct Away {
+    pub clock: HostAwayClock,
+    pub view: gemini_sim::host_away::AwayFrame,
+}
+
+#[derive(Resource, Default)]
+pub struct Page {
+    hidden: bool,
+    occluded: HashSet<Entity>,
+}
+
 pub fn gather_and_step(
     time: Res<Time>,
     mut clock: ResMut<SimClock>,
     mut game: ResMut<Game>,
     mut link: ResMut<CoopLink>,
     mut fx: ResMut<FrameFx>,
+    mut away: ResMut<Away>,
+    mut page: ResMut<Page>,
+    mut occluded: MessageReader<WindowOccluded>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
     gamepads: Query<&Gamepad>,
     mut cursor: Query<&mut CursorOptions>,
-    windows: Query<&Window>,
     mut next: ResMut<NextState<AppState>>,
 ) {
     if keys.just_pressed(KeyCode::Escape) {
@@ -290,44 +318,84 @@ pub fn gather_and_step(
         using_gamepad: using_pad,
     };
 
-    let host = game.local().map(|player| player.is_host).unwrap_or(false);
-    if host && !windows.is_empty() {
-        let focused = windows.iter().all(|window| window.focused);
-        let dt = time.delta_secs();
-        let Game { content, sim, .. } = &mut *game;
-        sim.set_host_away(content, !focused);
-        if sim.host_away {
-            sim.tick_host_away(content, dt);
+    for msg in occluded.read() {
+        if msg.occluded {
+            page.occluded.insert(msg.window);
+        } else {
+            page.occluded.remove(&msg.window);
         }
     }
+    page.hidden = !page.occluded.is_empty();
 
-    clock.acc += time.delta_secs();
+    let rules = game.content.coop.host_away.clone();
+    away.clock.set_solo(game.sim.connected_count() <= 1);
+    let dt = time.delta_secs();
+    let cues = step_away(&mut game, &mut link, &mut away, &page, dt);
+    away.view = away.clock.sample(&rules);
+
+    clock.acc += dt;
     let max_steps = game.content.controller.sim.max_sim_steps_per_frame;
     let mut steps = 0u32;
     fx.sounds.clear();
     fx.stops.clear();
     fx.pings.clear();
     fx.moments.clear();
-    // Sim::new emits wave_start before the first tick. step() clears sounds on entry,
-    // so keep that cue or the match-start sting never plays.
-    fx.sounds.append(&mut game.sim.sounds);
-    while clock.acc >= SIM_DT && steps < max_steps {
-        drive(&mut game, &mut link, input);
-        fx.sounds.append(&mut game.sim.sounds);
-        fx.stops.append(&mut game.sim.stops);
-        fx.pings.append(&mut game.sim.pings);
-        fx.moments.append(&mut game.sim.music);
-        let landed = game.sim.landed_pulse;
-        if landed > 0.0 {
-            game.dip = 1.0;
+    for id in cues {
+        fx.sounds.push(SoundEvent {
+            id,
+            pos: SimVec3::ZERO,
+            owner: 0,
+        });
+    }
+    fx.moments.append(&mut game.sim.music);
+    if away.clock.frozen() {
+        game.sim.host_away = true;
+        match &mut *link {
+            CoopLink::Solo => {}
+            #[cfg(not(target_arch = "wasm32"))]
+            CoopLink::Host(host) => {
+                let mode = if away.clock.phase() == AwayPhase::Countdown {
+                    game.sim.host_away = false;
+                    crate::net::HostStep::SignalBack
+                } else {
+                    crate::net::HostStep::Hold {
+                        announce: away.clock.take_announce(),
+                    }
+                };
+                host.tick(&mut game, input, mode);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            CoopLink::Client(client) => client.send(game.sim.tick, input),
         }
-        input.jump_pressed = false;
-        input.boost_pressed = false;
-        input.upgrade_choice = None;
-        input.look_dx_deg = 0.0;
-        input.look_dy_deg = 0.0;
-        clock.acc -= SIM_DT;
-        steps += 1;
+    } else {
+        game.sim.host_away = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        if away.clock.phase() == AwayPhase::Live {
+            if let CoopLink::Client(client) = &mut *link {
+                client.apply(&mut game);
+            }
+        }
+        // Sim::new emits wave_start before the first tick. step() clears sounds on entry,
+        // so keep that cue or the match-start sting never plays.
+        fx.sounds.append(&mut game.sim.sounds);
+        while clock.acc >= SIM_DT && steps < max_steps {
+            drive(&mut game, &mut link, input);
+            fx.sounds.append(&mut game.sim.sounds);
+            fx.stops.append(&mut game.sim.stops);
+            fx.pings.append(&mut game.sim.pings);
+            fx.moments.append(&mut game.sim.music);
+            let landed = game.sim.landed_pulse;
+            if landed > 0.0 {
+                game.dip = 1.0;
+            }
+            input.jump_pressed = false;
+            input.boost_pressed = false;
+            input.upgrade_choice = None;
+            input.look_dx_deg = 0.0;
+            input.look_dy_deg = 0.0;
+            clock.acc -= SIM_DT;
+            steps += 1;
+        }
     }
     // A hitch longer than the cap must not catch up on later frames.
     if steps == max_steps && clock.acc >= SIM_DT {
@@ -377,13 +445,52 @@ fn save_bug_stills() {
     }
 }
 
+fn step_away(game: &mut Game, link: &mut CoopLink, away: &mut Away, page: &Page, dt: f32) -> Vec<String> {
+    let rules = game.content.coop.host_away.clone();
+    match link {
+        #[cfg(not(target_arch = "wasm32"))]
+        CoopLink::Client(client) => {
+            let heard = client.poll(&game.content);
+            let host_live = heard.snapshot_away == Some(false);
+            let starting = host_live && away.clock.phase() == AwayPhase::Away && !page.hidden;
+            away.clock.set_page_hidden(page.hidden);
+            if heard.away_packet {
+                away.clock.note_away_packet(rules.detect_after_seconds);
+            }
+            if let Some(flag) = heard.snapshot_away {
+                away.clock.note_snapshot(flag, rules.resume_countdown_seconds);
+            }
+            away.clock.set_silent(!host_live);
+            let step_dt = if starting { 0.0 } else { dt };
+            let frame = away.clock.tick(step_dt, &rules, &game.sim);
+            if frame.ended {
+                away.clock.finish(&mut game.sim);
+            }
+            return frame.cues;
+        }
+        _ => {}
+    }
+    let frame = away.clock.tick(dt, &rules, &game.sim);
+    if frame.ended {
+        away.clock.finish(&mut game.sim);
+    }
+    let mut cues = frame.cues;
+    if !page.hidden && away.clock.phase() != AwayPhase::Ended {
+        away.clock.host_shown(rules.resume_countdown_seconds);
+    }
+    cues.extend(away.clock.tick(0.0, &rules, &game.sim).cues);
+    away.clock.set_page_hidden(page.hidden);
+    away.clock.set_silent(page.hidden);
+    cues
+}
+
 fn drive(game: &mut Game, link: &mut CoopLink, input: PlayerInput) {
     match link {
         CoopLink::Solo => game.sim.step(&game.content, input),
         #[cfg(not(target_arch = "wasm32"))]
-        CoopLink::Host(host) => host.tick(game, input),
+        CoopLink::Host(host) => host.tick(game, input, crate::net::HostStep::Simulate),
         #[cfg(not(target_arch = "wasm32"))]
-        CoopLink::Client(client) => client.tick(game, input),
+        CoopLink::Client(client) => client.send(game.sim.tick, input),
     }
     if let Some(seat) = game.sim.players.iter().position(|player| player.token == game.token) {
         game.seat = seat;
@@ -395,4 +502,6 @@ pub fn shutdown(mut commands: Commands, mut clock: ResMut<SimClock>) {
     commands.remove_resource::<Game>();
     commands.remove_resource::<FrameFx>();
     commands.remove_resource::<CoopLink>();
+    commands.remove_resource::<Away>();
+    commands.remove_resource::<Page>();
 }

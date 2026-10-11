@@ -12,8 +12,8 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use gemini_meshes::{
-    catalog, missing_glow_keys, missing_glow_keys_open, paint_reveal, painted_pixels, raster_bug, raster_top,
-    reveal_still_is_flat, still, still_color_stats, still_open, still_top,
+    catalog, missing_glow_keys, missing_glow_keys_open, paint_away, paint_reveal, painted_pixels, raster_bug, raster_top,
+    reveal_still_is_flat, still, still_color_stats, still_open, still_top, AwayShot,
 };
 use gemini_sim::content::Content;
 use gemini_sim::reveal::plan;
@@ -79,6 +79,9 @@ fn main() {
     if write_reveals(&out) {
         failed = true;
     }
+    if write_away(&out) {
+        failed = true;
+    }
     if failed {
         std::process::exit(1);
     }
@@ -132,6 +135,95 @@ fn write_reveals(out: &str) -> bool {
     let path = format!("{out}/crate_rare_fakeout.png");
     write_png(&path, W, H, &rgb);
     println!("wrote {path}");
+    flat
+}
+
+fn write_away(out: &str) -> bool {
+    let mut flat = false;
+    let mut guard = |name: &str, rgb: &[u8]| {
+        if reveal_still_is_flat(rgb) {
+            let stats = still_color_stats(rgb);
+            eprintln!(
+                "{name} is mostly one color (unique {}, variance {:.1}, dominant {:.3})",
+                stats.unique, stats.variance, stats.dominant
+            );
+            flat = true;
+        }
+    };
+    const W: u32 = 960;
+    const H: u32 = 540;
+    let content = Content::embedded();
+    let hud = &content.presentation.hud.away;
+    let fill = 1.0 - content.coop.host_away.detect_after_seconds / content.coop.host_away.end_after_seconds;
+    let shots = [
+        (
+            "host_away_banner",
+            AwayShot {
+                banner: true,
+                title: hud.coop.text.clone(),
+                show_timer: hud.coop.show_timer,
+                timer_fill: fill,
+                digit: None,
+                digit_u: 0.0,
+                frozen: true,
+            },
+        ),
+        (
+            "host_away_paused",
+            AwayShot {
+                banner: true,
+                title: hud.solo.text.clone(),
+                show_timer: hud.solo.show_timer,
+                timer_fill: 0.0,
+                digit: None,
+                digit_u: 0.0,
+                frozen: true,
+            },
+        ),
+        (
+            "host_away_count_3",
+            AwayShot {
+                banner: false,
+                title: String::new(),
+                show_timer: false,
+                timer_fill: 0.0,
+                digit: Some(3),
+                digit_u: 0.0,
+                frozen: true,
+            },
+        ),
+        (
+            "host_away_count_2",
+            AwayShot {
+                banner: false,
+                title: String::new(),
+                show_timer: false,
+                timer_fill: 0.0,
+                digit: Some(2),
+                digit_u: 0.0,
+                frozen: true,
+            },
+        ),
+        (
+            "host_away_count_1",
+            AwayShot {
+                banner: false,
+                title: String::new(),
+                show_timer: false,
+                timer_fill: 0.0,
+                digit: Some(1),
+                digit_u: 0.0,
+                frozen: true,
+            },
+        ),
+    ];
+    for (name, shot) in shots {
+        let rgb = paint_away(&content, &shot, W, H);
+        guard(name, &rgb);
+        let path = format!("{out}/{name}.png");
+        write_png(&path, W, H, &rgb);
+        println!("wrote {path}");
+    }
     flat
 }
 

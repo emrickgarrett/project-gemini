@@ -127,7 +127,8 @@ impl Content {
         validate_reveal_cues(&crate_reveal, &audio)?;
         validate_reveal_layout(&crate_reveal)?;
         let palette: Palette = parse("palette.toml", src.palette)?;
-        require_palette_keys(&palette, &bugs).map_err(|err| format!("palette.toml: {err}"))?;
+        let presentation: Presentation = parse("presentation.toml", src.presentation)?;
+        require_palette_keys(&palette, &bugs, &presentation.hud.away).map_err(|err| format!("palette.toml: {err}"))?;
         Ok(Self {
             fingerprint,
             waves: parse("waves.toml", src.waves)?,
@@ -149,7 +150,7 @@ impl Content {
             hero,
             roster,
             arena: load_arena(src.arena).map_err(|err| format!("arena_01.toml: {err}"))?,
-            presentation: parse("presentation.toml", src.presentation)?,
+            presentation,
             combat: parse("combat.toml", src.combat)?,
             palette,
             music: {
@@ -1883,8 +1884,7 @@ pub struct CoopRules {
     pub currency_credit: String,
     pub leave_keeps_earned: bool,
     pub host_leave: String,
-    /// Real seconds a hidden host tab may stay paused before the match ends.
-    pub host_away_seconds: f32,
+    pub host_away: crate::host_away::HostAwayRules,
     pub friendly_fire: bool,
 }
 
@@ -1900,7 +1900,7 @@ fn load_coop(text: &str) -> Result<CoopRules, String> {
             "revive",
             "currency_share",
             "friendly_fire",
-            "host",
+            "host_away",
         ],
         "coop.toml",
     )?;
@@ -1949,12 +1949,22 @@ fn load_coop(text: &str) -> Result<CoopRules, String> {
     let budget_rescale = req_string(join, "budget_rescale", "coop.toml join_in_progress")?;
     let squad_wipe = req_string(revive, "squad_wipe", "coop.toml revive")?;
     let currency_credit = req_string(currency, "credit", "coop.toml currency_share")?;
-    let host = req_table(root, "host", "coop.toml")?;
-    expect_keys(host, &["away_seconds"], "coop.toml host")?;
-    let host_away_seconds = req_f32(host, "away_seconds", "coop.toml host")?;
-    if host_away_seconds <= 0.0 {
-        return Err("coop.toml host away_seconds must be > 0".into());
-    }
+    let away = req_table(root, "host_away", "coop.toml")?;
+    expect_keys(
+        away,
+        &[
+            "detect_after_seconds",
+            "end_after_seconds",
+            "resume_countdown_seconds",
+            "freeze",
+        ],
+        "coop.toml host_away",
+    )?;
+    let detect_after_seconds = positive_seconds(away, "detect_after_seconds")?;
+    let end_after_seconds = positive_seconds(away, "end_after_seconds")?;
+    let resume_countdown_seconds = positive_seconds(away, "resume_countdown_seconds")?;
+    let freeze = req_string(away, "freeze", "coop.toml host_away")?;
+    expect_tag(&freeze, "everything", "coop.toml host_away freeze")?;
     let host_leave = req_string(currency, "host_leave", "coop.toml currency_share")?;
     expect_tag(&join_allowed_during, "breather_only", "coop.toml allowed_during")?;
     expect_tag(&upgrade_catchup, "match_lowest", "coop.toml upgrade_catchup")?;
@@ -1986,9 +1996,22 @@ fn load_coop(text: &str) -> Result<CoopRules, String> {
         currency_credit,
         leave_keeps_earned: req_bool(currency, "leave_keeps_earned", "coop.toml currency_share")?,
         host_leave,
-        host_away_seconds,
+        host_away: crate::host_away::HostAwayRules {
+            detect_after_seconds,
+            end_after_seconds,
+            resume_countdown_seconds,
+            freeze,
+        },
         friendly_fire: req_bool(fire, "enabled", "coop.toml friendly_fire")?,
     })
+}
+
+fn positive_seconds(table: &toml::map::Map<String, toml::Value>, key: &str) -> Result<f32, String> {
+    let n = req_f32(table, key, "coop.toml host_away")?;
+    if !(n > 0.0) {
+        return Err(format!("coop.toml host_away {key} must be positive"));
+    }
+    Ok(n)
 }
 
 fn req_table<'a>(
@@ -2094,6 +2117,41 @@ pub struct Presentation {
     pub view_bob_hz: f32,
     pub pad_magnetism_blend: f32,
     pub pitch_limit_deg: f32,
+    pub hud: HudPresentation,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct HudPresentation {
+    pub away: AwayHud,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct AwayHud {
+    pub slate: String,
+    pub text: String,
+    pub bar: String,
+    pub count: String,
+    pub panel_opacity: f32,
+    pub panel_width: f32,
+    pub panel_height: f32,
+    pub panel_top: f32,
+    pub title_px: f32,
+    pub row_gap: f32,
+    pub bar_width: f32,
+    pub bar_height: f32,
+    pub count_px: f32,
+    pub count_scale_from: f32,
+    pub count_scale_to: f32,
+    pub world_dim: f32,
+    pub world_saturation: f32,
+    pub coop: AwayHudCopy,
+    pub solo: AwayHudCopy,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct AwayHudCopy {
+    pub text: String,
+    pub show_timer: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -2305,7 +2363,7 @@ impl Palette {
     }
 }
 
-fn require_palette_keys(palette: &Palette, bugs: &crate::bugs::BugBook) -> Result<(), String> {
+fn require_palette_keys(palette: &Palette, bugs: &crate::bugs::BugBook, away: &AwayHud) -> Result<(), String> {
     let check = |owner: &str, name: &str| -> Result<(), String> {
         if name.is_empty() || palette.hex(name).is_some() {
             return Ok(());
@@ -2322,6 +2380,10 @@ fn require_palette_keys(palette: &Palette, bugs: &crate::bugs::BugBook) -> Resul
     for rarity in ["common", "rare", "epic", "legendary"] {
         check("rarity", &format!("rarity_{rarity}"))?;
     }
+    check("hud.away slate", &away.slate)?;
+    check("hud.away text", &away.text)?;
+    check("hud.away bar", &away.bar)?;
+    check("hud.away count", &away.count)?;
     Ok(())
 }
 

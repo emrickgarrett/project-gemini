@@ -4,6 +4,7 @@
 pub mod audio_mix;
 pub mod bugs;
 pub mod content;
+pub mod host_away;
 pub mod reveal;
 pub mod math;
 pub mod music;

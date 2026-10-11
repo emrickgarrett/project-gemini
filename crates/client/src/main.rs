@@ -69,6 +69,7 @@ fn install_match(app: &mut App) {
                 world::sync,
                 world::sync_viewmodel,
                 world::camera,
+                world::grade,
                 hud::draw,
             )
                 .chain()

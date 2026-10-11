@@ -8,7 +8,7 @@ use bevy::camera::{ClearColorConfig, Hdr};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
-use bevy::render::view::Tonemapping;
+use bevy::render::view::{ColorGrading, Tonemapping};
 
 use gemini_meshes::{pose, AnimInput, MeshData, Rgba};
 use gemini_sim::content::EnemyKind;
@@ -16,7 +16,7 @@ use gemini_sim::math::Vec3 as SimVec;
 use gemini_sim::sim::{AiState, ShotKind};
 
 use crate::audio;
-use crate::session::{FrameFx, Game};
+use crate::session::{Away, FrameFx, Game};
 
 #[derive(Component)]
 pub struct PlayPiece;
@@ -258,6 +258,7 @@ pub fn scene(
             Hdr,
             Bloom::NATURAL,
             Tonemapping::TonyMcMapface,
+            ColorGrading::default(),
             IsDefaultUiCamera,
             PlayPiece,
         ))
@@ -647,6 +648,25 @@ fn spawn_bug(
         ))
         .id();
     BugLink { root, parts, lod }
+}
+
+pub fn grade(
+    game: Res<Game>,
+    away: Res<Away>,
+    mut cameras: Query<&mut ColorGrading, (With<Camera3d>, Without<ViewmodelCamera>)>,
+) {
+    let hud = &game.content.presentation.hud.away;
+    for mut grading in &mut cameras {
+        if away.view.frozen {
+            let factor = (1.0 - hud.world_dim).clamp(0.05, 1.0);
+            grading.global.exposure = factor.log2();
+            grading.global.post_saturation = hud.world_saturation;
+            grading.global.temperature = 0.0;
+            grading.global.tint = 0.0;
+        } else {
+            *grading = ColorGrading::default();
+        }
+    }
 }
 
 pub fn camera(

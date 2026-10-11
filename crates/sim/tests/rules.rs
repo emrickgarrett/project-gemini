@@ -1569,7 +1569,10 @@ fn coop_table_rejects_missing_keys() {
     assert_eq!(content.coop.squad_wipe, "all_downed");
     assert_eq!(content.coop.currency_credit, "per_round_present");
     assert_eq!(content.coop.host_leave, "match_ends_rounds_kept");
-    assert!((content.coop.host_away_seconds - 60.0).abs() < 1e-3);
+    assert!((content.coop.host_away.detect_after_seconds - 3.0).abs() < 1e-3);
+    assert!((content.coop.host_away.end_after_seconds - 60.0).abs() < 1e-3);
+    assert!((content.coop.host_away.resume_countdown_seconds - 3.0).abs() < 1e-3);
+    assert_eq!(content.coop.host_away.freeze, "everything");
     assert!(!content.coop.friendly_fire);
     assert!(!content.coop.downed_on_return);
     assert!(content.coop.bleedout_pause_while_reviving);
@@ -1593,21 +1596,47 @@ fn coop_table_rejects_missing_keys() {
     let err = Content::parse(&sources_with(&base, &stripped_extra)).expect_err("missing max_extra_revivers");
     assert!(err.contains("max_extra_revivers"), "{err}");
 
-    let stripped_away = base
+    for key in ["detect_after_seconds", "end_after_seconds", "resume_countdown_seconds"] {
+        let stripped_away = base
+            .coop
+            .lines()
+            .filter(|line| !line.contains(key))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let err = Content::parse(&sources_with(&base, &stripped_away)).expect_err("missing host_away key");
+        assert!(err.contains(key), "{err}");
+    }
+    let zero_away = base.coop.replace("end_after_seconds = 60.0", "end_after_seconds = 0");
+    let err = Content::parse(&sources_with(&base, &zero_away)).expect_err("zero end");
+    assert!(err.contains("end_after_seconds"), "{err}");
+    let negative_away = base.coop.replace("detect_after_seconds = 3.0", "detect_after_seconds = -1");
+    let err = Content::parse(&sources_with(&base, &negative_away)).expect_err("negative detect");
+    assert!(err.contains("detect_after_seconds"), "{err}");
+    let negative_count = base
         .coop
-        .lines()
-        .filter(|line| !line.contains("away_seconds"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let err = Content::parse(&sources_with(&base, &stripped_away)).expect_err("missing away_seconds");
-    assert!(err.contains("away_seconds"), "{err}");
-    let zero_away = base.coop.replace("away_seconds = 60", "away_seconds = 0");
-    let err = Content::parse(&sources_with(&base, &zero_away)).expect_err("zero away_seconds");
-    assert!(err.contains("away_seconds"), "{err}");
+        .replace("resume_countdown_seconds = 3.0", "resume_countdown_seconds = -2.0");
+    let err = Content::parse(&sources_with(&base, &negative_count)).expect_err("negative countdown");
+    assert!(err.contains("resume_countdown_seconds"), "{err}");
+    let nan_away = base.coop.replace("detect_after_seconds = 3.0", "detect_after_seconds = nan");
+    let err = Content::parse(&sources_with(&base, &nan_away)).expect_err("nan detect");
+    assert!(err.contains("detect_after_seconds"), "{err}");
+    let bad_freeze = base.coop.replace("freeze = \"everything\"", "freeze = \"enemies\"");
+    let err = Content::parse(&sources_with(&base, &bad_freeze)).expect_err("freeze tag");
+    assert!(err.contains("everything"), "{err}");
+    let bad_slate = base.presentation.replace("slate = \"arena_dark\"", "slate = \"not_a_color\"");
+    let err = Content::parse(&sources_present(&base, &bad_slate)).expect_err("palette typo");
+    assert!(err.contains("not_a_color"), "{err}");
 
     let unknown = format!("{}\n[extra]\nnope = 1\n", base.coop);
     let err = Content::parse(&sources_with(&base, &unknown)).expect_err("unknown table");
     assert!(err.contains("unknown key"), "{err}");
+}
+
+fn sources_present<'a>(base: &'a gemini_sim::content::Sources<'a>, presentation: &'a str) -> gemini_sim::content::Sources<'a> {
+    gemini_sim::content::Sources {
+        presentation,
+        ..sources_with(base, base.coop)
+    }
 }
 
 fn sources_with<'a>(base: &'a gemini_sim::content::Sources<'a>, coop: &'a str) -> gemini_sim::content::Sources<'a> {
@@ -1731,57 +1760,174 @@ fn reconnect_holds_the_slot_then_expires() {
 }
 
 #[test]
-fn host_away_freezes_enemies_and_timers_then_ends_like_a_host_leave() {
+fn client_with_a_silent_host_banners_at_3s_and_ends_at_60s_keeping_credits() {
+    use gemini_sim::audio_mix::db_to_linear;
+    use gemini_sim::host_away::HostAwayClock;
+    use gemini_sim::sim::MusicMoment;
+
     let content = Content::embedded();
+    for id in ["host_away", "host_back"] {
+        let row = content.sfx(id).unwrap_or_else(|| panic!("{id} mix row"));
+        assert_eq!(row.path, format!("audio/sfx/{id}.ogg"));
+        assert!(!row.crowd);
+        assert!(row.pitch_semitones.abs() < 1e-6);
+        assert!((row.volume - db_to_linear(-8.0)).abs() < 1e-4);
+        let file = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets")
+            .join(&row.path);
+        assert!(file.is_file(), "{}", file.display());
+    }
+
     let mut sim = Sim::new(&content, "normal", 8);
     quiet_breather(&mut sim);
+    sim.request_join(&content).expect("second player");
+    assert!(sim.connected_count() > 1);
     sim.phase = Phase::Combat;
     sim.director.parked = true;
     sim.director.pool = 0.0;
+    sim.director.queue = 12.0;
     let token = sim.players[0].token;
     let credited = sim.credits.get(&token).cloned().unwrap();
     sim.players[0].ability_cd = 8.0;
+    sim.players[0].downed = true;
+    sim.players[0].bleedout = 4.0;
     let mut enemy = bug(gemini_sim::content::EnemyKind::Swarmer);
     enemy.pos = Vec3::new(2.0, 0.0, 4.0);
     enemy.vel = Vec3::new(4.0, 0.0, 0.0);
     enemy.warn_left = 1.4;
     sim.enemies.push(enemy);
-    sim.step(&content, PlayerInput::default());
+
+    let rules = &content.coop.host_away;
+    let mut packet = HostAwayClock::new(false);
+    packet.note_away_packet(rules.detect_after_seconds);
+    assert!(!packet.sample(rules).banner, "the packet alone does not raise the banner");
+    let from_packet = packet.tick(0.0, rules, &sim);
+    assert!(from_packet.banner);
+    assert!((from_packet.timer_fill - (1.0 - rules.detect_after_seconds / rules.end_after_seconds)).abs() < 1e-4);
+
+    let mut once = HostAwayClock::new(false);
+    once.set_silent(true);
+    assert!(once.tick(rules.end_after_seconds, rules, &sim).ended);
+
+    let mut clock = HostAwayClock::new(false);
+    clock.set_silent(true);
+    let banner = clock.tick(rules.detect_after_seconds, rules, &sim);
+    assert!(banner.banner);
+    assert!((banner.timer_fill - (1.0 - rules.detect_after_seconds / rules.end_after_seconds)).abs() < 1e-4);
+    assert!(banner.cues.iter().any(|cue| cue == "host_away"));
+    assert!(!banner.ended);
+
     let time = sim.time;
     let tick = sim.tick;
     let pos = sim.enemies[0].pos;
     let warn = sim.enemies[0].warn_left;
     let cd = sim.players[0].ability_cd;
-    assert!(time > 0.0);
-
-    sim.set_host_away(&content, true);
+    let bleed = sim.players[0].bleedout;
+    let queue = sim.director.queue;
+    sim.host_away = true;
+    sim.credits.get_mut(&token).unwrap().push(99);
     for _ in 0..40 {
         sim.step(&content, PlayerInput::default());
     }
-    assert!((sim.time - time).abs() < 1e-6, "sim clock {}", sim.time);
+    assert!((sim.time - time).abs() < 1e-6);
     assert_eq!(sim.tick, tick);
     assert_eq!(sim.enemies[0].pos, pos);
     assert!((sim.enemies[0].warn_left - warn).abs() < 1e-6);
     assert!((sim.players[0].ability_cd - cd).abs() < 1e-6);
+    assert!((sim.players[0].bleedout - bleed).abs() < 1e-6);
+    assert!((sim.director.queue - queue).abs() < 1e-6);
     assert!(matches!(sim.phase, Phase::Combat));
 
-    sim.tick_host_away(&content, content.coop.host_away_seconds - 0.5);
-    assert!(matches!(sim.phase, Phase::Combat), "still paused inside the away window");
-    assert!((sim.time - time).abs() < 1e-6);
-    sim.tick_host_away(&content, 0.5);
-    assert!(matches!(sim.phase, Phase::Defeat));
-    assert!(!sim.players[0].connected);
-    assert_eq!(sim.credits.get(&token).unwrap(), &credited);
+    let fill_before = clock.sample(rules).timer_fill;
+    clock.note_snapshot(true, rules.resume_countdown_seconds);
+    assert!((clock.sample(rules).timer_fill - fill_before).abs() < 1e-6);
 
-    let mut resumed = Sim::new(&content, "normal", 9);
-    quiet_breather(&mut resumed);
-    resumed.phase = Phase::Combat;
-    resumed.director.parked = true;
-    resumed.set_host_away(&content, true);
-    resumed.set_host_away(&content, false);
-    let before = resumed.time;
-    resumed.step(&content, PlayerInput::default());
-    assert!(resumed.time > before, "returning clears the pause");
+    let ended = clock.tick(rules.end_after_seconds - rules.detect_after_seconds, rules, &sim);
+    assert!(ended.ended);
+    clock.finish(&mut sim);
+    clock.finish(&mut sim);
+    assert!(matches!(sim.phase, Phase::Defeat));
+    assert_eq!(sim.credits.get(&token).unwrap(), &credited);
+    assert!(sim.players.iter().any(|player| player.is_host && player.connected));
+    assert_eq!(sim.music.iter().filter(|moment| matches!(moment, MusicMoment::MatchEnd)).count(), 1);
+    clock.set_page_hidden(true);
+    assert!(clock.tick(0.0, rules, &sim).cues.is_empty());
+}
+
+#[test]
+fn solo_host_hidden_five_minutes_resumes_intact() {
+    use gemini_sim::host_away::HostAwayClock;
+
+    let content = Content::embedded();
+    let mut sim = Sim::new(&content, "normal", 3);
+    quiet_breather(&mut sim);
+    sim.phase = Phase::Combat;
+    sim.director.parked = true;
+    let before = sim.to_bytes().expect("bytes");
+    let rules = &content.coop.host_away;
+    let mut clock = HostAwayClock::new(true);
+    clock.set_silent(true);
+    clock.set_page_hidden(true);
+    let hidden = clock.tick(3.0, rules, &sim);
+    assert!(hidden.banner);
+    clock.set_solo(false);
+    let still = clock.tick(300.0, rules, &sim);
+    assert!(!still.ended);
+    assert!(still.banner);
+    assert!(still.digit.is_none());
+    assert_eq!(sim.to_bytes().expect("bytes"), before);
+
+    clock.host_shown(rules.resume_countdown_seconds);
+    let back = clock.tick(0.0, rules, &sim);
+    assert_eq!(back.cues, vec!["host_back".to_string()]);
+    assert_eq!(back.digit, Some(3));
+    assert!(back.digit_u.abs() < 1e-4);
+    assert!(!back.banner);
+    assert!(back.frozen);
+    let done = clock.tick(rules.resume_countdown_seconds, rules, &sim);
+    assert!(!done.frozen);
+    assert!(!done.ended);
+    assert_eq!(sim.to_bytes().expect("bytes"), before);
+    let time = sim.time;
+    sim.step(&content, PlayerInput::default());
+    assert!(sim.time > time);
+}
+
+#[test]
+fn host_back_fires_once_at_countdown_start() {
+    use gemini_sim::host_away::HostAwayClock;
+
+    let content = Content::embedded();
+    let sim = Sim::new(&content, "normal", 6);
+    let rules = &content.coop.host_away;
+    let mut clock = HostAwayClock::new(false);
+    clock.set_silent(true);
+    clock.tick(rules.detect_after_seconds, rules, &sim);
+    clock.host_shown(rules.resume_countdown_seconds);
+    let start = clock.tick(0.0, rules, &sim);
+    assert_eq!(start.cues, vec!["host_back".to_string()]);
+    assert_eq!(start.digit, Some(3));
+    assert!(start.digit_u.abs() < 1e-4);
+    let again = clock.tick(0.0, rules, &sim);
+    assert!(again.cues.is_empty());
+    let next = clock.tick(1.0, rules, &sim);
+    assert_eq!(next.digit, Some(2));
+    assert!(next.cues.is_empty());
+
+    let mut from_snap = HostAwayClock::new(false);
+    from_snap.set_silent(true);
+    from_snap.tick(rules.detect_after_seconds, rules, &sim);
+    from_snap.set_silent(false);
+    from_snap.note_snapshot(false, rules.resume_countdown_seconds);
+    let snapped = from_snap.tick(0.0, rules, &sim);
+    assert_eq!(snapped.cues, vec!["host_back".to_string()]);
+    assert_eq!(snapped.digit, Some(3));
+
+    clock.set_page_hidden(true);
+    let paused = clock.tick(0.0, rules, &sim);
+    assert!(paused.banner);
+    assert!(paused.digit.is_none());
+    assert!(paused.cues.iter().any(|cue| cue == "host_away"));
 }
 
 #[test]
