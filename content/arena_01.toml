@@ -92,6 +92,7 @@ pos = [-16.0, 0, 27.7]
 spawns_during = "breather"
 
 [perch_rules]
+detect_radius = 1.5                  # meters, horizontal, around each ledge
 flow_field_targets = "nearest_grounded_player"
 all_perched_grace = 8.0          # seconds before anti-camp kicks in
 climb_speed_mult = 0.5           # swarmers climb resin streaks

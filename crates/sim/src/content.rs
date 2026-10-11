@@ -1159,6 +1159,7 @@ pub struct ArenaPickup {
 
 #[derive(Clone, Debug)]
 pub struct PerchRules {
+    pub detect_radius: f32,
     pub flow_field_targets: String,
     pub all_perched_grace: f32,
     pub climb_speed_mult: f32,
@@ -1185,7 +1186,8 @@ impl Arena {
         self.ledges.iter().any(|ledge| {
             let dx = pos.x - ledge.pos.x;
             let dz = pos.z - ledge.pos.z;
-            dx * dx + dz * dz <= 1.44 && (pos.y - ledge.pos.y).abs() <= 0.45
+            let r = self.perch_rules.detect_radius;
+            dx * dx + dz * dz <= r * r && (pos.y - ledge.pos.y).abs() <= 0.45
         })
     }
 
@@ -1590,6 +1592,7 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
     expect_keys(
         table,
         &[
+            "detect_radius",
             "flow_field_targets",
             "all_perched_grace",
             "climb_speed_mult",
@@ -1606,6 +1609,7 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
     if flow_field_targets != "nearest_grounded_player" {
         return Err(format!("flow_field_targets \"{flow_field_targets}\" is unknown"));
     }
+    let detect_radius = num(table.get("detect_radius").unwrap(), "detect_radius")?;
     let all_perched_grace = num(table.get("all_perched_grace").unwrap(), "all_perched_grace")?;
     let climb_speed_mult = num(table.get("climb_speed_mult").unwrap(), "climb_speed_mult")?;
     let budget_shift_to_spitters = num(table.get("budget_shift_to_spitters").unwrap(), "budget_shift_to_spitters")?;
@@ -1613,10 +1617,11 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
         .get("fuel_regen_on_perch")
         .and_then(|v| v.as_bool())
         .ok_or_else(|| "fuel_regen_on_perch must be a bool".to_string())?;
-    if all_perched_grace < 0.0 || climb_speed_mult < 0.0 || !(0.0..=1.0).contains(&budget_shift_to_spitters) {
+    if detect_radius <= 0.0 || all_perched_grace < 0.0 || climb_speed_mult < 0.0 || !(0.0..=1.0).contains(&budget_shift_to_spitters) {
         return Err("perch_rules numbers are out of range".into());
     }
     Ok(PerchRules {
+        detect_radius,
         flow_field_targets,
         all_perched_grace,
         climb_speed_mult,
@@ -1700,6 +1705,7 @@ fn load_coop(text: &str) -> Result<CoopRules, String> {
         revive,
         &[
             "multi_reviver_speedup",
+            "max_extra_revivers",
             "bleedout_pause_while_reviving",
             "squad_wipe",
         ],
@@ -1747,7 +1753,7 @@ fn load_coop(text: &str) -> Result<CoopRules, String> {
         multi_reviver_speedup: req_f32(revive, "multi_reviver_speedup", "coop.toml revive")?,
         bleedout_pause_while_reviving: req_bool(revive, "bleedout_pause_while_reviving", "coop.toml revive")?,
         squad_wipe,
-        max_extra_revivers: max_extra_revivers(text)?,
+        max_extra_revivers: req_u32(revive, "max_extra_revivers", "coop.toml revive")?,
         currency_credit,
         leave_keeps_earned: req_bool(currency, "leave_keeps_earned", "coop.toml currency_share")?,
         host_leave,
@@ -1800,26 +1806,6 @@ fn parse_choose_from(mode: &str) -> Result<u32, String> {
         return Err(format!("catchup_pick_mode {mode} needs at least one offer"));
     }
     Ok(count)
-}
-
-/// The extra-reviver cap is a comment on the speedup line (`max N extra`), not its own key.
-fn max_extra_revivers(text: &str) -> Result<u32, String> {
-    for line in text.lines() {
-        let Some(at) = line.find("max ") else {
-            continue;
-        };
-        let after = &line[at + 4..];
-        let digits: String = after.chars().take_while(|ch| ch.is_ascii_digit()).collect();
-        if digits.is_empty() {
-            continue;
-        }
-        if after[digits.len()..].trim_start().starts_with("extra") {
-            return digits
-                .parse()
-                .map_err(|_| "coop.toml revive max extra revivers is not a number".into());
-        }
-    }
-    Err("coop.toml revive comment is missing max N extra".into())
 }
 
 fn expect_keys(table: &toml::map::Map<String, toml::Value>, allowed: &[&str], what: &str) -> Result<(), String> {

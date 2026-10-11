@@ -159,6 +159,9 @@ pub struct Player {
     pub catchup_left: u32,
     #[serde(default)]
     pub catchup_options: Vec<String>,
+    /// True after the perch already played the regen-paused cue this stay.
+    #[serde(default)]
+    pub regen_pause_cue: bool,
 }
 
 fn default_connected() -> bool {
@@ -501,6 +504,7 @@ impl Sim {
             is_host,
             catchup_left: 0,
             catchup_options: Vec::new(),
+            regen_pause_cue: false,
         }
     }
 
@@ -988,10 +992,19 @@ impl Sim {
         let regen_ok = !perched || content.arena.perch_rules.fuel_regen_on_perch;
         if burning {
             player.fuel_delay = ctl.boost.regen_delay;
+            player.regen_pause_cue = false;
         } else if player.fuel_delay > 0.0 {
             player.fuel_delay -= dt;
         } else if regen_ok {
             player.fuel = (player.fuel + ctl.boost.fuel_regen_per_s * dt).min(max_fuel);
+            player.regen_pause_cue = false;
+        } else if player.fuel < max_fuel && !player.regen_pause_cue {
+            player.regen_pause_cue = true;
+            self.sounds.push(SoundEvent {
+                id: "fuel_regen_paused".into(),
+                pos: player.pos,
+                owner: player.id,
+            });
         }
         if can_jump {
             player.vel.y = ctl.jump.jump_velocity;

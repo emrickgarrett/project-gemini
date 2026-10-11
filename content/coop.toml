@@ -15,7 +15,8 @@ downed_on_return = false             # returns at full hp at the squad's locatio
 
 [revive]
 # revive_time from controller.toml, scaled by number of revivers
-multi_reviver_speedup = 0.35         # each extra reviver adds +35% speed, max 2 extra
+multi_reviver_speedup = 0.35         # each extra reviver adds +35% speed
+max_extra_revivers = 2
 bleedout_pause_while_reviving = true
 squad_wipe = "all_downed"            # match ends when everyone is down at once
 

@@ -955,6 +955,7 @@ fn every_emitted_sound_resolves_to_a_mix_file() {
         "vent_warn".into(),
         "vent_burst".into(),
         "perch_climb_warn".into(),
+        "fuel_regen_paused".into(),
         content.bugs.feedback.weakpoint_hit.clone(),
     ];
     for (_, row) in content.bugs.rows() {
@@ -1231,6 +1232,7 @@ fn arena_01_vents_perches_and_pickups() {
     assert!((content.arena.perch_rules.climb_speed_mult - 0.5).abs() < 1e-4);
     assert!((content.arena.perch_rules.all_perched_grace - 8.0).abs() < 1e-4);
     assert!((content.arena.perch_rules.budget_shift_to_spitters - 0.3).abs() < 1e-4);
+    assert!((content.arena.perch_rules.detect_radius - 1.5).abs() < 1e-4);
     assert!((content.controller.camera.eye_height - 1.62).abs() < 1e-4);
     assert!((content.controller.camera.crouch_eye - 1.02).abs() < 1e-4);
 
@@ -1259,6 +1261,13 @@ fn arena_01_vents_perches_and_pickups() {
             coop: base.coop,
         })
     };
+    let missing_radius = include_str!("../../../content/arena_01.toml")
+        .lines()
+        .filter(|line| !line.contains("detect_radius"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let err = parse(&missing_radius).expect_err("missing detect_radius");
+    assert!(err.contains("detect_radius"), "{err}");
     let missing = include_str!("../../../content/arena_01.toml").replacen("telegraph = 1.5\n", "", 1);
     let err = parse(&missing).expect_err("missing telegraph");
     assert!(err.contains("telegraph"), "{err}");
@@ -1388,6 +1397,14 @@ fn coop_table_rejects_missing_keys() {
         .join("\n");
     let err = Content::parse(&sources_with(&base, &stripped)).expect_err("missing max_players");
     assert!(err.contains("max_players"), "{err}");
+    let stripped_extra = base
+        .coop
+        .lines()
+        .filter(|line| !line.contains("max_extra_revivers"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let err = Content::parse(&sources_with(&base, &stripped_extra)).expect_err("missing max_extra_revivers");
+    assert!(err.contains("max_extra_revivers"), "{err}");
 
     let unknown = format!("{}\n[extra]\nnope = 1\n", base.coop);
     let err = Content::parse(&sources_with(&base, &unknown)).expect_err("unknown table");

@@ -728,6 +728,14 @@ loop = false
 category = "enemy"
 measured_rms_db = -10.0
 
+[fuel_regen_paused]
+volume_db = -4.0
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "player"
+measured_rms_db = -14.0
+
 [perch_climb_warn]
 volume_db = 0.2
 pitch_rand_semitones = 0
