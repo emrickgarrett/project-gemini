@@ -110,7 +110,13 @@ impl Content {
             fingerprint,
             waves: parse("waves.toml", src.waves)?,
             difficulty: parse::<DifficultyFile>("difficulty.toml", src.difficulty)?.tier,
-            controller: parse("controller.toml", src.controller)?,
+            controller: {
+                let controller: Controller = parse("controller.toml", src.controller)?;
+                if controller.sim.max_sim_steps_per_frame == 0 {
+                    return Err("controller.toml: max_sim_steps_per_frame must be at least 1".into());
+                }
+                controller
+            },
             upgrades: parse::<UpgradeFile>("run_upgrades.toml", src.run_upgrades)?.upgrade,
             endless: parse("endless.toml", src.endless)?,
             currency: parse("currency.toml", src.currency)?,
@@ -380,6 +386,12 @@ pub struct Controller {
     pub health: HealthCfg,
     pub downed: DownedCfg,
     pub ability: AbilityCfg,
+    pub sim: SimCfg,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct SimCfg {
+    pub max_sim_steps_per_frame: u32,
 }
 
 #[derive(Clone, Debug, Deserialize)]

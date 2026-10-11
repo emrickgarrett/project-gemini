@@ -43,3 +43,5 @@ solo_self_revive_hp_fraction = 0.5   # hp restored on self-revive
 solo_self_revive_time = 5.0   # hold interact; sidearm usable
 [ability]                   # one active ability per character
 default_cooldown = 18.0
+[sim]
+max_sim_steps_per_frame = 5   # a hitch longer than this drops the leftover time

@@ -230,6 +230,7 @@ mod tests {
         keys.press(KeyCode::Digit1);
         keys.press(KeyCode::KeyW);
         drop(keys);
+        app.world_mut().resource_mut::<session::SimClock>().set_accumulated(30.0);
 
         let mut wave_starts = 0u32;
         let mut music_restarts = 0u32;
@@ -237,6 +238,7 @@ mod tests {
         let mut player_at_start = None;
         let mut bug_at_start: Option<(u32, f32, f32)> = None;
         let mut durable_settled = Vec::new();
+        let mut checked_boot_clock = false;
 
         for frame in 0..120 {
             app.update();
@@ -259,6 +261,12 @@ mod tests {
                     }
                 }
                 if let Some(game) = app.world().get_resource::<session::Game>() {
+                    if !checked_boot_clock {
+                        checked_boot_clock = true;
+                        assert_eq!(game.sim.tick, 0, "match start should drop leftover sim time");
+                        let acc = app.world().resource::<session::SimClock>().accumulated();
+                        assert!(acc < 0.05, "accumulator after boot {acc}");
+                    }
                     if player_at_start.is_none() {
                         player_at_start = Some(game.sim.players[0].pos);
                     }
@@ -309,5 +317,27 @@ mod tests {
         let bug = game.sim.enemies.iter().find(|enemy| enemy.id == bug_id).expect("bug still in the sim");
         let moved = (bug.pos.x - bx) * (bug.pos.x - bx) + (bug.pos.z - bz) * (bug.pos.z - bz);
         assert!(moved > 0.25, "bug {bug_id} did not move ({bx},{bz}) -> ({},{})", bug.pos.x, bug.pos.z);
+        assert!(checked_boot_clock, "match never started");
+
+        let tick_before = game.sim.tick;
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs(30)));
+        app.update();
+        let tick_after = app.world().resource::<session::Game>().sim.tick;
+        assert_eq!(tick_after - tick_before, 5, "a 30s frame must run only max_sim_steps_per_frame");
+
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(1.0 / 60.0)));
+        app.update();
+        let tick_small = app.world().resource::<session::Game>().sim.tick;
+        assert!(
+            tick_small - tick_after <= 1,
+            "leftover hitch time must be discarded, advanced {}",
+            tick_small - tick_after
+        );
+
+        app.world_mut().resource_mut::<session::SimClock>().set_accumulated(4.0);
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Menu);
+        app.update();
+        assert_eq!(app.world().resource::<session::SimClock>().accumulated(), 0.0);
+        assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Menu));
     }
 }

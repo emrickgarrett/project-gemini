@@ -571,6 +571,47 @@ fn spitter_sac_pop_cancels_charge_same_tick() {
 }
 
 #[test]
+fn sim_step_cap_comes_from_controller() {
+    let content = Content::embedded();
+    assert_eq!(content.controller.sim.max_sim_steps_per_frame, 5);
+    let base = gemini_sim::content::embedded_sources();
+    let load = |controller: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            waves: base.waves,
+            difficulty: base.difficulty,
+            controller,
+            run_upgrades: base.run_upgrades,
+            endless: base.endless,
+            currency: base.currency,
+            banners: base.banners,
+            duplicate_ranks: base.duplicate_ranks,
+            bosses: base.bosses,
+            weapons: base.weapons,
+            hero: base.hero,
+            arena: base.arena,
+            presentation: base.presentation,
+            combat: base.combat,
+            palette: base.palette,
+            music: base.music,
+            audio: base.audio,
+            bugs: base.bugs,
+            crate_reveal: base.crate_reveal,
+        })
+    };
+    let missing = base
+        .controller
+        .lines()
+        .filter(|line| !line.contains("max_sim_steps_per_frame"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let err = load(&missing).expect_err("missing max_sim_steps_per_frame");
+    assert!(err.contains("max_sim_steps_per_frame"), "{err}");
+    let zero = base.controller.replace("max_sim_steps_per_frame = 5", "max_sim_steps_per_frame = 0");
+    let err = load(&zero).expect_err("a zero step cap must fail load");
+    assert!(err.contains("max_sim_steps_per_frame"), "{err}");
+}
+
+#[test]
 fn hatch_fan_and_spawn_radius_come_from_bosses() {
     let content = Content::embedded();
     for id in ["brood_mother", "hive_tyrant"] {
