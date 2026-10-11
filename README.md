@@ -10,7 +10,7 @@ From the repo root (assets load from `./assets`):
 cargo run -p gemini-client
 ```
 
-Linux needs the usual windowing libraries: `pkg-config`, `libwayland-dev`, `libxkbcommon-dev`, `libvulkan-dev`, `libasound2-dev`, `libudev-dev`, `libx11-dev`, `libxi-dev`, `libxcursor-dev`, `libxrandr-dev`.
+Linux needs the usual windowing libraries: `pkg-config`, `libwayland-dev`, `libxkbcommon-dev`, `libxkbcommon-x11-dev`, `libvulkan-dev`, `libasound2-dev`, `libudev-dev`, `libx11-dev`, `libxi-dev`, `libxcursor-dev`, `libxrandr-dev`.
 
 The menu is keys `1`–`4` (Normal, Hard, Heroic, Legendary) or the on-screen buttons. In a match:
 

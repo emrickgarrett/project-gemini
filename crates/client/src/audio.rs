@@ -63,16 +63,14 @@ pub fn play(
     fx: Res<FrameFx>,
     mut music: ResMut<Music>,
     mut crowd: ResMut<Crowd>,
-    mut sinks: Query<&mut AudioSink, With<MusicStem>>,
-    crowd_sinks: Query<&AudioSink, With<CrowdVoice>>,
-    shots: Query<(Entity, &OneShot)>,
+    shots: Query<(Entity, &OneShot), Without<MusicStem>>,
     time: Res<Time>,
 ) {
     let listener = listener_of(&game);
     if !fx.moments.is_empty() {
         apply_moments(&mut commands, &assets, &game.content, &mut music, &fx.moments, &game.sim);
     }
-    advance(&game, &mut music, &mut sinks, time.delta_secs());
+    advance(&game, &mut music, time.delta_secs());
     if let Some(target) = music.pending.clone() {
         if bar_crossed(&music) {
             start_track(&mut commands, &assets, &game.content, &mut music, &target);
@@ -142,7 +140,6 @@ pub fn play(
             crowd.entity = Some(entity);
         }
     }
-    let _ = crowd_sinks;
 }
 
 pub fn sync_crowd(crowd: Res<Crowd>, mut sinks: Query<&mut AudioSink, With<CrowdVoice>>) {
@@ -294,7 +291,7 @@ fn start_track(commands: &mut Commands, assets: &AssetServer, content: &Content,
     music.track = id.to_string();
 }
 
-fn advance(game: &Game, music: &mut Music, sinks: &mut Query<&mut AudioSink, With<MusicStem>>, dt: f32) {
+fn advance(game: &Game, music: &mut Music, dt: f32) {
     let Some(track) = game.content.track(&music.track).cloned() else { return };
     if track.layer.is_empty() {
         return;
@@ -306,7 +303,6 @@ fn advance(game: &Game, music: &mut Music, sinks: &mut Query<&mut AudioSink, Wit
     if let Some(mixer) = music.mixer.as_mut() {
         mixer.advance(&track, dt, intensity);
     }
-    let _ = sinks;
 }
 
 pub fn sync_gains(music: Res<Music>, mut stems: Query<(&MusicStem, &mut AudioSink)>) {

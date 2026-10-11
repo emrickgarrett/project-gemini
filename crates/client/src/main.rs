@@ -5,8 +5,9 @@ mod hud;
 mod session;
 mod world;
 
+use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
-use bevy::ui_widgets::{Activate, Button, UiWidgetsPlugins};
+use bevy::ui_widgets::{Activate, Button};
 
 #[derive(States, Clone, Eq, PartialEq, Hash, Debug, Default)]
 enum AppState {
@@ -17,21 +18,34 @@ enum AppState {
 
 fn main() {
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Project Gemini".into(),
-                fit_canvas_to_parent: true,
-                ..default()
-            }),
-            ..default()
-        }))
-        .add_plugins(UiWidgetsPlugins)
+        .add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "Project Gemini".into(),
+                        fit_canvas_to_parent: true,
+                        ..default()
+                    }),
+                    ..default()
+                })
+                .set(AssetPlugin {
+                    // cargo run sets the base to crates/client. The binary's base is
+                    // target/debug. Both resolve this relative path to the repo assets folder.
+                    // Wasm keeps the URL path `assets`, which build-web.sh copies into web/.
+                    file_path: if cfg!(target_arch = "wasm32") {
+                        "assets".to_string()
+                    } else {
+                        "../../assets".to_string()
+                    },
+                    ..default()
+                }),
+        )
         .init_state::<AppState>()
         .insert_resource(ClearColor(Color::srgb(0.07, 0.06, 0.09)))
         .insert_resource(session::PendingDifficulty("normal".into()))
         .add_systems(OnEnter(AppState::Menu), (menu, audio::menu_theme))
         .add_systems(OnExit(AppState::Menu), (despawn_menu, audio::stop_all))
-        .add_systems(OnEnter(AppState::Playing), (session::boot, world::scene, audio::boot))
+        .add_systems(OnEnter(AppState::Playing), (session::boot, world::scene, audio::boot).chain())
         .add_systems(OnExit(AppState::Playing), (despawn_play, session::shutdown, audio::stop_all))
         .add_systems(
             Update,

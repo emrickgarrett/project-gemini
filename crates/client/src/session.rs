@@ -5,6 +5,7 @@ use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions};
 
+#[cfg(not(target_arch = "wasm32"))]
 use gemini_meshes::raster_bug;
 use gemini_sim::audio_mix::SoundEvent;
 use gemini_sim::content::Content;
