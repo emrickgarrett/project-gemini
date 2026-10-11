@@ -385,6 +385,7 @@ pub struct DownedCfg {
     pub revive_invuln: f32,
     pub solo_self_revives_per_wave: u32,
     pub solo_self_revive_time: f32,
+    pub solo_self_revive_hp_frac: f32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -611,6 +612,8 @@ pub struct Combat {
     pub cell_size: f32,
     pub telegraph_seconds: f32,
     pub spitter_cooldown: f32,
+    pub spitter_min_range: f32,
+    pub keep_away_ratios: [f32; 2],
     pub swarmer_melee_interval: f32,
     pub brute_cooldown: f32,
     pub brute_lunge_seconds: f32,

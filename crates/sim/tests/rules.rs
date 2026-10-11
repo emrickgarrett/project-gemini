@@ -31,6 +31,9 @@ fn tables_drive_the_controller_and_clocks() {
     assert!((content.controller.downed.bleedout_time - 30.0).abs() < 1e-4);
     assert_eq!(content.controller.downed.solo_self_revives_per_wave, 1);
     assert!((content.controller.downed.solo_self_revive_time - 5.0).abs() < 1e-4);
+    assert!((content.controller.downed.solo_self_revive_hp_frac - 0.5).abs() < 1e-4);
+    assert!((content.combat.spitter_min_range - 6.0).abs() < 1e-4);
+    assert_eq!(content.combat.keep_away_ratios, [0.55, 0.35]);
     assert!(!content.controller.aim.mouse_aim_assist);
     assert_eq!(content.waves.budget.live_enemy_cap, 300);
     assert!((content.waves.budget.queue_cap_waves - 1.0).abs() < 1e-4);
@@ -242,6 +245,8 @@ fn solo_self_revive_once_per_wave() {
     }
     assert!(!sim.players[0].downed, "hold should self-revive");
     assert!(sim.players[0].alive);
+    let frac = content.controller.downed.solo_self_revive_hp_frac;
+    assert!((sim.players[0].hp - sim.players[0].max_hp * frac).abs() < 0.05);
     assert!(sim.players[0].sidearm.ammo < sidearm_before);
     assert_eq!(sim.players[0].self_revives_used, 1);
 

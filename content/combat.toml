@@ -8,6 +8,10 @@ group_budget = 8.0
 cell_size = 4.0
 telegraph_seconds = 0.5
 spitter_cooldown = 2.4
+spitter_min_range = 6.0
+# [0] back away inside this fraction of preferred range.
+# [1] do not start a spit closer than this fraction.
+keep_away_ratios = [0.55, 0.35]
 swarmer_melee_interval = 0.75
 brute_cooldown = 1.8
 brute_lunge_seconds = 0.4

@@ -1463,8 +1463,8 @@ impl Sim {
                 player.self_revives_used += 1;
                 player.self_revive_held = 0.0;
                 player.invuln = content.controller.downed.revive_invuln;
-                // Half of max HP. Not in the table; the hold time is.
-                player.hp = (player.max_hp * 0.5).max(1.0);
+                let frac = content.controller.downed.solo_self_revive_hp_frac;
+                player.hp = (player.max_hp * frac).max(1.0);
                 player.bleedout = content.controller.downed.bleedout_time;
                 return;
             }
@@ -1779,13 +1779,14 @@ fn step_enemy(
     let mut move_dir = dir + push * dt;
     match enemy.kind {
         EnemyKind::Spitter => {
-            let preferred = enemy.range.max(6.0);
-            if dist < preferred * 0.55 {
+            let preferred = enemy.range.max(content.combat.spitter_min_range);
+            let [back_away, fire_floor] = content.combat.keep_away_ratios;
+            if dist < preferred * back_away {
                 move_dir = dir * -1.0 + push * dt;
             } else if dist < preferred {
                 move_dir = push * dt;
             }
-            if enemy.attack_cd <= 0.0 && dist <= preferred && dist >= preferred * 0.35 {
+            if enemy.attack_cd <= 0.0 && dist <= preferred && dist >= preferred * fire_floor {
                 let charge = content.bug(EnemyKind::Spitter).hitbox.charge_seconds;
                 enemy.ai = AiState::Telegraph {
                     left: if charge > 0.0 {
