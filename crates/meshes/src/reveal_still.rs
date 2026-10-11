@@ -52,7 +52,7 @@ pub fn paint_reveal(content: &Content, plan: &RevealPlan, t: f32, width: u32, he
     };
     let light = [242u8, 242, 242];
     if view.card {
-        paint_card(&mut rgb, width, height, color, ink, light, &view.shown);
+        paint_card(&mut rgb, width, height, color, ink, light, &view.shown, &content.crate_reveal.card);
     } else {
         paint_crate(&mut rgb, width, height, &view, color, light);
         if view.burst > 0.02 {
@@ -67,6 +67,8 @@ pub fn paint_reveal(content: &Content, plan: &RevealPlan, t: f32, width: u32, he
             }
         }
     }
+    let hint = if view.card { "ENTER" } else { "SKIP" };
+    paint_hint(&mut rgb, width, height, hint, light, &content.crate_reveal.hint);
     rgb
 }
 
@@ -90,7 +92,16 @@ fn paint_stage(rgb: &mut [u8], width: u32, height: u32) {
     }
 }
 
-fn paint_card(rgb: &mut [u8], width: u32, height: u32, color: [u8; 3], ink: [u8; 3], light: [u8; 3], shown: &str) {
+fn paint_card(
+    rgb: &mut [u8],
+    width: u32,
+    height: u32,
+    color: [u8; 3],
+    ink: [u8; 3],
+    light: [u8; 3],
+    shown: &str,
+    card: &gemini_sim::content::CardTitle,
+) {
     let (x, y, panel_w, panel_h) = card_panel(width, height);
     let cx = x + panel_w / 2;
     let cy = y + panel_h / 2;
@@ -124,17 +135,19 @@ fn paint_card(rgb: &mut [u8], width: u32, height: u32, color: [u8; 3], ink: [u8;
     }
     paint_gem(rgb, width, height, face_x, face_y, face_w, face_h, color, light, ink);
     let label = shown.to_uppercase();
-    let scale = title_scale(face_w, face_h, label.chars().count() as u32);
+    let legendary = shown.eq_ignore_ascii_case("legendary");
+    let scale = title_scale(face_w, face_h, label.chars().count() as u32, legendary, card);
+    let pad = card.title_pad.round().max(0.0) as u32;
     let text_w = label.chars().count() as u32 * 6 * scale;
     let text_h = 7 * scale;
-    let text_x = face_x + face_w.saturating_sub(text_w) / 2;
-    let text_y = face_y + face_h.saturating_sub(text_h + scale);
+    let inner_x = face_x + pad.min(face_w / 4);
+    let inner_w = face_w.saturating_sub(pad.min(face_w / 4) * 2);
+    let text_x = inner_x + inner_w.saturating_sub(text_w) / 2;
+    let text_y = face_y + face_h.saturating_sub(pad.min(face_h / 4) + text_h);
     blit_at(rgb, width, height, text_x + scale / 2, text_y + scale / 2, &label, blend(ink, [0, 0, 0], 0.65), scale);
     blit_at(rgb, width, height, text_x, text_y, &label, ink, scale);
     let rule_y = text_y.saturating_sub(scale.max(2));
     fill(rgb, width, height, face_x + face_w / 6, rule_y, face_w * 2 / 3, (scale / 3).max(1), blend(ink, color, 0.45));
-    let hint_scale = (scale / 2).max(2);
-    blit_centered_at(rgb, width, height, width / 2, (y + panel_h + hint_scale * 4).min(height.saturating_sub(8)), "ENTER", light, hint_scale);
 }
 
 fn paint_gem(rgb: &mut [u8], width: u32, height: u32, face_x: u32, face_y: u32, face_w: u32, face_h: u32, color: [u8; 3], light: [u8; 3], ink: [u8; 3]) {
@@ -160,21 +173,18 @@ fn paint_gem(rgb: &mut [u8], width: u32, height: u32, face_x: u32, face_y: u32, 
 }
 
 fn paint_crate(rgb: &mut [u8], width: u32, height: u32, view: &gemini_sim::reveal::RevealLook, color: [u8; 3], light: [u8; 3]) {
-    let crate_w = width / 6;
-    let crate_h = height / 5;
+    let crate_w = (width / 6).max(12);
+    let crate_h = (height / 3).max(crate_w + 4);
     let landed = (height / 2) as i32;
     let risen = landed - (height as i32 / 4);
     let dropped = risen + ((landed - risen) as f32 * view.drop) as i32;
     let y = (dropped + ((risen - dropped) as f32 * view.rise) as i32).max(8) as u32;
-    let x = (width - crate_w) / 2;
-    let gap = ((crate_w as f32) * 0.18 * view.crack) as u32;
-    let half = crate_w.saturating_sub(gap) / 2;
     let top = y.saturating_sub(crate_h / 2);
-    let cx = x + crate_w / 2;
+    let cx = width / 2;
+    let left = cx.saturating_sub(crate_w / 2);
     add_glow(rgb, width, height, cx, top + crate_h / 2, crate_w.saturating_mul(3).max(24), color, 0.8);
-    // Soft contact shadow, wider than the crate.
     let shadow_w = crate_w.saturating_mul(2);
-    let shadow_h = (crate_h / 5).max(3);
+    let shadow_h = (crate_h / 8).max(3);
     let shadow_x = cx.saturating_sub(shadow_w / 2);
     let shadow_y = top + crate_h + shadow_h / 2;
     for row in 0..shadow_h {
@@ -183,15 +193,123 @@ fn paint_crate(rgb: &mut [u8], width: u32, height: u32, view: &gemini_sim::revea
         let inset = ((1.0 - t) * (shadow_w as f32) * 0.25) as u32;
         fill(rgb, width, height, shadow_x + inset, shadow_y + row, shadow_w.saturating_sub(inset * 2), 1, tone);
     }
-    let lip = blend(color, light, 0.4);
-    let side = blend(color, [8, 6, 12], 0.4);
-    for (ox, w) in [(x, half), (x + half + gap, half)] {
-        fill(rgb, width, height, ox, top, w, crate_h, side);
-        let inset = 2.min(w / 3);
-        fill(rgb, width, height, ox + inset, top + inset, w.saturating_sub(inset * 2), crate_h.saturating_sub(inset + inset / 2), color);
-        fill(rgb, width, height, ox + inset, top, w.saturating_sub(inset * 2), (crate_h / 6).max(2), lip);
+    paint_capsule(rgb, width, height, left, top, crate_w, crate_h, color, light);
+    if view.crack > 0.0 {
+        paint_cracks(rgb, width, height, cx, top, crate_w, crate_h, color, light, view.crack);
     }
-    blit_centered_at(rgb, width, height, width / 2, (top + crate_h + shadow_h * 3).min(height.saturating_sub(8)), "SKIP", light, (height / 48).max(2));
+}
+
+/// Vertical pill: semicircular caps and a straight body, with a dark seam.
+fn paint_capsule(rgb: &mut [u8], width: u32, height: u32, left: u32, top: u32, crate_w: u32, crate_h: u32, color: [u8; 3], light: [u8; 3]) {
+    let radius = (crate_w as f32) * 0.5;
+    let body = (crate_h as f32 - radius * 2.0).max(0.0);
+    let cx = left as f32 + radius;
+    let dark = [10u8, 8, 14];
+    for row in 0..crate_h {
+        let local = row as f32;
+        let dy = if local < radius {
+            radius - local
+        } else if local > radius + body {
+            local - (radius + body)
+        } else {
+            0.0
+        };
+        let half = (radius * radius - dy * dy).max(0.0).sqrt();
+        if half < 0.5 {
+            continue;
+        }
+        let x0 = (cx - half).ceil().max(0.0) as u32;
+        let x1 = (cx + half).floor().max(0.0) as u32;
+        let py = top + row;
+        if py >= height {
+            break;
+        }
+        for x in x0..=x1.min(width.saturating_sub(1)) {
+            let nx = ((x as f32) - cx) / radius;
+            let rim = (x as f32 - cx).abs() > half - 1.6;
+            // The interior stays the exact rarity color so a swatch can read the tier.
+            let tone = if rim {
+                blend(color, light, 0.42)
+            } else if nx.abs() > 0.62 {
+                if nx < 0.0 {
+                    blend(color, light, 0.28)
+                } else {
+                    blend(color, dark, 0.4)
+                }
+            } else {
+                color
+            };
+            put(rgb, width, x, py, tone);
+        }
+    }
+    let seam = blend(color, dark, 0.72);
+    let seam_w = (crate_w / 28).max(2);
+    let inset = (radius * 0.35) as u32;
+    for row in inset..crate_h.saturating_sub(inset) {
+        let py = top + row;
+        if py >= height {
+            break;
+        }
+        fill(rgb, width, height, (cx as u32).saturating_sub(seam_w / 2), py, seam_w, 1, seam);
+    }
+}
+
+/// Glowing rarity-colored cracks leave the seam. `crack` is 0 on the drop and about 0.5 mid-crack.
+fn paint_cracks(
+    rgb: &mut [u8],
+    width: u32,
+    height: u32,
+    cx: u32,
+    top: u32,
+    crate_w: u32,
+    crate_h: u32,
+    color: [u8; 3],
+    light: [u8; 3],
+    crack: f32,
+) {
+    let crack = crack.clamp(0.0, 1.0);
+    let reach = (crate_w as f32) * 0.62 * crack;
+    let mid_y = top as f32 + crate_h as f32 * 0.5;
+    let hot = blend(color, light, 0.82);
+    let glow = blend(color, light, 0.45);
+    let rays = [
+        (1.0f32, 0.0f32),
+        (0.82, -0.42),
+        (0.78, 0.48),
+        (0.5, -0.82),
+        (0.46, 0.88),
+        (0.28, -0.12),
+    ];
+    for (dx, dy) in rays {
+        for sign in [-1.0f32, 1.0] {
+            let x1 = cx as f32 + sign * dx * reach;
+            let y1 = mid_y + dy * reach;
+            stroke(rgb, width, height, cx as f32, mid_y, x1, y1, glow, 0.55, 3);
+            stroke(rgb, width, height, cx as f32, mid_y, x1, y1, hot, 0.92, 1);
+        }
+    }
+}
+
+fn stroke(rgb: &mut [u8], width: u32, height: u32, x0: f32, y0: f32, x1: f32, y1: f32, color: [u8; 3], alpha: f32, thickness: i32) {
+    let steps = ((x1 - x0).abs().max((y1 - y0).abs()) as i32).max(1);
+    for step in 0..=steps {
+        let t = step as f32 / steps as f32;
+        let x = x0 + (x1 - x0) * t;
+        let y = y0 + (y1 - y0) * t;
+        for oy in -thickness..=thickness {
+            for ox in -thickness..=thickness {
+                if ox * ox + oy * oy > thickness * thickness {
+                    continue;
+                }
+                let px = x.round() as i32 + ox;
+                let py = y.round() as i32 + oy;
+                if px < 0 || py < 0 {
+                    continue;
+                }
+                blend_put(rgb, width, height, px as u32, py as u32, color, alpha);
+            }
+        }
+    }
 }
 
 fn paint_burst(rgb: &mut [u8], width: u32, height: u32, color: [u8; 3], burst: f32) {
@@ -220,11 +338,33 @@ fn card_panel(width: u32, height: u32) -> (u32, u32, u32, u32) {
     (x, y, panel_w, panel_h)
 }
 
-fn title_scale(face_w: u32, face_h: u32, cols: u32) -> u32 {
+fn title_scale(face_w: u32, face_h: u32, cols: u32, legendary: bool, card: &gemini_sim::content::CardTitle) -> u32 {
     let cols = cols.max(1);
-    let fit_w = face_w.saturating_sub(8) / (cols * 6);
-    let fit_h = face_h / 16;
-    fit_w.min(fit_h).clamp(2, 14)
+    let pad = card.title_pad.round().max(0.0) as u32;
+    let pad_x = pad.min(face_w / 4);
+    let pad_y = pad.min(face_h / 4);
+    let avail_w = face_w.saturating_sub(pad_x * 2).max(1);
+    let avail_h = face_h.saturating_sub(pad_y * 2).max(1);
+    let fit_w = avail_w / (cols * 6);
+    let fit_h = avail_h / 7;
+    let cap = if legendary {
+        card.legendary_title_max_scale
+    } else {
+        card.title_max_scale
+    };
+    let cap = cap.round().max(1.0) as u32;
+    fit_w.min(fit_h).min(cap).max(1)
+}
+
+fn paint_hint(rgb: &mut [u8], width: u32, height: u32, text: &str, ink: [u8; 3], hint: &gemini_sim::content::RevealHint) {
+    let scale = (hint.text_px / 7.0).round().max(1.0) as u32;
+    let cols = text.chars().count() as u32 * 6 * scale;
+    let rows = 7 * scale;
+    let margin_x = hint.margin_x.round().max(0.0) as u32;
+    let margin_y = hint.margin_y.round().max(0.0) as u32;
+    let origin_x = width.saturating_sub(margin_x + cols);
+    let origin_y = height.saturating_sub(margin_y + rows);
+    blit_alpha(rgb, width, height, origin_x, origin_y, text, ink, scale, hint.opacity.clamp(0.0, 1.0));
 }
 
 fn add_glow(rgb: &mut [u8], width: u32, height: u32, cx: u32, cy: u32, radius: u32, color: [u8; 3], strength: f32) {
@@ -291,13 +431,36 @@ fn fill(rgb: &mut [u8], width: u32, height: u32, x: u32, y: u32, w: u32, h: u32,
     }
 }
 
-fn blit_centered_at(rgb: &mut [u8], width: u32, height: u32, cx: u32, cy: u32, text: &str, ink: [u8; 3], scale: u32) {
+fn blend_put(rgb: &mut [u8], width: u32, height: u32, x: u32, y: u32, color: [u8; 3], alpha: f32) {
+    if x >= width || y >= height {
+        return;
+    }
+    let i = ((y * width + x) * 3) as usize;
+    if i + 2 >= rgb.len() {
+        return;
+    }
+    let next = blend([rgb[i], rgb[i + 1], rgb[i + 2]], color, alpha);
+    rgb[i..i + 3].copy_from_slice(&next);
+}
+
+fn blit_alpha(rgb: &mut [u8], width: u32, height: u32, origin_x: u32, origin_y: u32, text: &str, ink: [u8; 3], scale: u32, alpha: f32) {
     let scale = scale.max(1);
-    let cols = text.chars().count() as u32 * 6 * scale;
-    let rows = 7 * scale;
-    let origin_x = cx.saturating_sub(cols / 2);
-    let origin_y = cy.saturating_sub(rows / 2);
-    blit_at(rgb, width, height, origin_x, origin_y, text, ink, scale);
+    for (index, ch) in text.chars().enumerate() {
+        let glyph = glyph(ch);
+        let gx = origin_x + index as u32 * 6 * scale;
+        for (row, bits) in glyph.iter().enumerate() {
+            for col in 0..5 {
+                if bits & (1 << (4 - col)) == 0 {
+                    continue;
+                }
+                for oy in 0..scale {
+                    for ox in 0..scale {
+                        blend_put(rgb, width, height, gx + col * scale + ox, origin_y + row as u32 * scale + oy, ink, alpha);
+                    }
+                }
+            }
+        }
+    }
 }
 
 fn blit_at(rgb: &mut [u8], width: u32, height: u32, origin_x: u32, origin_y: u32, text: &str, ink: [u8; 3], scale: u32) {
@@ -356,5 +519,40 @@ mod tests {
         );
         let flat = vec![18u8; (320 * 180 * 3) as usize];
         assert!(reveal_still_is_flat(&flat));
+    }
+
+    #[test]
+    fn legendary_title_glyphs_are_larger_than_shorter_rarities() {
+        let content = Content::embedded();
+        let card = &content.crate_reveal.card;
+        // Face of the 960x540 card still: panel 46% by 64%, border clamped to 16.
+        let face_w = 960 * 46 / 100 - 32;
+        let face_h = 540 * 64 / 100 - 32;
+        let common = title_scale(face_w, face_h, "COMMON".len() as u32, false, card);
+        let epic = title_scale(face_w, face_h, "EPIC".len() as u32, false, card);
+        let legendary = title_scale(face_w, face_h, "LEGENDARY".len() as u32, true, card);
+        assert!(legendary > epic, "legendary {legendary} epic {epic}");
+        assert!(legendary > common, "legendary {legendary} common {common}");
+        let pad = card.title_pad as u32;
+        let text_w = "LEGENDARY".len() as u32 * 6 * legendary;
+        let text_h = 7 * legendary;
+        assert!(text_w + pad * 2 <= face_w, "title wider than the padded face");
+        assert!(text_h + pad * 2 <= face_h, "title taller than the padded face");
+    }
+
+    #[test]
+    fn a_crack_frame_is_not_the_landed_drop() {
+        let content = Content::embedded();
+        let planned = plan(&content, "legendary", None).unwrap();
+        let tier = content.crate_reveal.tier("legendary").unwrap();
+        let landed = tier.drop[1];
+        let crack_mid = (tier.crack[0] + tier.crack[1]) * 0.5;
+        let drop_look = gemini_sim::reveal::look(&content, &planned, landed);
+        let crack_look = gemini_sim::reveal::look(&content, &planned, crack_mid);
+        assert_eq!(drop_look.crack, 0.0, "drop ends with the pod still closed");
+        assert!((crack_look.crack - 0.5).abs() < 0.02, "mid crack is {}", crack_look.crack);
+        let drop = paint_reveal(&content, &planned, landed, 320, 180);
+        let crack = paint_reveal(&content, &planned, crack_mid, 320, 180);
+        assert_ne!(drop, crack, "cracks must change the landed pod");
     }
 }

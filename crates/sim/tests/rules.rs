@@ -974,6 +974,46 @@ fn crate_reveal_reads_tease_and_fakeout() {
     assert!(reveal.fakeout_open("epic", 2.7));
     assert!(!reveal.fakeout_open("common", 2.8));
     assert!(!reveal.fakeout_open("legendary", 2.8));
+    assert!((reveal.hint.text_px - 14.0).abs() < 1e-4);
+    assert!((reveal.hint.opacity - 0.60).abs() < 1e-4);
+    assert!((reveal.hint.margin_x - 28.0).abs() < 1e-4);
+    assert!((reveal.hint.margin_y - 22.0).abs() < 1e-4);
+    assert!((reveal.card.title_pad - 20.0).abs() < 1e-4);
+    assert!(reveal.card.legendary_title_max_scale > reveal.card.title_max_scale);
+
+    let base = gemini_sim::content::embedded_sources();
+    let missing_hint = base.crate_reveal.lines().filter(|line| !line.contains("text_px")).collect::<Vec<_>>().join("\n");
+    let err = Content::parse(&sources_reveal(&base, &missing_hint)).expect_err("missing hint text_px");
+    assert!(err.contains("text_px"), "{err}");
+    let flat = base.crate_reveal.replacen("opacity = 0.60", "opacity = 0.0", 1);
+    let err = Content::parse(&sources_reveal(&base, &flat)).expect_err("zero hint opacity");
+    assert!(err.contains("hint.opacity"), "{err}");
+}
+
+fn sources_reveal<'a>(base: &'a gemini_sim::content::Sources<'a>, crate_reveal: &'a str) -> gemini_sim::content::Sources<'a> {
+    gemini_sim::content::Sources {
+        waves: base.waves,
+        difficulty: base.difficulty,
+        controller: base.controller,
+        run_upgrades: base.run_upgrades,
+        endless: base.endless,
+        currency: base.currency,
+        banners: base.banners,
+        duplicate_ranks: base.duplicate_ranks,
+        bosses: base.bosses,
+        weapons: base.weapons,
+        hero: base.hero,
+        arena: base.arena,
+        presentation: base.presentation,
+        combat: base.combat,
+        palette: base.palette,
+        music: base.music,
+        audio: base.audio,
+        bugs: base.bugs,
+        crate_reveal,
+        coop: base.coop,
+        cosmetics: base.cosmetics,
+    }
 }
 
 #[test]

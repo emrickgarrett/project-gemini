@@ -61,3 +61,17 @@ fakeout_window = [2.6, 3.0]
 pod_interval = 0.35
 full_sequence_for = "highest_rarity"
 summary_grid = true
+
+# SKIP / ENTER sit small in the bottom-right. Opacity is the prompt's alpha.
+[hint]
+text_px = 14.0
+opacity = 0.60
+margin_x = 28.0
+margin_y = 22.0
+
+# Title glyphs fit inside the card face. Shorter words stay capped so EPIC
+# cannot outgrow LEGENDARY.
+[card]
+title_pad = 20.0
+title_max_scale = 4.0
+legendary_title_max_scale = 8.0

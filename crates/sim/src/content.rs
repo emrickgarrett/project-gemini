@@ -125,6 +125,7 @@ impl Content {
         let audio = crate::audio_mix::load_mix(src.audio).map_err(|err| format!("audio_mix.toml: {err}"))?;
         let crate_reveal: CrateReveal = parse("crate_reveal.toml", src.crate_reveal)?;
         validate_reveal_cues(&crate_reveal, &audio)?;
+        validate_reveal_layout(&crate_reveal)?;
         let palette: Palette = parse("palette.toml", src.palette)?;
         require_palette_keys(&palette, &bugs).map_err(|err| format!("palette.toml: {err}"))?;
         Ok(Self {
@@ -360,6 +361,30 @@ fn reveal_cue_file<'a>(audio: &'a AudioTable, id: &str) -> Result<&'a str, Strin
 fn cue_stem(path: &str) -> String {
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
     name.trim_end_matches(".ogg").to_string()
+}
+
+fn validate_reveal_layout(reveal: &CrateReveal) -> Result<(), String> {
+    let hint = &reveal.hint;
+    if !(hint.text_px > 0.0) {
+        return Err("crate_reveal.toml hint.text_px must be positive".into());
+    }
+    if !(hint.opacity > 0.0 && hint.opacity <= 1.0) {
+        return Err("crate_reveal.toml hint.opacity must be in (0, 1]".into());
+    }
+    if !(hint.margin_x >= 0.0) || !(hint.margin_y >= 0.0) {
+        return Err("crate_reveal.toml hint margins must be non-negative".into());
+    }
+    let card = &reveal.card;
+    if !(card.title_pad >= 0.0) {
+        return Err("crate_reveal.toml card.title_pad must be non-negative".into());
+    }
+    if !(card.title_max_scale > 0.0) {
+        return Err("crate_reveal.toml card.title_max_scale must be positive".into());
+    }
+    if !(card.legendary_title_max_scale > card.title_max_scale) {
+        return Err("crate_reveal.toml card.legendary_title_max_scale must exceed title_max_scale".into());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -2301,6 +2326,23 @@ pub struct CrateReveal {
     pub epic: CrateTier,
     pub legendary: CrateTier,
     pub multi_pull: CrateMulti,
+    pub hint: RevealHint,
+    pub card: CardTitle,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct RevealHint {
+    pub text_px: f32,
+    pub opacity: f32,
+    pub margin_x: f32,
+    pub margin_y: f32,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct CardTitle {
+    pub title_pad: f32,
+    pub title_max_scale: f32,
+    pub legendary_title_max_scale: f32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
