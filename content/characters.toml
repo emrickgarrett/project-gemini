@@ -12,7 +12,7 @@ weapon = "pulse_rifle"
 ability = { id = "overdrive", cooldown = 20.0, duration = 6.0, fire_rate = 0.35, infinite_magazine = true, kill_cd_refund = 1.0, desc = "6s: +35% fire rate, infinite magazine" }
 passive = "kills during overdrive refund 1s of cooldown"
 fantasy = "the all-rounder; easiest to pick up"
-viewmodel_offset = [0.36, -0.22, -0.48]   # camera space: +X right, -Y down
+viewmodel_offset = [0.44, -0.28, -0.48]   # camera space: +X right, -Y down, tip off center
 viewmodel_fov = 40
 
 [[hero]]

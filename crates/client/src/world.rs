@@ -60,13 +60,15 @@ pub(crate) struct Pickup {
 #[derive(Component)]
 pub(crate) struct Flash {
     life: f32,
+    /// Seconds the flash fades across. Zero keeps a hard cutoff (hit pings).
+    fade: f32,
 }
 
 /// Overlay camera. Its children are the first-person arms, on their own layer.
 #[derive(Component)]
 pub(crate) struct ViewmodelCamera;
 
-/// Barrel tube, muzzle ring, and core. Overdrive swaps these to an orange glow.
+/// Orange barrel and stripes. Overdrive swaps them to a hotter emissive. The teal strip stays teal.
 #[derive(Component)]
 pub(crate) struct BarrelGlow {
     idle: Handle<StandardMaterial>,
@@ -208,7 +210,7 @@ pub fn scene(
         ..default()
     });
     let trim_idle = trim_handle.clone();
-    let core_idle = mat_of(&bank, "shots_player", true, false);
+    let strip = mat_of(&bank, "hero_teal", true, false);
     let cobalt_idle = mat_of(&bank, "hero_cobalt", false, false);
     // The world camera draws layer 0. The overlay camera draws the arms on
     // layer 1 with its own depth buffer, so the rifle cannot clip into the arena.
@@ -245,6 +247,10 @@ pub fn scene(
                 ..default()
             }),
             RenderLayers::layer(1),
+            // Same HDR bloom path as the world camera, so the muzzle flash and the
+            // teal strip glow instead of sitting as flat unlit color.
+            Hdr,
+            Bloom::NATURAL,
             ChildOf(world_cam),
         ))
         .id();
@@ -255,9 +261,9 @@ pub fn scene(
         (upload(&mut meshes, &vm.white), mat_of(&bank, "hero_white", false, false), None),
         (
             upload(&mut meshes, &vm.barrel),
-            cobalt_idle.clone(),
+            trim_idle.clone(),
             Some(BarrelGlow {
-                idle: cobalt_idle.clone(),
+                idle: trim_idle.clone(),
                 hot: barrel_hot.clone(),
             }),
         ),
@@ -269,14 +275,7 @@ pub fn scene(
                 hot: barrel_hot.clone(),
             }),
         ),
-        (
-            upload(&mut meshes, &vm.core),
-            core_idle.clone(),
-            Some(BarrelGlow {
-                idle: core_idle,
-                hot: barrel_hot.clone(),
-            }),
-        ),
+        (upload(&mut meshes, &vm.core), strip, None),
     ];
     for (mesh, mat, glow) in pieces {
         let mut entity = commands.spawn((
@@ -305,7 +304,11 @@ pub fn sync(
     mut parts: Query<(&mut BugPart, &mut Transform, &mut Visibility), (Without<BugLod>, Without<BugRoot>, Without<Shot>, Without<Flash>)>,
     mut lods: Query<(&mut Transform, &mut Visibility), (With<BugLod>, Without<BugPart>, Without<BugRoot>, Without<Shot>, Without<Flash>)>,
     mut shots: Query<&mut Transform, (With<Shot>, Without<BugRoot>, Without<BugPart>, Without<BugLod>, Without<Flash>)>,
-    mut flashes: Query<(Entity, &mut Flash, &mut Transform), (Without<Shot>, Without<BugRoot>, Without<BugPart>, Without<BugLod>)>,
+    mut flashes: Query<
+        (Entity, &mut Flash, &mut Transform, &MeshMaterial3d<StandardMaterial>),
+        (Without<Shot>, Without<BugRoot>, Without<BugPart>, Without<BugLod>),
+    >,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     time: Res<Time>,
     assets: Res<AssetServer>,
 ) {
@@ -484,7 +487,7 @@ pub fn sync(
             Mesh3d(bank.flash.clone()),
             MeshMaterial3d(mat_of(&bank, "hero_white", true, true)),
             Transform::from_xyz(ping.pos.x, ping.pos.y, ping.pos.z).with_scale(bevy::math::Vec3::splat(scale)),
-            Flash { life: if ping.weak { 0.18 } else { 0.1 } },
+            Flash { life: if ping.weak { 0.18 } else { 0.1 }, fade: 0.0 },
             PlayPiece,
         ));
         if ping.weak {
@@ -492,15 +495,23 @@ pub fn sync(
                 Mesh3d(bank.ring.clone()),
                 MeshMaterial3d(mat_of(&bank, "spitter_glow", true, false)),
                 Transform::from_xyz(ping.pos.x, ping.pos.y, ping.pos.z).with_scale(bevy::math::Vec3::splat(1.8)),
-                Flash { life: 0.22 },
+                Flash { life: 0.22, fade: 0.0 },
                 PlayPiece,
             ));
         }
     }
     let dt = time.delta_secs();
-    for (entity, mut flash, mut xf) in &mut flashes {
+    let accent = game.content.palette.key("accent");
+    for (entity, mut flash, mut xf, mat) in &mut flashes {
         flash.life -= dt;
         xf.scale *= 1.0 + dt * 4.0;
+        if flash.fade > 0.0 {
+            let t = (flash.life / flash.fade).clamp(0.0, 1.0);
+            if let Some(mut material) = materials.get_mut(&mat.0) {
+                material.base_color = Color::srgba(accent[0], accent[1], accent[2], t);
+                material.emissive = LinearRgba::rgb(accent[0] * 8.0 * t, accent[1] * 8.0 * t, accent[2] * 8.0 * t);
+            }
+        }
         if flash.life <= 0.0 {
             commands.entity(entity).despawn();
         }
@@ -615,6 +626,7 @@ pub fn sync_viewmodel(
     game: Res<Game>,
     fx: Res<FrameFx>,
     bank: Res<Bank>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     mut barrels: Query<(&BarrelGlow, &mut MeshMaterial3d<StandardMaterial>)>,
     cam: Query<Entity, With<ViewmodelCamera>>,
 ) {
@@ -633,12 +645,23 @@ pub fn sync_viewmodel(
     let Ok(cam) = cam.single() else { return };
     let offset = game.content.hero.viewmodel_offset;
     let tip = gemini_meshes::muzzle_local();
+    let accent = game.content.palette.key("accent");
+    // About half the old 0.55 flash, emissive so the viewmodel bloom picks it up.
+    // 3/60 s is three frames at 60 Hz.
+    let life = 3.0 / 60.0;
+    let flash_mat = materials.add(StandardMaterial {
+        base_color: Color::srgba(accent[0], accent[1], accent[2], 1.0),
+        emissive: LinearRgba::rgb(accent[0] * 8.0, accent[1] * 8.0, accent[2] * 8.0),
+        unlit: true,
+        alpha_mode: AlphaMode::Blend,
+        ..default()
+    });
     commands.spawn((
         Mesh3d(bank.flash.clone()),
-        MeshMaterial3d(bank.barrel_hot.clone()),
-        Transform::from_xyz(offset[0] + tip[0], offset[1] + tip[1], offset[2] + tip[2]).with_scale(Vec3::splat(0.55)),
+        MeshMaterial3d(flash_mat),
+        Transform::from_xyz(offset[0] + tip[0], offset[1] + tip[1], offset[2] + tip[2]).with_scale(Vec3::splat(0.27)),
         RenderLayers::layer(1),
-        Flash { life: 0.07 },
+        Flash { life, fade: life },
         PlayPiece,
         ChildOf(cam),
     ));

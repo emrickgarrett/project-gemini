@@ -981,7 +981,7 @@ fn vex_overdrive_comes_from_characters() {
     assert!((content.hero.kill_cd_refund - 1.0).abs() < 1e-4);
     let off = content.hero.viewmodel_offset;
     assert!(off[0] > 0.0 && off[1] < 0.0, "viewmodel should sit lower right, got {off:?}");
-    assert!((off[0] - 0.36).abs() < 1e-4 && (off[1] + 0.22).abs() < 1e-4 && (off[2] + 0.48).abs() < 1e-4);
+    assert!((off[0] - 0.44).abs() < 1e-4 && (off[1] + 0.28).abs() < 1e-4 && (off[2] + 0.48).abs() < 1e-4);
     assert!((content.hero.viewmodel_fov - 40.0).abs() < 1e-4);
     assert!(content.weapon("coil_rifle").is_none());
     let gun = content.weapon("pulse_rifle").unwrap();

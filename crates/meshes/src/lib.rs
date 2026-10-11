@@ -76,7 +76,7 @@ impl Viewmodel {
 
 /// Barrel tip in viewmodel mesh space, before the screen offset from characters.toml.
 pub fn muzzle_local() -> [f32; 3] {
-    [0.02, -0.005, -1.30]
+    [0.03, -0.005, -1.28]
 }
 
 pub fn viewmodel() -> Viewmodel {
@@ -117,42 +117,32 @@ fn recolor(src: &MeshData, color: [f32; 4]) -> MeshData {
 }
 
 fn glove(vm: &mut Viewmodel, anchor: [f32; 3], side: f32, ink: [f32; 4]) {
+    // Cobalt sleeve. Teal plates sit on the forearm; the glove and fingers are teal.
     geom::gem(
         &mut vm.cobalt,
-        [anchor[0], anchor[1] + 0.01, anchor[2] + 0.07],
-        [0.075, 0.06, 0.09],
-        8,
-        6,
-        ink,
-    );
-    geom::gem(
-        &mut vm.teal,
-        [anchor[0] - side * 0.01, anchor[1] - 0.015, anchor[2] - 0.05],
-        [0.06, 0.045, 0.075],
+        [anchor[0], anchor[1] + 0.01, anchor[2] + 0.08],
+        [0.08, 0.055, 0.13],
         8,
         6,
         ink,
     );
     geom::plate(
-        &mut vm.white,
-        [anchor[0], anchor[1] + 0.04, anchor[2] - 0.03],
+        &mut vm.teal,
+        [anchor[0], anchor[1] + 0.045, anchor[2] + 0.02],
+        0.12,
         0.11,
-        0.1,
-        0.028,
+        0.02,
         8,
         5,
         ink,
     );
-    spoke(
-        &mut vm.accent,
-        0.03,
-        0.09,
-        0.09,
+    geom::gem(
+        &mut vm.teal,
+        [anchor[0] - side * 0.01, anchor[1] - 0.015, anchor[2] - 0.05],
+        [0.065, 0.048, 0.08],
         8,
+        6,
         ink,
-        [anchor[0], anchor[1], anchor[2] + 0.01],
-        std::f32::consts::FRAC_PI_2,
-        0.0,
     );
     for i in 0..4 {
         let spread = (i as f32 - 1.5) * 0.03;
@@ -182,53 +172,43 @@ fn glove(vm: &mut Viewmodel, anchor: [f32; 3], side: f32, ink: [f32; 4]) {
 }
 
 fn rifle(vm: &mut Viewmodel, ink: [f32; 4]) {
-    geom::gem(&mut vm.cobalt, [0.02, -0.02, -0.3], [0.075, 0.08, 0.2], 12, 8, ink);
-    geom::plate(&mut vm.cobalt, [0.02, 0.045, -0.3], 0.38, 0.13, 0.035, 10, 6, ink);
-    geom::plate(&mut vm.cobalt, [0.09, -0.01, -0.3], 0.34, 0.1, 0.03, 8, 5, ink);
-    geom::plate(&mut vm.white, [0.02, 0.08, -0.32], 0.52, 0.055, 0.02, 14, 4, ink);
+    // Chunkier receiver, a magazine under it, and a teal strip along the side.
+    geom::gem(&mut vm.cobalt, [0.03, -0.02, -0.28], [0.12, 0.11, 0.28], 12, 8, ink);
+    geom::plate(&mut vm.cobalt, [0.03, 0.07, -0.28], 0.5, 0.18, 0.04, 10, 6, ink);
+    geom::plate(&mut vm.cobalt, [0.12, -0.01, -0.28], 0.46, 0.12, 0.035, 8, 5, ink);
+    geom::box_mesh(&mut vm.cobalt, [0.03, -0.15, -0.26], [0.07, 0.15, 0.09], ink);
+    // On the top face, toward the camera, so the strip is not buried in the receiver.
+    geom::box_mesh(&mut vm.core, [0.03, 0.14, -0.24], [0.14, 0.02, 0.2], ink);
+    geom::gem(&mut vm.core, [0.03, 0.15, -0.12], [0.04, 0.016, 0.05], 6, 4, ink);
+    for i in 0..3 {
+        let z = -0.18 - i as f32 * 0.12;
+        geom::plate(&mut vm.cobalt, [0.03, 0.02, z], 0.12, 0.2, 0.04, 8, 6, ink);
+    }
     spoke(
         &mut vm.barrel,
-        0.46,
-        0.042,
-        0.03,
+        0.52,
+        0.048,
+        0.034,
         10,
         ink,
-        [0.02, -0.005, -0.5],
+        [0.03, -0.005, -0.52],
         std::f32::consts::FRAC_PI_2,
         0.0,
     );
     spoke(
         &mut vm.cobalt,
-        0.14,
-        0.045,
-        0.03,
+        0.16,
+        0.05,
+        0.032,
         8,
         ink,
-        [0.02, -0.05, -0.16],
+        [0.03, -0.06, -0.14],
         2.35,
         0.15,
     );
-    spoke(
-        &mut vm.accent,
-        0.045,
-        0.055,
-        0.055,
-        10,
-        ink,
-        [0.02, -0.005, -0.94],
-        std::f32::consts::FRAC_PI_2,
-        0.0,
-    );
-    geom::gem(&mut vm.accent, [0.1, -0.01, -0.26], [0.03, 0.025, 0.07], 8, 6, ink);
-    geom::gem(&mut vm.core, [0.075, 0.01, -0.22], [0.035, 0.04, 0.06], 8, 6, ink);
-    geom::box_mesh(&mut vm.core, [0.02, -0.005, -1.12], [0.018, 0.018, 0.32], ink);
-    for i in 0..5 {
-        let z = -0.16 - i as f32 * 0.08;
-        geom::plate(&mut vm.cobalt, [0.02, 0.03, z], 0.1, 0.15, 0.045, 8, 6, ink);
-        geom::plate(&mut vm.cobalt, [0.08, -0.035, z], 0.08, 0.09, 0.03, 6, 5, ink);
-    }
     for i in 0..4 {
-        geom::plate(&mut vm.white, [0.02, 0.095, -0.18 - i as f32 * 0.12], 0.1, 0.07, 0.022, 8, 5, ink);
+        let z = -0.16 - i as f32 * 0.1;
+        geom::plate(&mut vm.accent, [0.03, 0.1, z], 0.07, 0.16, 0.018, 6, 4, ink);
     }
 }
 

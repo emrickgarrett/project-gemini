@@ -76,23 +76,20 @@ pub fn raster_viewmodel(width: u32, height: u32, frame: &ViewmodelFrame) -> Vec<
         (shifted(&vm.cobalt, shift), palette("hero_cobalt"), false),
         (shifted(&vm.white, shift), palette("hero_white"), false),
     ];
+    // Barrel and stripes stay accent orange. The side strip stays teal and emissive.
+    parts.push((shifted(&vm.barrel, shift), orange, frame.overdrive));
+    parts.push((shifted(&vm.accent, shift), orange, frame.overdrive));
+    parts.push((shifted(&vm.core, shift), palette("hero_teal"), true));
     if frame.overdrive {
-        parts.push((shifted(&vm.barrel, shift), orange, true));
-        parts.push((shifted(&vm.accent, shift), orange, true));
-        parts.push((shifted(&vm.core, shift), orange, true));
         let mut flash = crate::MeshData::new();
         let tip = [
             shift[0] + crate::muzzle_local()[0],
             shift[1] + crate::muzzle_local()[1],
             shift[2] + crate::muzzle_local()[2],
         ];
-        crate::geom::gem(&mut flash, tip, [0.07, 0.07, 0.16], 8, 6, [1.0, 1.0, 1.0, 1.0]);
-        crate::geom::gem(&mut flash, tip, [0.16, 0.16, 0.04], 8, 4, [1.0, 1.0, 1.0, 1.0]);
+        crate::geom::gem(&mut flash, tip, [0.035, 0.035, 0.08], 8, 6, [1.0, 1.0, 1.0, 1.0]);
+        crate::geom::gem(&mut flash, tip, [0.08, 0.08, 0.02], 8, 4, [1.0, 1.0, 1.0, 1.0]);
         parts.push((flash, [1.0, 0.72, 0.28, 1.0], true));
-    } else {
-        parts.push((shifted(&vm.barrel, shift), palette("hero_cobalt"), false));
-        parts.push((shifted(&vm.accent, shift), orange, false));
-        parts.push((shifted(&vm.core, shift), palette("shots_player"), true));
     }
     let mut rgb = draw_parts(&parts, [0.0, 0.0, 0.0], [0.0, 0.0, -1.0], frame.fov, width, height);
     if frame.overdrive {
