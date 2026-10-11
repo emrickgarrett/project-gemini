@@ -714,6 +714,7 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         bugs: base.bugs,
         crate_reveal: base.crate_reveal,
         coop: base.coop,
+        cosmetics: base.cosmetics,
     })
     .expect_err("zero hatch telegraph");
     assert!(err.contains("hatch_telegraph"), "{err}");
@@ -743,6 +744,7 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         bugs: base.bugs,
         crate_reveal: base.crate_reveal,
         coop: base.coop,
+        cosmetics: base.cosmetics,
     })
     .expect_err("missing hatch telegraph");
     assert!(err.contains("hatch_telegraph"), "{err}");
