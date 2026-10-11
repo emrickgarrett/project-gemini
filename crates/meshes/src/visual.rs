@@ -304,7 +304,7 @@ fn req2(id: &str, part: &str, field: &str, value: Option<&[f32]>) -> Result<[f32
 
 fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalog: &[VPart]) -> Result<(), String> {
     match spec.part.as_str() {
-        "pod" | "bud" => return add_sac_orbs(parts, id, spec, dens),
+        "pod" | "bud" => return add_sac_orbs(parts, id, spec, dens, catalog),
         "crown" => return add_crown(parts, id, spec, dens),
         "cannon" => return add_cannon(parts, id, spec, dens, catalog),
         _ => {}
@@ -833,7 +833,7 @@ fn add_cannon(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalo
     Ok(())
 }
 
-fn add_sac_orbs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) -> Result<(), String> {
+fn add_sac_orbs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalog: &[VPart]) -> Result<(), String> {
     let nestled = spec.part == "bud";
     if spec.ring_radius <= 0.0 {
         return Err(format!("{id} {} is missing ring_radius", spec.name));
@@ -863,7 +863,16 @@ fn add_sac_orbs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) -> R
         Dens { slices: 6, stacks: 4, ..Dens::small() }
     };
     let mesh = Arc::new(gem_mesh([size[0] * 0.5, size[1] * 0.5, size[2] * 0.5], &detail));
-    let (center, radii) = sac_anchor_from(id, parts)?;
+    // Same ellipsoid as the sim pod bake: authored host half-extents, not the
+    // faceted sac mesh. Pods and buds share that ring and alternate by phase.
+    let host_name = spec.on.as_deref().ok_or_else(|| format!("{id} {} is missing on", spec.name))?;
+    let host = catalog
+        .iter()
+        .find(|part| part.name == host_name)
+        .ok_or_else(|| format!("{id} {} host \"{host_name}\" is missing", spec.name))?;
+    let host_size = size3(id, host)?;
+    let radii = [host_size[0] * 0.5, host_size[1] * 0.5, host_size[2] * 0.5];
+    let center = host.offset;
     for i in 0..count {
         let a = (i as f32 + phase) / count as f32 * std::f32::consts::TAU + turn;
         let ring = spec.ring_radius;
@@ -1084,23 +1093,6 @@ fn add_veins(parts: &mut Vec<Part>, id: &str, spec: &VPart) -> Result<(), String
         });
     }
     Ok(())
-}
-
-fn sac_anchor_from(id: &str, parts: &[Part]) -> Result<([f32; 3], [f32; 3]), String> {
-    let sac = parts
-        .iter()
-        .find(|p| p.name == "sac")
-        .ok_or_else(|| format!("{id} pod ring has no sac"))?;
-    let mut max = [0.0_f32, 0.0, 0.0];
-    for p in &sac.mesh.positions {
-        max[0] = max[0].max(p[0].abs());
-        max[1] = max[1].max(p[1].abs());
-        max[2] = max[2].max(p[2].abs());
-    }
-    if max[0] <= 0.0 || max[1] <= 0.0 || max[2] <= 0.0 {
-        return Err(format!("{id} sac has no extent"));
-    }
-    Ok((sac.rest_pos, [max[0] * 0.92, max[1] * 0.92, max[2] * 0.92]))
 }
 
 /// Round shell. Dorsal plates are a sibling mesh so the open pose can spread them.

@@ -10,6 +10,9 @@ description = "Procedural placeholder meshes. No renderer dependency."
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 
+[dev-dependencies]
+gemini-sim = { path = "../sim" }
+
 [[bin]]
 name = "bugshots"
 path = "src/bin/bugshots.rs"

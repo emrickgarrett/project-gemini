@@ -472,8 +472,9 @@ fn bake_pods(bug: &str, visual: &BugVisual, hitbox: &mut BugHitbox) -> Result<()
     let floor = pod.ny_floor.ok_or_else(|| format!("{bug} visual pod is missing ny_floor"))?;
     let radii = [ext[0] * 0.5, ext[1] * 0.5, ext[2] * 0.5];
     let count = pod.count;
+    let phase = pod.ring_phase.unwrap_or(0.0);
     for i in 0..count {
-        let a = i as f32 / count as f32 * std::f32::consts::TAU + turn;
+        let a = (i as f32 + phase) / count as f32 * std::f32::consts::TAU + turn;
         let nx = a.cos() * pod.ring_radius;
         let nz = a.sin() * pod.ring_radius;
         let ny = (1.0 - nx * nx - nz * nz).max(floor).sqrt();

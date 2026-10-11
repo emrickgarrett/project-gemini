@@ -8,8 +8,8 @@ mod visual;
 
 pub use pose::{pose, AnimInput, Pose, Xform};
 pub use preview::{
-    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_viewmodel, still, still_open,
-    ViewmodelFrame,
+    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_top, raster_viewmodel, still,
+    still_open, still_top, ViewmodelFrame,
 };
 pub use visual::{bug, catalog, flat_shaded, EnemyVisual, Gate, Joint, Part, ShotCamera};
 
@@ -591,6 +591,80 @@ mod tests {
         let a = bug("swarmer") as *const EnemyVisual;
         let b = bug("swarmer") as *const EnemyVisual;
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn brood_pods_alternate_with_buds_and_sit_on_hitboxes() {
+        let content = gemini_sim::Content::embedded();
+        let boss = content.boss("brood_mother").expect("brood mother");
+        let visual = bug("brood_mother");
+        let row = content.bug(gemini_sim::content::EnemyKind::BroodMother);
+        let glowing: Vec<_> = visual
+            .parts
+            .iter()
+            .filter(|part| part.emissive && part.name.starts_with("pod"))
+            .collect();
+        assert_eq!(
+            glowing.len() as u32, boss.pod_count,
+            "glowing pod parts must match bosses.toml pod_count"
+        );
+        let authored_buds = row
+            .visual
+            .parts
+            .iter()
+            .find(|part| part.name == "bud")
+            .expect("visual bud row")
+            .count;
+        let buds: Vec<_> = visual.parts.iter().filter(|part| part.name.starts_with("bud")).collect();
+        assert_eq!(buds.len() as u32, authored_buds, "bud parts must match the visual bud count");
+        assert!(buds.iter().all(|part| !part.emissive), "buds stay visual-only");
+
+        assert_eq!(row.hitbox.pods.len(), glowing.len());
+        for (i, place) in row.hitbox.pods.iter().enumerate() {
+            let part = visual
+                .parts
+                .iter()
+                .find(|part| part.name == format!("pod{i}"))
+                .unwrap_or_else(|| panic!("missing pod{i}"));
+            assert_eq!(part.pod_slot, Some(i as u32));
+            let anchor = part.rest_pos;
+            let hit = place.offset;
+            let d = ((anchor[0] - hit[0]).powi(2) + (anchor[1] - hit[1]).powi(2) + (anchor[2] - hit[2]).powi(2)).sqrt();
+            assert!(
+                d < 1e-3,
+                "pod{i} hitbox {hit:?} is off its mesh anchor {anchor:?} by {d}"
+            );
+        }
+
+        let sac = visual.parts.iter().find(|part| part.name == "sac").expect("sac").rest_pos;
+        let mut ring = Vec::new();
+        for part in visual.parts.iter() {
+            let live = part.emissive && part.name.starts_with("pod");
+            let bud = part.name.starts_with("bud");
+            if !live && !bud {
+                continue;
+            }
+            let dx = part.rest_pos[0] - sac[0];
+            let dz = part.rest_pos[2] - sac[2];
+            ring.push((dz.atan2(dx), live));
+        }
+        ring.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        assert_eq!(ring.len(), glowing.len() + buds.len());
+        for pair in ring.windows(2) {
+            assert_ne!(pair[0].1, pair[1].1, "pods and buds must alternate around the sac");
+            assert!(pair[1].0 - pair[0].0 > 0.2, "ring gap {}", pair[1].0 - pair[0].0);
+        }
+        assert_ne!(ring.first().unwrap().1, ring.last().unwrap().1);
+
+        let pod = visual.parts.iter().find(|part| part.name == "pod0").unwrap();
+        let mesh_r = mesh_radius(&pod.mesh);
+        let hit_r = row.hitbox.pod_radius();
+        assert!(
+            hit_r + 1e-3 >= mesh_r * content.bugs.hitbox_margin,
+            "pod hitbox {hit_r:.3} < mesh {mesh_r:.3} * {}",
+            content.bugs.hitbox_margin
+        );
+        eprintln!("pod mesh radius {mesh_r:.4} hitbox radius {hit_r:.4}");
     }
 
     #[test]

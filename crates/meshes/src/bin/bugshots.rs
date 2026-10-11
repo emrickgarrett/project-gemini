@@ -11,7 +11,9 @@ use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use gemini_meshes::{catalog, missing_glow_keys, missing_glow_keys_open, painted_pixels, raster_bug, still, still_open};
+use gemini_meshes::{
+    catalog, missing_glow_keys, missing_glow_keys_open, painted_pixels, raster_bug, raster_top, still, still_open, still_top,
+};
 
 fn main() {
     let mut out = "art/bugs".to_string();
@@ -39,6 +41,19 @@ fn main() {
         let path = format!("{out}/{id}.png");
         write_png(&path, w, h, &rgb);
         println!("wrote {path} ({painted} px)");
+        if id == "brood_mother" {
+            let (tw, th, top) = still_top(id, panel);
+            let top_color = raster_top(id, panel, panel);
+            let top_painted = painted_pixels(&top_color);
+            let top_missing = missing_glow_keys(id, &top_color);
+            if top_painted < 800 || !top_missing.is_empty() {
+                eprintln!("{id} top still failed ({top_painted} px, missing glow {top_missing:?})");
+                failed = true;
+            }
+            let top_path = format!("{out}/{id}_top.png");
+            write_png(&top_path, tw, th, &top);
+            println!("wrote {top_path} ({top_painted} px)");
+        }
     }
     for visual in catalog() {
         if visual.camera_open.is_none() {

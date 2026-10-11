@@ -58,6 +58,24 @@ pub fn still_open(id: &str, panel: u32) -> (u32, u32, Vec<u8>) {
     compose(id, panel, true, cam)
 }
 
+/// Overhead camera. The eye sits on +Y so the ring of pods reads in plan.
+pub fn top_camera(id: &str) -> ([f32; 3], [f32; 3], f32) {
+    let h = bug(id).height;
+    ([0.0, h * 5.4, 0.05], [0.0, h * 0.5, -0.2], 36.0)
+}
+
+/// Color raster from directly above.
+pub fn raster_top(id: &str, width: u32, height: u32) -> Vec<u8> {
+    let visual = bug(id);
+    let palette = palette_of();
+    draw(visual, &palette, width, height, false, false, Some(top_camera(id)))
+}
+
+/// Color panel plus silhouette, from directly above.
+pub fn still_top(id: &str, panel: u32) -> (u32, u32, Vec<u8>) {
+    compose(id, panel, false, Some(top_camera(id)))
+}
+
 /// Inputs for a first-person still. Offset and FOV come from the hero row.
 #[derive(Clone, Copy, Debug)]
 pub struct ViewmodelFrame {
@@ -261,7 +279,13 @@ fn draw(
     let posed = pose(visual, anim, &[]);
     let (eye, target, fov_deg) = camera.unwrap_or((visual.camera.eye, visual.camera.target, visual.camera.fov));
     let forward = norm(sub(target, eye));
-    let right = norm(cross(forward, [0.0, 1.0, 0.0]));
+    // A straight-down eye is parallel to world up, so plan views use +Z as the hint.
+    let hint = if forward[1].abs() > 0.92 {
+        [0.0, 0.0, 1.0]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+    let right = norm(cross(forward, hint));
     let up = cross(right, forward);
     let key = norm([-0.2, 0.92, 0.28]);
     let fill = norm([0.55, 0.35, -0.45]);
