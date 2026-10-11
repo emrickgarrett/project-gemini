@@ -920,6 +920,40 @@ fn missing_weakpoint_anchor_fails_content_load() {
 }
 
 #[test]
+fn a_typo_in_a_rarity_color_fails_load() {
+    let base = gemini_sim::content::embedded_sources();
+    let bugs = include_str!("../../../content/bugs.toml");
+    let typo = bugs.replacen("color=\"swarmer_amber\"", "color=\"rarity_commmon\"", 1);
+    assert_ne!(typo, bugs, "the rarity color typo must change the bug table");
+    let err = Content::parse(&gemini_sim::content::Sources {
+        waves: base.waves,
+        difficulty: base.difficulty,
+        controller: base.controller,
+        run_upgrades: base.run_upgrades,
+        endless: base.endless,
+        currency: base.currency,
+        banners: base.banners,
+        duplicate_ranks: base.duplicate_ranks,
+        bosses: base.bosses,
+        weapons: base.weapons,
+        hero: base.hero,
+        arena: base.arena,
+        presentation: base.presentation,
+        combat: base.combat,
+        palette: base.palette,
+        music: base.music,
+        audio: base.audio,
+        bugs: &typo,
+        crate_reveal: base.crate_reveal,
+        coop: base.coop,
+        cosmetics: base.cosmetics,
+    })
+    .expect_err("a typo'd rarity color must fail load");
+    assert!(err.contains("rarity_commmon"), "{err}");
+    assert!(err.contains("does not resolve"), "{err}");
+}
+
+#[test]
 fn crate_reveal_reads_tease_and_fakeout() {
     let reveal = &Content::embedded().crate_reveal;
     assert!(reveal.fakeout_enabled);

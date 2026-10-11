@@ -125,6 +125,8 @@ impl Content {
         let audio = crate::audio_mix::load_mix(src.audio).map_err(|err| format!("audio_mix.toml: {err}"))?;
         let crate_reveal: CrateReveal = parse("crate_reveal.toml", src.crate_reveal)?;
         validate_reveal_cues(&crate_reveal, &audio)?;
+        let palette: Palette = parse("palette.toml", src.palette)?;
+        require_palette_keys(&palette, &bugs).map_err(|err| format!("palette.toml: {err}"))?;
         Ok(Self {
             fingerprint,
             waves: parse("waves.toml", src.waves)?,
@@ -148,7 +150,7 @@ impl Content {
             arena: load_arena(src.arena).map_err(|err| format!("arena_01.toml: {err}"))?,
             presentation: parse("presentation.toml", src.presentation)?,
             combat: parse("combat.toml", src.combat)?,
-            palette: parse("palette.toml", src.palette)?,
+            palette,
             music: {
                 let loaded = crate::music::load_music(src.music).map_err(|err| format!("music.toml: {err}"))?;
                 MusicFile {
@@ -2237,8 +2239,9 @@ pub struct PaletteKeys {
 }
 
 impl Palette {
-    pub fn key(&self, name: &str) -> [f32; 4] {
-        let hex = match name {
+    /// Hex for a known color name. `None` when the name is not in the palette.
+    pub fn hex(&self, name: &str) -> Option<&str> {
+        Some(match name {
             "swarmer_amber" => self.keys.swarmer_amber.as_str(),
             "swarmer_glow" => self.keys.swarmer_glow.as_str(),
             "spitter_carapace" => self.keys.spitter_carapace.as_str(),
@@ -2258,10 +2261,33 @@ impl Palette {
             "rarity_rare" => self.rarity.rare.as_str(),
             "rarity_epic" => self.rarity.epic.as_str(),
             "rarity_legendary" => self.rarity.legendary.as_str(),
-            _ => "#FFFFFF",
-        };
-        hex_srgb(hex)
+            _ => return None,
+        })
     }
+
+    pub fn key(&self, name: &str) -> [f32; 4] {
+        hex_srgb(self.hex(name).unwrap_or_else(|| panic!("unknown palette key {name}")))
+    }
+}
+
+fn require_palette_keys(palette: &Palette, bugs: &crate::bugs::BugBook) -> Result<(), String> {
+    let check = |owner: &str, name: &str| -> Result<(), String> {
+        if name.is_empty() || palette.hex(name).is_some() {
+            return Ok(());
+        }
+        Err(format!("{owner} color \"{name}\" does not resolve"))
+    };
+    for (bug, row) in bugs.rows() {
+        check(bug, &row.visual.bud_color)?;
+        check(bug, &row.visual.grown_color)?;
+        for part in &row.visual.parts {
+            check(bug, &part.color)?;
+        }
+    }
+    for rarity in ["common", "rare", "epic", "legendary"] {
+        check("rarity", &format!("rarity_{rarity}"))?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize)]
