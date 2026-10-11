@@ -56,6 +56,136 @@ pub fn still_open(id: &str, panel: u32) -> (u32, u32, Vec<u8>) {
     compose(id, panel, cam)
 }
 
+/// Inputs for a first-person still. Offset and FOV come from the hero row.
+#[derive(Clone, Copy, Debug)]
+pub struct ViewmodelFrame {
+    pub accent: [f32; 4],
+    pub offset: [f32; 3],
+    pub fov: f32,
+    pub overdrive: bool,
+}
+
+/// First-person still. The camera sits at the origin looking down -Z, matching the overlay camera.
+pub fn raster_viewmodel(width: u32, height: u32, frame: &ViewmodelFrame) -> Vec<u8> {
+    let vm = crate::viewmodel();
+    let palette = palette_of();
+    let shift = frame.offset;
+    let orange = frame.accent;
+    let mut parts = vec![
+        (shifted(&vm.teal, shift), palette("hero_teal"), false),
+        (shifted(&vm.cobalt, shift), palette("hero_cobalt"), false),
+        (shifted(&vm.white, shift), palette("hero_white"), false),
+    ];
+    if frame.overdrive {
+        parts.push((shifted(&vm.barrel, shift), orange, true));
+        parts.push((shifted(&vm.accent, shift), orange, true));
+        parts.push((shifted(&vm.core, shift), orange, true));
+        let mut flash = crate::MeshData::new();
+        let tip = [
+            shift[0] + crate::muzzle_local()[0],
+            shift[1] + crate::muzzle_local()[1],
+            shift[2] + crate::muzzle_local()[2],
+        ];
+        crate::geom::gem(&mut flash, tip, [0.07, 0.07, 0.16], 8, 6, [1.0, 1.0, 1.0, 1.0]);
+        crate::geom::gem(&mut flash, tip, [0.16, 0.16, 0.04], 8, 4, [1.0, 1.0, 1.0, 1.0]);
+        parts.push((flash, [1.0, 0.72, 0.28, 1.0], true));
+    } else {
+        parts.push((shifted(&vm.barrel, shift), palette("hero_cobalt"), false));
+        parts.push((shifted(&vm.accent, shift), orange, false));
+        parts.push((shifted(&vm.core, shift), palette("shots_player"), true));
+    }
+    let mut rgb = draw_parts(&parts, [0.0, 0.0, 0.0], [0.0, 0.0, -1.0], frame.fov, width, height);
+    if frame.overdrive {
+        edge_tint(&mut rgb, width.max(8), height.max(8), orange);
+    }
+    rgb
+}
+
+fn edge_tint(color: &mut [u8], w: u32, h: u32, orange: [f32; 4]) {
+    let dye = [orange[0] * 255.0, orange[1] * 255.0, orange[2] * 255.0];
+    for y in 0..h {
+        for x in 0..w {
+            let nx = (x as f32 + 0.5) / w as f32;
+            let ny = (y as f32 + 0.5) / h as f32;
+            let edge = ((nx - 0.5).abs() * 2.0).max((ny - 0.5).abs() * 2.0);
+            if edge < 0.78 {
+                continue;
+            }
+            let t = ((edge - 0.78) / 0.22).clamp(0.0, 1.0) * 0.34;
+            let i = ((y * w + x) * 3) as usize;
+            for c in 0..3 {
+                let src = color[i + c] as f32;
+                color[i + c] = (src * (1.0 - t) + dye[c] * t).round() as u8;
+            }
+        }
+    }
+}
+
+fn shifted(mesh: &crate::MeshData, by: [f32; 3]) -> crate::MeshData {
+    let mut copy = mesh.clone();
+    for p in &mut copy.positions {
+        p[0] += by[0];
+        p[1] += by[1];
+        p[2] += by[2];
+    }
+    copy
+}
+
+fn draw_parts(
+    parts: &[(crate::MeshData, [f32; 4], bool)],
+    eye: [f32; 3],
+    target: [f32; 3],
+    fov_deg: f32,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    let w = width.max(8);
+    let h = height.max(8);
+    let mut color = Vec::with_capacity((w * h * 3) as usize);
+    for _ in 0..(w * h) {
+        color.extend_from_slice(&BG);
+    }
+    let mut depth = vec![f32::INFINITY; (w * h) as usize];
+    let forward = norm(sub(target, eye));
+    let right = norm(cross(forward, [0.0, 1.0, 0.0]));
+    let up = cross(right, forward);
+    let key = norm([-0.35, 0.86, 0.4]);
+    let fill = norm([0.6, 0.25, -0.35]);
+    let fov = fov_deg.to_radians();
+    let aspect = w as f32 / h as f32;
+    let focal = 1.0 / (fov * 0.5).tan();
+    for (mesh, albedo, emissive) in parts {
+        for tri in mesh.indices.chunks(3) {
+            if tri.len() < 3 {
+                continue;
+            }
+            let ia = tri[0] as usize;
+            let ib = tri[1] as usize;
+            let ic = tri[2] as usize;
+            let nw = mesh.normals[ia];
+            let ndot = (nw[0] * key[0] + nw[1] * key[1] + nw[2] * key[2]).clamp(0.0, 1.0);
+            let ndot2 = (nw[0] * fill[0] + nw[1] * fill[1] + nw[2] * fill[2]).clamp(0.0, 1.0);
+            let shade = (0.55 + 0.42 * ndot + 0.2 * ndot2).clamp(0.0, 1.0);
+            let rgb = if *emissive {
+                [albedo[0], albedo[1], albedo[2]]
+            } else {
+                [albedo[0] * shade, albedo[1] * shade, albedo[2] * shade]
+            };
+            let Some(a) = project(mesh.positions[ia], eye, right, up, forward, focal, aspect, w, h) else {
+                continue;
+            };
+            let Some(b) = project(mesh.positions[ib], eye, right, up, forward, focal, aspect, w, h) else {
+                continue;
+            };
+            let Some(c) = project(mesh.positions[ic], eye, right, up, forward, focal, aspect, w, h) else {
+                continue;
+            };
+            fill_tri(&mut color, &mut depth, w, h, a, b, c, rgb);
+        }
+    }
+    color
+}
+
 fn compose(id: &str, panel: u32, camera: Option<([f32; 3], [f32; 3], f32)>) -> (u32, u32, Vec<u8>) {
     let panel = panel.max(8);
     let visual = bug(id);

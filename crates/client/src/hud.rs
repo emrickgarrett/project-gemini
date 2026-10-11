@@ -24,7 +24,7 @@ pub fn draw(
     fx: Res<FrameFx>,
     time: Res<Time>,
     old: Query<Entity, With<HudNode>>,
-    camera: Query<(&Camera, &GlobalTransform)>,
+    camera: Query<(&Camera, &GlobalTransform), With<IsDefaultUiCamera>>,
     mut floaters: Query<(Entity, &mut Floater, &mut Node)>,
 ) {
     let dt = time.delta_secs();
@@ -48,7 +48,8 @@ pub fn draw(
     let Some(player) = game.sim.players.first() else { return };
     let teal = color(&game, "hero_teal");
     let white = color(&game, "hero_white");
-    let accent = color(&game, "hero_accent");
+    let accent_rgb = gemini_sim::content::hex_srgb(&game.content.hero.accent);
+    let accent = Color::srgb(accent_rgb[0], accent_rgb[1], accent_rgb[2]);
     let amber = color(&game, "brute_amber");
     let magenta = color(&game, "spitter_glow");
     let root = commands
@@ -63,6 +64,47 @@ pub fn draw(
             PlayPiece,
         ))
         .id();
+
+    if player.overdrive_left > 0.0 {
+        let wash = Color::srgba(accent_rgb[0], accent_rgb[1], accent_rgb[2], 0.22);
+        let band = 64.0;
+        for node in [
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                height: Val::Px(band),
+                ..default()
+            },
+            Node {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(0.0),
+                left: Val::Px(0.0),
+                right: Val::Px(0.0),
+                height: Val::Px(band),
+                ..default()
+            },
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                bottom: Val::Px(0.0),
+                left: Val::Px(0.0),
+                width: Val::Px(band),
+                ..default()
+            },
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                bottom: Val::Px(0.0),
+                right: Val::Px(0.0),
+                width: Val::Px(band),
+                ..default()
+            },
+        ] {
+            commands.spawn((node, BackgroundColor(wash), ChildOf(root), HudNode));
+        }
+    }
 
     let boss = game.sim.enemies.iter().find(|e| {
         e.alive && matches!(e.kind, EnemyKind::BroodMother | EnemyKind::HiveTyrant)
@@ -135,7 +177,7 @@ pub fn draw(
     arc(&mut commands, root, 78.0, 78.0, 46.0, hp.clamp(0.0, 1.0), teal);
     arc(&mut commands, root, 168.0, 78.0, 36.0, fuel.clamp(0.0, 1.0), white);
     let cd = player.ability_cd;
-    let max_cd = game.content.controller.ability.default_cooldown.max(0.1);
+    let max_cd = game.content.hero.ability_cooldown.max(0.1);
     let ready = cd <= 0.0;
     let ready_flash = ready && (game.sim.time * 3.0).sin() > 0.2;
     arc(

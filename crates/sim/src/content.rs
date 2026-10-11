@@ -65,7 +65,7 @@ pub fn embedded_sources() -> Sources<'static> {
         duplicate_ranks: include_str!("../../../content/duplicate_ranks.toml"),
         bosses: include_str!("../../../content/bosses.toml"),
         weapons: include_str!("../../../content/weapons.toml"),
-        hero: include_str!("../../../content/hero.toml"),
+        hero: include_str!("../../../content/characters.toml"),
         arena: include_str!("../../../content/arena.toml"),
         presentation: include_str!("../../../content/presentation.toml"),
         combat: include_str!("../../../content/combat.toml"),
@@ -109,6 +109,9 @@ impl Content {
         crate::bugs::require_leg_layout(&bugs).map_err(|err| format!("bugs.toml: {err}"))?;
         let bosses = load_bosses(src.bosses).map_err(|err| format!("bosses.toml: {err}"))?;
         require_spawn_clearance(&bosses, &bugs).map_err(|err| format!("bosses.toml: {err}"))?;
+        let (hero, guns) = load_characters(src.hero)?;
+        let mut weapons = parse::<WeaponFile>("weapons.toml", src.weapons)?;
+        weapons.weapon = guns;
         Ok(Self {
             fingerprint,
             waves: parse("waves.toml", src.waves)?,
@@ -120,8 +123,8 @@ impl Content {
             banners: parse("banners.toml", src.banners)?,
             duplicate: parse("duplicate_ranks.toml", src.duplicate_ranks)?,
             bosses,
-            weapons: parse("weapons.toml", src.weapons)?,
-            hero: parse("hero.toml", src.hero)?,
+            weapons,
+            hero,
             arena: parse("arena.toml", src.arena)?,
             presentation: parse("presentation.toml", src.presentation)?,
             combat: parse("combat.toml", src.combat)?,
@@ -874,12 +877,178 @@ pub struct WeaponDef {
     pub spread: f32,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Hero {
     pub id: String,
     pub name: String,
     pub primary: String,
     pub sidearm: String,
+    pub accent: String,
+    pub max_hp: f32,
+    pub move_speed_mult: f32,
+    pub ability_id: String,
+    pub ability_cooldown: f32,
+    pub overdrive_duration: f32,
+    pub overdrive_fire_rate: f32,
+    pub infinite_magazine: bool,
+    pub kill_cd_refund: f32,
+    /// Camera-local viewmodel position. +X is screen right, -Y is screen down.
+    pub viewmodel_offset: [f32; 3],
+    pub viewmodel_fov: f32,
+}
+
+fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>), String> {
+    let root: toml::Value = toml::from_str(text).map_err(|err| err.to_string())?;
+    let table = root.as_table().ok_or_else(|| "characters.toml is not a table".to_string())?;
+    let heroes = table
+        .get("hero")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "characters.toml is missing [[hero]]".to_string())?;
+    let unlock = table
+        .get("unlock")
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| "characters.toml is missing [unlock]".to_string())?;
+    let starter = unlock
+        .get("starter")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "characters.toml [unlock] is missing starter".to_string())?;
+    let weapons = table
+        .get("weapons")
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| "characters.toml is missing [weapons]".to_string())?;
+    let row = heroes
+        .iter()
+        .find(|hero| hero.get("id").and_then(|v| v.as_str()) == Some(starter))
+        .ok_or_else(|| format!("characters.toml starter \"{starter}\" is not a [[hero]]"))?;
+    let row = row.as_table().ok_or_else(|| "characters.toml hero row is not a table".to_string())?;
+    let ability = row
+        .get("ability")
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| format!("characters.toml {starter} is missing ability"))?;
+    let ability_id = req_str(ability, "id", &format!("{starter} ability"))?;
+    if ability_id != "overdrive" {
+        return Err(format!("starter ability \"{ability_id}\" has no implementation"));
+    }
+    let weapon_id = req_str(row, "weapon", starter)?;
+    let primary = character_weapon(weapons, weapon_id, "primary")?;
+    let sidearm = character_weapon(weapons, "sidearm", "sidearm")?;
+    let hero = Hero {
+        id: starter.to_string(),
+        name: req_str(row, "name", starter)?.to_string(),
+        primary: weapon_id.to_string(),
+        sidearm: "sidearm".into(),
+        accent: req_str(row, "accent", starter)?.to_string(),
+        max_hp: req_f32(row, "max_hp", starter)?,
+        move_speed_mult: req_f32(row, "move_speed_mult", starter)?,
+        ability_id: ability_id.to_string(),
+        ability_cooldown: req_f32(ability, "cooldown", "overdrive")?,
+        overdrive_duration: req_f32(ability, "duration", "overdrive")?,
+        overdrive_fire_rate: req_f32(ability, "fire_rate", "overdrive")?,
+        infinite_magazine: ability
+            .get("infinite_magazine")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| "overdrive is missing infinite_magazine".to_string())?,
+        kill_cd_refund: req_f32(ability, "kill_cd_refund", "overdrive")?,
+        viewmodel_offset: req_vec3(row, "viewmodel_offset", starter)?,
+        viewmodel_fov: req_f32(row, "viewmodel_fov", starter)?,
+    };
+    if hero.ability_cooldown <= 0.0 || hero.overdrive_duration <= 0.0 {
+        return Err("overdrive cooldown and duration must be > 0".into());
+    }
+    if hero.max_hp <= 0.0 {
+        return Err(format!("{starter} max_hp must be > 0"));
+    }
+    if hero.move_speed_mult <= 0.0 {
+        return Err(format!("{starter} move_speed_mult must be > 0"));
+    }
+    if hero.viewmodel_fov <= 1.0 || hero.viewmodel_fov >= 170.0 {
+        return Err(format!(
+            "characters.toml {starter} viewmodel_fov must be between 1 and 170"
+        ));
+    }
+    parse_accent(&hero.accent)?;
+    Ok((hero, vec![primary, sidearm]))
+}
+
+fn parse_accent(hex: &str) -> Result<(), String> {
+    let digits = hex.trim().trim_start_matches('#');
+    if digits.len() == 6 && digits.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Ok(());
+    }
+    Err(format!("accent \"{hex}\" must be #RRGGBB"))
+}
+
+fn character_weapon(weapons: &toml::map::Map<String, toml::Value>, id: &str, slot: &str) -> Result<WeaponDef, String> {
+    let row = weapons
+        .get(id)
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| format!("characters.toml is missing [weapons.{id}]"))?;
+    let rps = req_f32(row, "rps", id)?;
+    if rps <= 0.0 {
+        return Err(format!("characters.toml {id} rps must be > 0"));
+    }
+    let spread_deg = req_f32(row, "spread_deg", id)?;
+    Ok(WeaponDef {
+        id: id.to_string(),
+        slot: slot.to_string(),
+        damage: req_f32(row, "dmg", id)?,
+        fire_interval: 1.0 / rps,
+        magazine: req_u32(row, "mag", id)?,
+        reserve: req_u32(row, "reserve", id)?,
+        reload_time: req_f32(row, "reload", id)?,
+        projectile_speed: req_f32(row, "projectile_speed", id)?,
+        projectile_radius: req_f32(row, "projectile_radius", id)?,
+        spread: spread_deg.to_radians(),
+    })
+}
+
+fn req_str<'a>(table: &'a toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<&'a str, String> {
+    table
+        .get(key)
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| format!("characters.toml {what} is missing {key}"))
+}
+
+fn req_vec3(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<[f32; 3], String> {
+    let value = table
+        .get(key)
+        .ok_or_else(|| format!("characters.toml {what} is missing {key}"))?;
+    let arr = value
+        .as_array()
+        .ok_or_else(|| format!("characters.toml {what} {key} must be 3 numbers"))?;
+    if arr.len() != 3 {
+        return Err(format!("characters.toml {what} {key} must be 3 numbers"));
+    }
+    let mut out = [0.0; 3];
+    for (i, slot) in arr.iter().enumerate() {
+        if let Some(n) = slot.as_float() {
+            out[i] = n as f32;
+        } else if let Some(n) = slot.as_integer() {
+            out[i] = n as f32;
+        } else {
+            return Err(format!("characters.toml {what} {key} must be 3 numbers"));
+        }
+    }
+    Ok(out)
+}
+
+fn req_f32(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<f32, String> {
+    let value = table.get(key).ok_or_else(|| format!("characters.toml {what} is missing {key}"))?;
+    if let Some(n) = value.as_float() {
+        return Ok(n as f32);
+    }
+    if let Some(n) = value.as_integer() {
+        return Ok(n as f32);
+    }
+    Err(format!("characters.toml {what} {key} must be a number"))
+}
+
+fn req_u32(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<u32, String> {
+    let n = req_f32(table, key, what)?;
+    if n < 0.0 {
+        return Err(format!("characters.toml {what} {key} must be >= 0"));
+    }
+    Ok(n.round() as u32)
 }
 
 #[derive(Clone, Debug, Deserialize)]
