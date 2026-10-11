@@ -1163,7 +1163,7 @@ pub struct PerchRules {
     pub perch_height_slack: f32,
     pub climb_trigger_distance: f32,
     pub climb_slide_rate: f32,
-    pub climb_target_sq: f32,
+    pub climb_target_radius: f32,
     pub flow_field_targets: String,
     pub all_perched_grace: f32,
     pub climb_speed_mult: f32,
@@ -1601,7 +1601,7 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
             "perch_height_slack",
             "climb_trigger_distance",
             "climb_slide_rate",
-            "climb_target_sq",
+            "climb_target_radius",
             "flow_field_targets",
             "all_perched_grace",
             "climb_speed_mult",
@@ -1622,7 +1622,7 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
     let perch_height_slack = num(table.get("perch_height_slack").unwrap(), "perch_height_slack")?;
     let climb_trigger_distance = num(table.get("climb_trigger_distance").unwrap(), "climb_trigger_distance")?;
     let climb_slide_rate = num(table.get("climb_slide_rate").unwrap(), "climb_slide_rate")?;
-    let climb_target_sq = num(table.get("climb_target_sq").unwrap(), "climb_target_sq")?;
+    let climb_target_radius = num(table.get("climb_target_radius").unwrap(), "climb_target_radius")?;
     let all_perched_grace = num(table.get("all_perched_grace").unwrap(), "all_perched_grace")?;
     let climb_speed_mult = num(table.get("climb_speed_mult").unwrap(), "climb_speed_mult")?;
     let budget_shift_to_spitters = num(table.get("budget_shift_to_spitters").unwrap(), "budget_shift_to_spitters")?;
@@ -1634,7 +1634,7 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
         || perch_height_slack < 0.0
         || climb_trigger_distance <= 0.0
         || climb_slide_rate < 0.0
-        || climb_target_sq <= 0.0
+        || climb_target_radius <= 0.0
         || all_perched_grace < 0.0
         || climb_speed_mult < 0.0
         || !(0.0..=1.0).contains(&budget_shift_to_spitters)
@@ -1646,7 +1646,7 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
         perch_height_slack,
         climb_trigger_distance,
         climb_slide_rate,
-        climb_target_sq,
+        climb_target_radius,
         flow_field_targets,
         all_perched_grace,
         climb_speed_mult,

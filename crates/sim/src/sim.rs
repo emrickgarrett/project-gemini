@@ -2890,7 +2890,8 @@ fn step_enemy(
                 .find(|ledge| {
                     let lx = ledge.pos.x - player_pos.x;
                     let lz = ledge.pos.z - player_pos.z;
-                    lx * lx + lz * lz < rules.climb_target_sq
+                    let r = rules.climb_target_radius;
+                    lx * lx + lz * lz < r * r
                 })
                 .map(|ledge| ledge.pos.y)
                 .unwrap_or(0.0);

@@ -1236,7 +1236,7 @@ fn arena_01_vents_perches_and_pickups() {
     assert!((content.arena.perch_rules.perch_height_slack - 0.45).abs() < 1e-4);
     assert!((content.arena.perch_rules.climb_trigger_distance - 1.8).abs() < 1e-4);
     assert!((content.arena.perch_rules.climb_slide_rate - 0.4).abs() < 1e-4);
-    assert!((content.arena.perch_rules.climb_target_sq - 4.0).abs() < 1e-4);
+    assert!((content.arena.perch_rules.climb_target_radius - 2.0).abs() < 1e-4);
     let tower = content.arena.ledges.iter().find(|ledge| ledge.id == "tower").unwrap().pos;
     assert!(content.arena.on_perch(Vec3::new(tower.x + 1.4, tower.y, tower.z)));
     assert!(content.arena.on_perch(Vec3::new(tower.x, tower.y + 0.4, tower.z)));
@@ -1276,7 +1276,7 @@ fn arena_01_vents_perches_and_pickups() {
         "perch_height_slack",
         "climb_trigger_distance",
         "climb_slide_rate",
-        "climb_target_sq",
+        "climb_target_radius",
     ] {
         let missing_key = include_str!("../../../content/arena_01.toml")
             .lines()
@@ -1285,6 +1285,11 @@ fn arena_01_vents_perches_and_pickups() {
             .join("\n");
         let err = parse(&missing_key).expect_err(key);
         assert!(err.contains(key), "{err}");
+    }
+    for bad in ["climb_target_radius = 0.0", "climb_target_radius = -2.0"] {
+        let text = include_str!("../../../content/arena_01.toml").replacen("climb_target_radius = 2.0", bad, 1);
+        let err = parse(&text).expect_err(bad);
+        assert!(err.contains("out of range"), "{err}");
     }
     let missing = include_str!("../../../content/arena_01.toml").replacen("telegraph = 1.5\n", "", 1);
     let err = parse(&missing).expect_err("missing telegraph");
