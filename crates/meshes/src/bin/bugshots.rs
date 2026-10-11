@@ -1,0 +1,73 @@
+//! Save a concept-sheet still of each bug: a 1024 color panel beside a 1024 silhouette.
+//!
+//! ```text
+//! cargo run -p gemini-meshes --bin bugshots -- --out art/bugs
+//! ```
+//!
+//! Exits with an error if a glow part contributes no pixels in its palette color.
+
+use std::env;
+use std::fs;
+use std::io::Write;
+use std::process::{Command, Stdio};
+
+use gemini_meshes::{missing_glow_keys, painted_pixels, raster_bug, still};
+
+fn main() {
+    let mut out = "art/bugs".to_string();
+    let mut args = env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--out" {
+            if let Some(dir) = args.next() {
+                out = dir;
+            }
+        }
+    }
+    fs::create_dir_all(&out).expect("create out dir");
+    let ids = ["swarmer", "spitter", "brute", "brood_mother", "hive_tyrant"];
+    let panel = 1024u32;
+    let mut failed = false;
+    for id in ids {
+        let (w, h, rgb) = still(id, panel);
+        let color = raster_bug(id, panel, panel);
+        let painted = painted_pixels(&color);
+        let missing = missing_glow_keys(id, &color);
+        if painted < 800 || !missing.is_empty() {
+            eprintln!("{id} still failed ({painted} px, missing glow {missing:?})");
+            failed = true;
+        }
+        let path = format!("{out}/{id}.png");
+        write_png(&path, w, h, &rgb);
+        println!("wrote {path} ({painted} px)");
+    }
+    if failed {
+        std::process::exit(1);
+    }
+}
+
+fn write_png(path: &str, w: u32, h: u32, rgb: &[u8]) {
+    let mut child = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-s",
+            &format!("{w}x{h}"),
+            "-i",
+            "pipe:0",
+            path,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("ffmpeg");
+    child.stdin.take().unwrap().write_all(rgb).expect("write frame");
+    let status = child.wait().expect("ffmpeg wait");
+    if !status.success() {
+        eprintln!("ffmpeg failed for {path}");
+        std::process::exit(1);
+    }
+}

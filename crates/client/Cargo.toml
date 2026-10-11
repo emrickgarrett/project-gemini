@@ -1,0 +1,21 @@
+[package]
+name = "gemini-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Browser client. WebGPU build, with a separate WebGL2 build as fallback."
+
+[features]
+# Bevy's `webgpu` feature replaces `webgl2` at compile time, so the page
+# ships two wasm artifacts and chooses at runtime. See web/index.html.
+webgpu = ["bevy/webgpu"]
+
+[dependencies]
+gemini-sim = { path = "../sim" }
+gemini-meshes = { path = "../meshes" }
+bevy = { version = "0.20", features = ["vorbis"] }
+
+[[bin]]
+name = "gemini-client"
+path = "src/main.rs"

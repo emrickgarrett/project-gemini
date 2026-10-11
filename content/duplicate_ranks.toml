@@ -1,0 +1,38 @@
+# Applies on every difficulty. +25% HP and damage at rank 6. Dupes past 6 become cosmetic shards.
+power_per_rank = 5
+
+[[rank]]
+r = 1
+hp = 0
+dmg = 0
+unlock = "base character"
+
+[[rank]]
+r = 2
+hp = 0.04
+dmg = 0.04
+unlock = "color variant"
+
+[[rank]]
+r = 3
+hp = 0.08
+dmg = 0.08
+unlock = ""
+
+[[rank]]
+r = 4
+hp = 0.13
+dmg = 0.13
+unlock = "ability variant"
+
+[[rank]]
+r = 5
+hp = 0.19
+dmg = 0.19
+unlock = ""
+
+[[rank]]
+r = 6
+hp = 0.25
+dmg = 0.25
+unlock = "legendary skin and emote"

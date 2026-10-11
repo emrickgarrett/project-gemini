@@ -1,0 +1,16 @@
+[rates]   # base rates, published in-game
+common=0.60
+rare=0.30
+epic=0.085
+legendary=0.015
+[pity]
+legendary_soft_start = 55       # +6% per pull from 55
+legendary_soft_step = 0.06
+legendary_hard = 70
+epic_or_better_guarantee = 10   # every 10 pulls
+carries_between_banners = true
+[published]
+legendary_overall_rate = 0.0255  # exact: expected 39.2 pulls per legendary under pity (computed, epic guarantee excluded)
+[cost]
+single = 100
+ten_pull = 1000   # ten-pull shows ten pods

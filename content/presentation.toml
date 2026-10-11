@@ -1,0 +1,8 @@
+# FOV range is the note on controller.toml [camera] ("player-adjustable 75 to 110").
+fov_min = 75.0
+fov_max = 110.0
+mouse_sensitivity = 0.0022
+gamepad_look_deg_per_sec = 130.0
+view_bob_hz = 8.5
+pad_magnetism_blend = 0.45
+pitch_limit_deg = 85.0

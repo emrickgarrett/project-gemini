@@ -1,0 +1,248 @@
+# stack rules:
+#   linear:      total = value * stacks, clamped to cap
+#   diminishing: total = cap * (1 - 1/(1 + k*stacks))   (approaches cap, never exceeds it)
+#   unique:      one copy max; removed from the offer pool once owned
+# Rarity weights: common 60, rare 30, epic 10.
+
+[[upgrade]]
+id = "rapid_cells"
+rarity = "common"
+stat = "fire_rate_pct"
+stack = "diminishing"
+value = 0
+k = 0.12
+cap = 0.6
+notes = ""
+
+[[upgrade]]
+id = "hollow_points"
+rarity = "common"
+stat = "damage_pct"
+stack = "linear"
+value = 0.12
+k = 0
+cap = 1.2
+notes = ""
+
+[[upgrade]]
+id = "servo_legs"
+rarity = "common"
+stat = "move_speed_pct"
+stack = "linear"
+value = 0.08
+k = 0
+cap = 0.4
+notes = ""
+
+[[upgrade]]
+id = "plating"
+rarity = "common"
+stat = "max_hp_flat"
+stack = "linear"
+value = 20
+k = 0
+cap = 200
+notes = ""
+
+[[upgrade]]
+id = "deep_mag"
+rarity = "common"
+stat = "magazine_pct"
+stack = "linear"
+value = 0.2
+k = 0
+cap = 1.0
+notes = ""
+
+[[upgrade]]
+id = "quick_hands"
+rarity = "common"
+stat = "reload_speed_pct"
+stack = "diminishing"
+value = 0
+k = 0.18
+cap = 0.6
+notes = ""
+
+[[upgrade]]
+id = "scavenger"
+rarity = "common"
+stat = "pickup_radius_pct"
+stack = "linear"
+value = 0.1
+k = 0
+cap = 0.5
+notes = ""
+secondary_stat = "ammo_drop_chance"
+secondary_value = 0.05
+secondary_cap = 0.25
+
+[[upgrade]]
+id = "vamp_rounds"
+rarity = "common"
+stat = "heal_per_kill_flat"
+stack = "linear"
+value = 1
+k = 0
+cap = 5
+notes = ""
+
+[[upgrade]]
+id = "crit_lens"
+rarity = "common"
+stat = "crit_chance"
+stack = "diminishing"
+value = 0
+k = 0.06
+cap = 0.5
+notes = ""
+
+[[upgrade]]
+id = "booster_fuel"
+rarity = "common"
+stat = "jetpack_fuel_pct"
+stack = "linear"
+value = 0.25
+k = 0
+cap = 1.0
+notes = ""
+
+[[upgrade]]
+id = "weakpoint_ai"
+rarity = "rare"
+stat = "weakpoint_damage_pct"
+stack = "linear"
+value = 0.25
+k = 0
+cap = 1.0
+notes = ""
+
+[[upgrade]]
+id = "ricochet"
+rarity = "rare"
+stat = "bounce_targets"
+stack = "linear"
+value = 1
+k = 0
+cap = 4
+notes = "bounce deals 50%"
+
+[[upgrade]]
+id = "acid_ward"
+rarity = "rare"
+stat = "spitter_damage_reduction"
+stack = "diminishing"
+value = 0
+k = 0.18
+cap = 0.6
+notes = ""
+
+[[upgrade]]
+id = "medic_link"
+rarity = "rare"
+stat = "revive_speed_pct"
+stack = "diminishing"
+value = 0
+k = 0.4
+cap = 0.75
+notes = ""
+
+[[upgrade]]
+id = "shockwave"
+rarity = "rare"
+stat = "landing_knockback_radius_m"
+stack = "linear"
+value = 3
+k = 0
+cap = 9
+notes = ""
+
+[[upgrade]]
+id = "overshield"
+rarity = "rare"
+stat = "shield_flat"
+stack = "linear"
+value = 25
+k = 0
+cap = 100
+notes = ""
+
+[[upgrade]]
+id = "pierce"
+rarity = "rare"
+stat = "pierce_count"
+stack = "linear"
+value = 1
+k = 0
+cap = 3
+notes = ""
+
+[[upgrade]]
+id = "ability_cdr"
+rarity = "rare"
+stat = "ability_cooldown_reduction"
+stack = "diminishing"
+value = 0
+k = 0.14
+cap = 0.5
+notes = ""
+
+[[upgrade]]
+id = "chain_lightning"
+rarity = "epic"
+stat = "arc_proc_chance"
+stack = "diminishing"
+value = 0
+k = 0.11
+cap = 0.4
+notes = "arcs to 4 bugs, 60% damage"
+
+[[upgrade]]
+id = "drone_buddy"
+rarity = "epic"
+stat = "drone_count"
+stack = "linear"
+value = 1
+k = 0
+cap = 3
+notes = "each drone 15 dps"
+
+[[upgrade]]
+id = "last_stand"
+rarity = "epic"
+stat = "last_stand"
+stack = "unique"
+value = 1
+k = 0
+cap = 1
+notes = "survive one lethal hit per wave at 1 HP"
+
+[[upgrade]]
+id = "squad_aura"
+rarity = "epic"
+stat = "squad_damage_pct"
+stack = "unique"
+value = 0.08
+k = 0
+cap = 0.08
+notes = "15m radius, highest aura only, no cross-player stacking"
+
+[[upgrade]]
+id = "nova_core"
+rarity = "epic"
+stat = "nova_kill_interval"
+stack = "unique"
+value = 30
+k = 0
+cap = 30
+notes = "pulse 200 damage within 20m"
+
+[[upgrade]]
+id = "glass_cannon"
+rarity = "epic"
+stat = "glass_cannon"
+stack = "unique"
+value = 1
+k = 0
+cap = 1
+notes = "+40% damage, -25% max HP"

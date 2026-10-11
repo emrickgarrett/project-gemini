@@ -1,0 +1,92 @@
+# Combat knobs that are not in the designer tables.
+# Chain / ricochet / nova / drone figures are the upgrade notes in run_upgrades.toml.
+# Rarity weights are the comment at the top of that file (60 / 30 / 10).
+# Telegraph duration is the style guide's 0.5s bug windup.
+
+spawn_interval = 0.65
+group_budget = 8.0
+cell_size = 4.0
+telegraph_seconds = 0.5
+spitter_cooldown = 2.4
+spitter_min_range = 6.0
+# [0] back away inside this fraction of preferred range.
+# [1] do not start a spit closer than this fraction.
+keep_away_ratios = [0.55, 0.35]
+swarmer_melee_interval = 0.75
+brute_cooldown = 1.8
+brute_lunge_seconds = 0.4
+boss_melee_interval = 1.7
+brute_recover_seconds = 1.35
+brute_vulnerable_hp_fraction = 0.5
+separation_radius = 1.25
+separation_strength = 2.2
+spit_speed = 15.0
+spit_radius = 0.32
+spit_ttl = 4.5
+player_projectile_ttl = 1.8
+crit_multiplier = 1.5
+ricochet_damage_pct = 0.5
+ricochet_range = 8.0
+chain_targets = 4
+chain_damage_pct = 0.6
+chain_range = 8.0
+nova_damage = 200.0
+nova_radius = 20.0
+drone_dps = 15.0
+drone_range = 16.0
+drone_orbit_speed = 1.6
+drone_orbit_radius = 1.5
+drone_height = 1.25
+shockwave_damage = 22.0
+shockwave_impulse = 9.0
+glass_cannon_damage_pct = 0.40
+glass_cannon_max_hp_pct = -0.25
+squad_aura_radius = 15.0
+ability_damage = 48.0
+ability_radius = 6.5
+shield_regen_per_s = 14.0
+ammo_pickup_amount = 14
+pickup_base_radius = 1.5
+revive_range = 2.4
+default_weakpoint_mult = 2.0
+knockback_resist_boss = 0.35
+
+[rarity_weights]
+common = 60.0
+rare = 30.0
+epic = 10.0
+
+[hit_radius]
+player = 0.42
+swarmer = 0.36
+spitter = 0.72
+brute = 1.05
+brood_mother = 2.15
+hive_tyrant = 2.55
+
+[body_lift]
+swarmer = 0.28
+spitter = 0.62
+brute = 0.85
+brood_mother = 1.45
+hive_tyrant = 2.15
+
+[weakpoint.swarmer]
+offset = [0.0, 0.16, 0.30]
+radius = 0.18
+
+[weakpoint.spitter]
+offset = [0.0, 0.42, 0.05]
+radius = 0.30
+
+[weakpoint.brute]
+offset = [0.0, 0.72, 0.05]
+radius = 0.38
+
+[weakpoint.brood_mother]
+offset = [0.0, 1.35, 0.55]
+radius = 0.62
+
+[weakpoint.hive_tyrant]
+offset = [0.0, 2.35, -0.15]
+radius = 0.5

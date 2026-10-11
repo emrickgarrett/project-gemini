@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Project Gemini</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #121018; overflow: hidden; }
+    canvas { display: block; width: 100%; height: 100%; }
+  </style>
+</head>
+<body>
+<script type="module">
+  const params = new URLSearchParams(location.search);
+  const forced = params.get("api");
+  const webgpu = forced !== "webgl2" && "gpu" in navigator;
+  const dir = webgpu ? "./pkg-webgpu" : "./pkg-webgl2";
+  const module = await import(`${dir}/gemini-client.js`);
+  await module.default();
+</script>
+</body>
+</html>

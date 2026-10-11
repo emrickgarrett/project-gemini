@@ -1,0 +1,45 @@
+# First-person controller, M1 values. Units: meters, seconds, degrees.
+[move]
+walk_speed = 6.5
+sprint_speed = 9.5          # sprinting blocks firing; 0.15s sprint-to-fire delay
+accel_ground = 60.0
+accel_air = 18.0            # some air control
+friction = 8.0
+crouch_speed = 3.5
+[jump]
+jump_velocity = 6.0
+gravity = 20.0
+coyote_time = 0.12
+jump_buffer = 0.12
+[boost]                     # jetpack hover/dash, the signature move
+fuel_max = 100.0
+fuel_burn_per_s = 45.0
+fuel_regen_per_s = 30.0
+regen_delay = 0.8
+thrust_up = 26.0            # slightly above gravity, so you can hover and climb slowly
+dash_impulse = 12.0         # tap boost + direction
+dash_cost = 30.0
+[camera]
+fov_default = 90            # player-adjustable 75 to 110
+fov_sprint_add = 6
+view_bob_amplitude = 0.02   # with a toggle to turn it off
+landing_dip = 0.08
+[aim]                       # gentle on mouse, stronger on gamepad
+mouse_aim_assist = false
+pad_slowdown_radius_deg = 4.0
+pad_slowdown_strength = 0.45
+pad_magnetism_deg = 2.0
+hitscan_weakpoint_bonus_radius = 0.05
+[health]
+max_hp = 100
+shield_regen_delay = 4.0    # shield comes from upgrades only
+[downed]
+bleedout_time = 30.0
+revive_time = 3.0           # medic_link reduces this
+downed_can_fire_sidearm = true
+revive_invuln = 1.5
+solo_self_revives_per_wave = 1
+solo_self_revive_time = 5.0
+solo_self_revive_hp_fraction = 0.5
+[ability]                   # one active ability per character
+default_cooldown = 18.0
