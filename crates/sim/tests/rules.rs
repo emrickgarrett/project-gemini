@@ -1119,6 +1119,7 @@ fn vex_overdrive_comes_from_characters() {
             audio: base.audio,
             bugs: base.bugs,
             crate_reveal: base.crate_reveal,
+            coop: base.coop,
         })
     };
     let text = include_str!("../../../content/characters.toml");
