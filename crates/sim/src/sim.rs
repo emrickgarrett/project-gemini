@@ -255,6 +255,9 @@ pub struct Enemy {
     /// Swarmer is on a resin streak toward a perch. Anti-camp only.
     #[serde(default)]
     pub climbing: bool,
+    /// Player id of the last hit that dealt health damage. Zero means no player hit.
+    #[serde(default)]
+    pub last_hit_by: u32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1047,8 +1050,9 @@ impl Sim {
             self.landed_pulse = 1.0;
             let radius = mods.landing_knockback_radius_m;
             let origin = player.pos;
+            let owner = player.id;
             if radius > 0.0 {
-                self.shockwave(content, origin, radius);
+                self.shockwave(content, origin, radius, owner);
             }
         }
         let _ = was_grounded;
@@ -1058,7 +1062,7 @@ impl Sim {
         }
     }
 
-    fn shockwave(&mut self, content: &Content, origin: Vec3, radius: f32) {
+    fn shockwave(&mut self, content: &Content, origin: Vec3, radius: f32, owner: u32) {
         let dmg = content.combat.shockwave_damage;
         let impulse = content.combat.shockwave_impulse;
         for enemy in &mut self.enemies {
@@ -1080,6 +1084,9 @@ impl Sim {
             enemy.vel.x += push.x;
             enemy.vel.z += push.z;
             enemy.hp -= dmg;
+            if owner != 0 {
+                enemy.last_hit_by = owner;
+            }
         }
     }
 
@@ -1439,6 +1446,7 @@ impl Sim {
                         self.enemies[enemy_index].tail_broken = true;
                     }
                     self.enemies[enemy_index].hp -= dmg;
+                    self.enemies[enemy_index].last_hit_by = owner;
                     ping_pos = self.enemies[enemy_index].pos;
                 }
                 HitSpot::Weak => {
@@ -1471,6 +1479,7 @@ impl Sim {
                         self.sound_owned(&pop_id, pos, enemy_id);
                     }
                     self.enemies[enemy_index].hp -= dmg;
+                    self.enemies[enemy_index].last_hit_by = owner;
                     ping_pos = weak_world(content, &self.enemies[enemy_index]);
                 }
                 HitSpot::Body => {
@@ -1481,6 +1490,7 @@ impl Sim {
                         dmg *= armor;
                     }
                     self.enemies[enemy_index].hp -= dmg;
+                    self.enemies[enemy_index].last_hit_by = owner;
                 }
             }
             self.projectiles[proj_index].hit.push(enemy_id);
@@ -1496,7 +1506,7 @@ impl Sim {
                 self.sound_at("hit", ping_pos);
             }
             if !matches!(spot, HitSpot::Pod(_)) {
-                self.try_chain(content, &mods, enemy_index, dmg);
+                self.try_chain(content, &mods, enemy_index, dmg, owner);
             }
             if self.projectiles[proj_index].pierce > 0 {
                 self.projectiles[proj_index].pierce -= 1;
@@ -1513,7 +1523,7 @@ impl Sim {
         remove
     }
 
-    fn try_chain(&mut self, content: &Content, mods: &Modifiers, from: usize, damage: f32) {
+    fn try_chain(&mut self, content: &Content, mods: &Modifiers, from: usize, damage: f32, owner: u32) {
         if mods.arc_proc_chance <= 0.0 || self.rng.next_f32() > mods.arc_proc_chance {
             return;
         }
@@ -1530,6 +1540,9 @@ impl Sim {
         let arc = content.combat.chain_damage_pct * damage;
         for idx in near.into_iter().take(content.combat.chain_targets as usize) {
             self.enemies[idx].hp -= arc;
+            if owner != 0 {
+                self.enemies[idx].last_hit_by = owner;
+            }
         }
     }
 
@@ -1707,6 +1720,7 @@ impl Sim {
             }
             if let Some((idx, _)) = best {
                 self.enemies[idx].hp -= dps;
+                self.enemies[idx].last_hit_by = self.players[seat].id;
             }
         }
     }
@@ -2229,6 +2243,7 @@ impl Sim {
             reinforce_warn: 0.0,
             cue: EnemyCue::None,
             climbing: false,
+            last_hit_by: 0,
         });
     }
 
@@ -2295,6 +2310,7 @@ impl Sim {
             reinforce_warn: 0.0,
             cue: EnemyCue::None,
             climbing: false,
+            last_hit_by: 0,
         });
         let _ = dmg;
         if !def.intro_sfx.is_empty() {
@@ -2332,19 +2348,10 @@ impl Sim {
         if boss_id.is_some() {
             self.boss_kills += 1;
         }
-        let seat = self
-            .players
-            .iter()
-            .enumerate()
-            .filter(|(_, player)| player.connected && player.alive)
-            .map(|(seat, player)| {
-                let dist = Vec3::new(player.pos.x - pos.x, 0.0, player.pos.z - pos.z).length();
-                (dist, seat)
-            })
-            .min_by(|left, right| left.0.total_cmp(&right.0))
-            .map(|(_, seat)| seat)
-            .unwrap_or(0);
-        if let Some(player) = self.players.get(seat) {
+        let killer = self.enemies[index].last_hit_by;
+        let seat = self.players.iter().position(|player| player.id == killer);
+        if let Some(seat) = seat {
+            let player = &self.players[seat];
             let mods = upgrade::collect(content, &player.upgrades);
             let overdrive = player.overdrive_left > 0.0;
             let heal = mods.heal_per_kill_flat;
@@ -2360,7 +2367,7 @@ impl Sim {
                 self.players[seat].kills_since_nova += 1;
                 if self.players[seat].kills_since_nova as f32 >= nova_every {
                     self.players[seat].kills_since_nova = 0;
-                    self.nova(content, pos);
+                    self.nova(content, pos, killer);
                 }
             }
             if ammo_chance > 0.0 && self.rng.next_f32() < ammo_chance {
@@ -2387,7 +2394,7 @@ impl Sim {
         }
     }
 
-    fn nova(&mut self, content: &Content, pos: Vec3) {
+    fn nova(&mut self, content: &Content, pos: Vec3, owner: u32) {
         let radius = content.combat.nova_radius;
         let dmg = content.combat.nova_damage;
         for enemy in &mut self.enemies {
@@ -2397,6 +2404,9 @@ impl Sim {
             let d = Vec3::new(enemy.pos.x - pos.x, 0.0, enemy.pos.z - pos.z).length();
             if d <= radius {
                 enemy.hp -= dmg;
+                if owner != 0 {
+                    enemy.last_hit_by = owner;
+                }
             }
         }
     }

@@ -367,6 +367,7 @@ fn spitter_at(z: f32) -> gemini_sim::sim::Enemy {
         reinforce_warn: 0.0,
         cue: gemini_sim::sim::EnemyCue::None,
         climbing: false,
+        last_hit_by: 0,
     }
 }
 
@@ -414,6 +415,7 @@ fn hurt(sim: &mut Sim, content: &Content) {
         reinforce_warn: 0.0,
         cue: gemini_sim::sim::EnemyCue::None,
         climbing: false,
+        last_hit_by: 0,
     });
     sim.step(content, PlayerInput::default());
 }
@@ -507,6 +509,7 @@ fn bug(kind: gemini_sim::content::EnemyKind) -> gemini_sim::sim::Enemy {
         reinforce_warn: 0.0,
         cue: gemini_sim::sim::EnemyCue::None,
         climbing: false,
+        last_hit_by: 0,
     }
 }
 
@@ -1182,6 +1185,7 @@ fn vex_overdrive_comes_from_characters() {
     sim.players[0].overdrive_left = 1.0;
     sim.enemies[0].hp = 0.0;
     sim.enemies[0].alive = true;
+    sim.enemies[0].last_hit_by = sim.players[0].id;
     input.ability = false;
     input.fire = false;
     sim.step(&content, input);
@@ -1594,4 +1598,67 @@ fn friendly_fire_off_does_not_damage_a_teammate() {
     sim.step(&content, PlayerInput::default());
     let joiner = sim.players.iter().find(|player| player.token == token).unwrap();
     assert!((joiner.hp - hp).abs() < 1e-3, "hp {}", joiner.hp);
+}
+
+#[test]
+fn overdrive_is_per_player_and_the_killer_gets_the_refund() {
+    let content = Content::embedded();
+    let mut sim = Sim::new(&content, "normal", 4);
+    quiet_breather(&mut sim);
+    let token = sim.request_join(&content).unwrap();
+    sim.phase = Phase::Combat;
+    sim.director.parked = true;
+    sim.director.pool = 0.0;
+    sim.enemies.clear();
+    let mate = sim.players.iter().position(|player| player.token == token).unwrap();
+    sim.players[0].overdrive_left = 0.0;
+    sim.players[0].primary.cooldown = 0.0;
+    sim.players[0].primary.reload = 0.0;
+    sim.players[mate].overdrive_left = content.hero.overdrive_duration;
+    sim.players[mate].primary.cooldown = 0.0;
+    sim.players[mate].primary.reload = 0.0;
+    let host_ammo = sim.players[0].primary.ammo;
+    let mate_ammo = sim.players[mate].primary.ammo;
+    let mut host_fire = PlayerInput::default();
+    host_fire.fire = true;
+    let mut mate_fire = PlayerInput::default();
+    mate_fire.fire = true;
+    sim.step_peers(&content, &[host_fire, mate_fire]);
+    let mate = sim.players.iter().position(|player| player.token == token).unwrap();
+    assert_eq!(sim.players[0].primary.ammo, host_ammo - 1);
+    assert_eq!(sim.players[mate].primary.ammo, mate_ammo, "teammate overdrive spends no ammo");
+    let plain = content.weapon("pulse_rifle").unwrap().fire_interval;
+    let boosted = plain / (1.0 + content.hero.overdrive_fire_rate);
+    assert!((sim.players[0].primary.cooldown - plain).abs() < 1e-3);
+    assert!((sim.players[mate].primary.cooldown - boosted).abs() < 1e-3);
+
+    // The host is standing on the bug, so a nearest-player credit would pay them.
+    // The teammate landed the killing hit, and only that player is refunded.
+    sim.projectiles.clear();
+    sim.enemies.clear();
+    sim.phase = Phase::Combat;
+    sim.director.parked = true;
+    sim.director.pool = 0.0;
+    let host_id = sim.players[0].id;
+    let mate_id = sim.players[mate].id;
+    sim.players[0].pos = Vec3::new(0.0, 4.0, 0.0);
+    sim.players[0].overdrive_left = content.hero.overdrive_duration;
+    sim.players[0].ability_cd = 10.0;
+    sim.players[mate].pos = Vec3::new(18.0, 4.0, 0.0);
+    sim.players[mate].overdrive_left = content.hero.overdrive_duration;
+    sim.players[mate].ability_cd = 10.0;
+    let mut victim = bug(gemini_sim::content::EnemyKind::Swarmer);
+    victim.hp = 0.0;
+    victim.alive = true;
+    victim.contact = 0.0;
+    victim.pos = sim.players[0].pos;
+    victim.last_hit_by = mate_id;
+    sim.enemies.push(victim);
+    sim.step_peers(&content, &[PlayerInput::default(), PlayerInput::default()]);
+    let ticked = 10.0 - gemini_sim::SIM_DT;
+    let refunded = ticked - content.hero.kill_cd_refund;
+    let host = sim.players.iter().find(|player| player.id == host_id).unwrap();
+    let killer = sim.players.iter().find(|player| player.id == mate_id).unwrap();
+    assert!((host.ability_cd - ticked).abs() < 1e-3, "assist cd {}", host.ability_cd);
+    assert!((killer.ability_cd - refunded).abs() < 1e-3, "killer cd {}", killer.ability_cd);
 }
