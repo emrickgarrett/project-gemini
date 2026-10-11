@@ -1,15 +1,17 @@
-//! Save a front three-quarter still of each bug.
+//! Save a concept-sheet still of each bug: a 1024 color panel beside a 1024 silhouette.
 //!
 //! ```text
 //! cargo run -p gemini-meshes --bin bugshots -- --out art/bugs
 //! ```
+//!
+//! Exits with an error if a glow part contributes no pixels in its palette color.
 
 use std::env;
 use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use gemini_meshes::{painted_pixels, raster_bug};
+use gemini_meshes::{missing_glow_keys, painted_pixels, raster_bug, still};
 
 fn main() {
     let mut out = "art/bugs".to_string();
@@ -23,17 +25,23 @@ fn main() {
     }
     fs::create_dir_all(&out).expect("create out dir");
     let ids = ["swarmer", "spitter", "brute", "brood_mother", "hive_tyrant"];
-    let (w, h) = (640u32, 480u32);
+    let panel = 1024u32;
+    let mut failed = false;
     for id in ids {
-        let rgb = raster_bug(id, w, h);
-        let painted = painted_pixels(&rgb);
-        if painted < 200 {
-            eprintln!("{id} preview is nearly blank ({painted} px)");
-            std::process::exit(1);
+        let (w, h, rgb) = still(id, panel);
+        let color = raster_bug(id, panel, panel);
+        let painted = painted_pixels(&color);
+        let missing = missing_glow_keys(id, &color);
+        if painted < 800 || !missing.is_empty() {
+            eprintln!("{id} still failed ({painted} px, missing glow {missing:?})");
+            failed = true;
         }
         let path = format!("{out}/{id}.png");
         write_png(&path, w, h, &rgb);
         println!("wrote {path} ({painted} px)");
+    }
+    if failed {
+        std::process::exit(1);
     }
 }
 

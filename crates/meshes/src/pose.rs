@@ -10,6 +10,10 @@ pub struct AnimInput {
     pub vulnerable: bool,
     pub phase: u32,
     pub frenzy: bool,
+    /// Stills only. Phase-min glow (hive veins) draws without hiding phase-max parts.
+    pub preview_glow: bool,
+    /// How many brood buds have grown into pods. The sim never reads this.
+    pub regrow: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -113,6 +117,15 @@ pub fn pose(visual: &EnemyVisual, anim: AnimInput, prev_lift: &[f32]) -> Pose {
                 }
             }
         }
+        // Dull sac-colored buds swell to pod size and take the pod glow on regrow.
+        if let Some(slot) = bud_slot(&part.name) {
+            if slot < anim.regrow {
+                scale = [2.4, 2.4, 2.4];
+                glow = 2.2;
+            } else {
+                glow = 0.0;
+            }
+        }
         if part.parent.is_none() {
             pos[1] += bob;
             euler[0] += lean;
@@ -150,8 +163,12 @@ fn gate_open(part: &Part, anim: &AnimInput) -> bool {
         Gate::Always => true,
         Gate::Vulnerable => anim.vulnerable,
         Gate::PhaseMax(max) => anim.phase + 1 <= max,
-        Gate::PhaseMin(min) => anim.phase + 1 >= min,
+        Gate::PhaseMin(min) => anim.preview_glow || anim.phase + 1 >= min,
     }
+}
+
+fn bud_slot(name: &str) -> Option<u32> {
+    name.strip_prefix("bud")?.parse().ok()
 }
 
 fn leg_phase(visual: &EnemyVisual, index: u32, time: f32, rate: f32) -> f32 {

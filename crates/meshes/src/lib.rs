@@ -7,7 +7,7 @@ mod preview;
 mod visual;
 
 pub use pose::{pose, AnimInput, Pose, Xform};
-pub use preview::{painted_pixels, raster, raster_bug};
+pub use preview::{missing_glow_keys, painted_pixels, raster, raster_bug, still};
 pub use visual::{bug, catalog, flat_shaded, EnemyVisual, Gate, Joint, Part};
 
 #[derive(Clone, Debug)]
@@ -207,6 +207,8 @@ mod tests {
                     vulnerable: false,
                     phase: 0,
                     frenzy: false,
+                    preview_glow: false,
+                    regrow: 0,
                 },
                 &prev,
             );
@@ -229,6 +231,8 @@ mod tests {
                 vulnerable: false,
                 phase: 0,
                 frenzy: false,
+                preview_glow: false,
+                regrow: 0,
             },
             &[],
         );
@@ -241,6 +245,8 @@ mod tests {
                 vulnerable: false,
                 phase: 0,
                 frenzy: false,
+                preview_glow: false,
+                regrow: 0,
             },
             &[],
         );
@@ -250,11 +256,59 @@ mod tests {
     }
 
     #[test]
+    fn stills_include_each_glow_color() {
+        for id in ["swarmer", "spitter", "brute", "brood_mother", "hive_tyrant"] {
+            let rgb = raster_bug(id, 360, 360);
+            let missing = missing_glow_keys(id, &rgb);
+            assert!(missing.is_empty(), "{id} glow missing {missing:?}");
+            assert!(painted_pixels(&rgb) > 80, "{id} still is blank");
+        }
+    }
+
+    #[test]
     fn front_three_quarter_preview_is_not_blank() {
         let rgb = raster_bug("spitter", 96, 96);
         assert!(painted_pixels(&rgb) > 40, "spitter preview painted {}", painted_pixels(&rgb));
         let brute = raster_bug("brute", 96, 96);
         assert!(painted_pixels(&brute) > 40);
+    }
+
+    #[test]
+    fn colors_and_brood_pods_follow_the_palette() {
+        let sp = bug("spitter");
+        assert_eq!(sp.parts.iter().find(|p| p.name == "thorax").unwrap().palette, "spitter_carapace");
+        assert_eq!(sp.parts.iter().find(|p| p.name == "sac").unwrap().palette, "spitter_glow");
+        assert!(sp.parts.iter().find(|p| p.name == "sac").unwrap().emissive);
+        let brood = bug("brood_mother");
+        assert_eq!(brood.parts.iter().find(|p| p.name == "sac").unwrap().palette, "brood_sac");
+        assert_eq!(brood.parts.iter().filter(|p| p.name.starts_with("pod")).count(), 6);
+        assert_eq!(brood.parts.iter().filter(|p| p.name.starts_with("bud")).count(), 6);
+        let bud = brood.parts.iter().find(|p| p.name == "bud0").unwrap();
+        assert!(!bud.emissive);
+        assert_eq!(bud.palette, "brood_sac");
+        let abd = bug("swarmer").parts.iter().find(|p| p.name == "abdomen").unwrap();
+        assert!(abd.emissive);
+        assert_eq!(abd.palette, "swarmer_glow");
+        let posed = pose(
+            brood,
+            AnimInput {
+                time: 0.2,
+                moving: false,
+                charging: false,
+                vulnerable: false,
+                phase: 0,
+                frenzy: false,
+                preview_glow: false,
+                regrow: 2,
+            },
+            &[],
+        );
+        let b0 = brood.parts.iter().position(|p| p.name == "bud0").unwrap();
+        let b3 = brood.parts.iter().position(|p| p.name == "bud3").unwrap();
+        assert!(posed.xforms[b0].scale[0] > 2.0);
+        assert!(posed.xforms[b0].glow > 1.5);
+        assert!(posed.xforms[b3].scale[0] < 1.5);
+        assert!(posed.xforms[b3].glow < 0.5);
     }
 
     #[test]

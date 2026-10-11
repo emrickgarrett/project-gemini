@@ -33,6 +33,9 @@ pub(crate) struct BugPart {
     #[allow(dead_code)]
     index: usize,
     emissive: bool,
+    /// Sac-colored bud that swaps to the pod glow when it regrows.
+    grows: bool,
+    pod_slot: Option<u32>,
     rest: Handle<StandardMaterial>,
     hot: Handle<StandardMaterial>,
     hot_on: bool,
@@ -97,6 +100,9 @@ pub fn scene(
             material(&mut bank, &mut materials, content, &part.palette, part.emissive, false);
             if part.emissive {
                 material(&mut bank, &mut materials, content, &part.palette, true, true);
+            }
+            if part.name.starts_with("bud") {
+                material(&mut bank, &mut materials, content, "swarmer_glow", true, true);
             }
         }
         bank.meshes.entry(visual.lod_key.clone()).or_insert_with(|| upload(&mut meshes, &visual.lod));
@@ -172,6 +178,9 @@ pub fn scene(
     let core = upload(&mut meshes, &gemini_meshes::gun_core(teal));
     commands.spawn((
         Camera3d::default(),
+        // Bloom needs this HDR camera. WebGL2 can present the view without the
+        // bloom pass; weak points stay unlit in their palette color so they
+        // still read when that happens.
         Hdr,
         Bloom::NATURAL,
         Tonemapping::TonyMcMapface,
@@ -258,6 +267,12 @@ pub fn sync(
                 vulnerable: enemy.weak_exposed,
                 phase: enemy.phase as u32,
                 frenzy: enemy.kind == EnemyKind::HiveTyrant && enemy.phase >= 1,
+                preview_glow: false,
+                regrow: if enemy.kind == EnemyKind::BroodMother {
+                    enemy.pods.iter().filter(|hp| **hp <= 0.0).count() as u32
+                } else {
+                    0
+                },
             },
             &prev,
         );
@@ -281,8 +296,16 @@ pub fn sync(
                 local.translation = bevy::math::Vec3::new(xf.pos[0], xf.pos[1], xf.pos[2]);
                 local.rotation = Quat::from_xyzw(xf.rot[0], xf.rot[1], xf.rot[2], xf.rot[3]);
                 local.scale = bevy::math::Vec3::new(xf.scale[0], xf.scale[1], xf.scale[2]);
-                *vis = if use_lod || !xf.visible { Visibility::Hidden } else { Visibility::Inherited };
-                let want_hot = part.emissive && xf.glow > 1.5;
+                let pod_dead = part
+                    .pod_slot
+                    .and_then(|slot| enemy.pods.get(slot as usize).copied())
+                    .is_some_and(|hp| hp <= 0.0);
+                *vis = if use_lod || !xf.visible || pod_dead {
+                    Visibility::Hidden
+                } else {
+                    Visibility::Inherited
+                };
+                let want_hot = (part.emissive || part.grows) && xf.glow > 1.5;
                 if want_hot != part.hot_on {
                     part.hot_on = want_hot;
                     let handle = if want_hot { part.hot.clone() } else { part.rest.clone() };
@@ -412,11 +435,14 @@ fn spawn_bug(commands: &mut Commands, bank: &Bank, game: &Game, kind: EnemyKind,
     for (index, part) in visual.parts.iter().enumerate() {
         let mesh = bank.meshes.get(&part.mesh_key).cloned().unwrap_or_else(|| bank.tracer.clone());
         let rest = mat_of(bank, &part.palette, part.emissive, false);
-        let hot = if part.emissive {
+        let hot = if part.name.starts_with("bud") {
+            mat_of(bank, "swarmer_glow", true, true)
+        } else if part.emissive {
             mat_of(bank, &part.palette, true, true)
         } else {
             rest.clone()
         };
+        let pod_slot = part.name.strip_prefix("pod").and_then(|n| n.parse().ok());
         let entity = commands
             .spawn((
                 Mesh3d(mesh),
@@ -426,6 +452,8 @@ fn spawn_bug(commands: &mut Commands, bank: &Bank, game: &Game, kind: EnemyKind,
                 BugPart {
                     index,
                     emissive: part.emissive,
+                    grows: part.name.starts_with("bud"),
+                    pod_slot,
                     rest,
                     hot,
                     hot_on: false,
