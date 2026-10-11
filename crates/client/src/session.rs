@@ -105,9 +105,11 @@ impl SimClock {
     }
 }
 
-/// Crate-pull rank. Survives match start; run upgrades do not.
+/// Duplicate rank supplied to the match. The client does not roll crates.
 #[derive(Resource)]
-pub struct Account(pub gemini_sim::Profile);
+pub struct Account {
+    pub rank: u32,
+}
 
 pub fn boot(
     mut commands: Commands,
@@ -119,7 +121,7 @@ pub fn boot(
     clock.reset();
     let content = Content::embedded();
     let mut sim = Sim::new(&content, &pending.0, 7);
-    sim.apply_persistent_rank(&content, account.0.rank);
+    sim.apply_persistent_rank(&content, account.rank);
     let (sim, token, link) = open_link(&launch, &content, sim);
     let fov = content.controller.camera.fov_default;
     commands.insert_resource(Game {

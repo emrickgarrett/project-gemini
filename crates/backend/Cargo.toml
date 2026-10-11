@@ -1,0 +1,10 @@
+[package]
+name = "gemini-backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Server-side accounts, crate pulls, pity, and the pull audit log."
+
+[dependencies]
+gemini-sim = { path = "../sim" }

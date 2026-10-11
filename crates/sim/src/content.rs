@@ -137,7 +137,7 @@ impl Content {
             endless: parse("endless.toml", src.endless)?,
             currency: parse("currency.toml", src.currency)?,
             banners: parse("banners.toml", src.banners)?,
-            duplicate: parse("duplicate_ranks.toml", src.duplicate_ranks)?,
+            duplicate: load_duplicate(src.duplicate_ranks)?,
             bosses,
             weapons,
             hero,
@@ -593,13 +593,13 @@ pub struct ShardCost {
 }
 
 impl Cosmetics {
-    pub fn shards_for(&self, rarity: &str) -> u32 {
+    pub fn shards_for(&self, rarity: &str) -> Result<u32, String> {
         match rarity {
-            "common" => self.shard_cost.common,
-            "rare" => self.shard_cost.rare,
-            "epic" => self.shard_cost.epic,
-            "legendary" => self.shard_cost.legendary,
-            _ => 0,
+            "common" => Ok(self.shard_cost.common),
+            "rare" => Ok(self.shard_cost.rare),
+            "epic" => Ok(self.shard_cost.epic),
+            "legendary" => Ok(self.shard_cost.legendary),
+            other => Err(format!("unknown rarity \"{other}\"")),
         }
     }
 }
@@ -607,7 +607,24 @@ impl Cosmetics {
 #[derive(Clone, Debug, Deserialize)]
 pub struct DuplicateRanks {
     pub power_per_rank: f32,
+    /// Highest duplicate rank. Must equal the number of `[[rank]]` rows.
+    pub max_rank: u32,
     pub rank: Vec<RankRow>,
+}
+
+fn load_duplicate(text: &str) -> Result<DuplicateRanks, String> {
+    let table: DuplicateRanks = parse("duplicate_ranks.toml", text)?;
+    let rows = table.rank.len() as u32;
+    if table.max_rank == 0 {
+        return Err("duplicate_ranks.toml max_rank is missing".into());
+    }
+    if table.max_rank != rows {
+        return Err(format!(
+            "duplicate_ranks.toml max_rank {} must equal the number of [[rank]] rows ({rows})",
+            table.max_rank
+        ));
+    }
+    Ok(table)
 }
 
 #[derive(Clone, Debug, Deserialize)]

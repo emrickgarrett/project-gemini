@@ -1715,49 +1715,75 @@ fn overdrive_is_per_player_and_the_killer_gets_the_refund() {
 }
 
 #[test]
-fn crate_pulls_are_the_only_persistent_power() {
+fn persistent_rank_comes_from_outside_and_the_cap_is_loaded() {
     let content = Content::embedded();
     assert_eq!(content.roster, ["vex", "nyra", "brakk", "kip"]);
     assert!(content.cosmetics.shard_shop);
     assert_eq!(content.cosmetics.shard_cost.legendary, 600);
+    assert_eq!(content.cosmetics.shards_for("legendary").unwrap(), 600);
+    let err = content.cosmetics.shards_for("mythic").expect_err("unknown rarity");
+    assert!(err.contains("mythic"), "{err}");
+    assert_eq!(content.duplicate.max_rank, 6);
+    assert_eq!(content.duplicate.rank.len() as u32, content.duplicate.max_rank);
 
-    let mut profile = gemini_sim::Profile::new(9);
-    profile.credits = content.banners.cost.single as f32;
-    let pull = profile.pull(&content).expect("one pull");
-    assert!(pull.powered);
-    assert_eq!(pull.rank, 2);
-    assert_eq!(profile.rank, 2);
-    let err = profile.pull(&content).expect_err("a pull needs credits");
-    assert!(err.contains("credits"), "{err}");
+    let base = gemini_sim::content::embedded_sources();
+    let missing = base
+        .duplicate_ranks
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("max_rank"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let err = Content::parse(&sources_ranks(&base, &missing)).expect_err("missing max_rank");
+    assert!(err.contains("max_rank"), "{err}");
+    let short = base.duplicate_ranks.replacen("max_rank = 6", "max_rank = 5", 1);
+    let err = Content::parse(&sources_ranks(&base, &short)).expect_err("max_rank must match rows");
+    assert!(err.contains("max_rank"), "{err}");
+    assert!(err.contains("[[rank]]"), "{err}");
 
-    profile.credits = content.banners.cost.single as f32 * 20.0;
-    profile.since_legendary = content.banners.pity.legendary_hard - 1;
-    let forced = profile.pull(&content).unwrap();
-    assert_eq!(forced.rarity, "legendary");
-    assert!(forced.powered);
-    while profile.rank < 6 {
-        profile.credits += content.banners.cost.single as f32;
-        let again = profile.pull(&content).unwrap();
-        assert!(again.powered);
-    }
-    let shards_before = profile.shards;
-    profile.credits += content.banners.cost.single as f32;
-    let past = profile.pull(&content).unwrap();
-    assert!(!past.powered);
-    assert_eq!(past.rank, 6);
-    assert!(past.shards > 0);
-    assert!(profile.shards > shards_before);
-
+    let cap = content.duplicate.max_rank;
     let mut earned = Sim::new(&content, "normal", 3);
     earned.players[0].upgrades.insert("glass_cannon".into(), 1);
-    earned.apply_persistent_rank(&content, profile.rank);
+    earned.apply_persistent_rank(&content, cap);
     let ranked_hp = earned.players[0].max_hp;
 
     let mut fresh = Sim::new(&content, "normal", 4);
-    fresh.apply_persistent_rank(&content, profile.rank);
+    fresh.apply_persistent_rank(&content, cap + 10);
     assert!(fresh.players[0].upgrades.is_empty(), "run upgrades clear every match");
-    assert_eq!(fresh.duplicate_rank, 6);
+    assert_eq!(fresh.duplicate_rank, cap);
     assert!((fresh.players[0].max_hp - ranked_hp).abs() < 1e-3);
-    let base = Sim::new(&content, "normal", 5);
-    assert!(fresh.players[0].max_hp > base.players[0].max_hp);
+    let base_sim = Sim::new(&content, "normal", 5);
+    assert!(fresh.players[0].max_hp > base_sim.players[0].max_hp);
+
+    let mut floor = Sim::new(&content, "normal", 6);
+    floor.apply_persistent_rank(&content, 0);
+    assert_eq!(floor.duplicate_rank, 1);
+}
+
+fn sources_ranks<'a>(
+    base: &'a gemini_sim::content::Sources<'a>,
+    duplicate_ranks: &'a str,
+) -> gemini_sim::content::Sources<'a> {
+    gemini_sim::content::Sources {
+        waves: base.waves,
+        difficulty: base.difficulty,
+        controller: base.controller,
+        run_upgrades: base.run_upgrades,
+        endless: base.endless,
+        currency: base.currency,
+        banners: base.banners,
+        duplicate_ranks,
+        bosses: base.bosses,
+        weapons: base.weapons,
+        hero: base.hero,
+        arena: base.arena,
+        presentation: base.presentation,
+        combat: base.combat,
+        palette: base.palette,
+        music: base.music,
+        audio: base.audio,
+        bugs: base.bugs,
+        crate_reveal: base.crate_reveal,
+        coop: base.coop,
+        cosmetics: base.cosmetics,
+    }
 }

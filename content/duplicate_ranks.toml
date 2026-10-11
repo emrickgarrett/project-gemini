@@ -1,5 +1,7 @@
-# Applies on every difficulty. +25% HP and damage at rank 6. Dupes past 6 become cosmetic shards.
+# Applies on every difficulty. +25% HP and damage at rank 6.
+# Dupes past max_rank become cosmetic shards. max_rank must equal the number of [[rank]] rows.
 power_per_rank = 5
+max_rank = 6
 
 [[rank]]
 r = 1

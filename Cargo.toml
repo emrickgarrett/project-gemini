@@ -5,6 +5,7 @@ members = [
     "crates/proto",
     "crates/meshes",
     "crates/server",
+    "crates/backend",
     "crates/client",
 ]
 default-members = ["crates/client"]

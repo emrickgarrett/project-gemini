@@ -4,7 +4,6 @@
 pub mod audio_mix;
 pub mod bugs;
 pub mod content;
-pub mod profile;
 pub mod math;
 pub mod music;
 pub mod ogg;
@@ -14,6 +13,5 @@ pub mod spatial;
 pub mod upgrade;
 
 pub use content::Content;
-pub use profile::Profile;
 pub use math::Vec3;
 pub use sim::{Phase, PlayerInput, Sim, SIM_DT, SIM_HZ};
