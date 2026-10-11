@@ -11,7 +11,7 @@ All sounds except brood_pod_hatch.ogg and tyrant_roar.ogg are procedurally synth
 | jetpack_boost.ogg | 0.550 |  | Jetpack dash burst |
 | jetpack_hover_loop.ogg | 2.000 | L | Jetpack hover (loop while hovering) |
 | jetpack_empty.ogg | 0.950 |  | Jetpack out of fuel |
-| fuel_regen_paused.ogg | 0.280 |  | Synthesized placeholder. Plays once when jetpack regen is paused on a perch. |
+| fuel_regen_paused.ogg | 0.200 |  | Plays once when jetpack regen is paused on a perch. |
 | pickup.ogg | 0.670 |  | Pickup collected |
 | upgrade_pick.ogg | 0.780 |  | Between-wave upgrade confirmed |
 | player_hurt.ogg | 0.350 |  | Player takes damage |

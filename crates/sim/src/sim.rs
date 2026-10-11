@@ -2881,7 +2881,8 @@ fn step_enemy(
         let dx = player_pos.x - enemy.pos.x;
         let dz = player_pos.z - enemy.pos.z;
         let horiz = (dx * dx + dz * dz).sqrt();
-        if horiz < 1.8 {
+        let rules = &content.arena.perch_rules;
+        if horiz < rules.climb_trigger_distance {
             let top = content
                 .arena
                 .ledges
@@ -2889,16 +2890,17 @@ fn step_enemy(
                 .find(|ledge| {
                     let lx = ledge.pos.x - player_pos.x;
                     let lz = ledge.pos.z - player_pos.z;
-                    lx * lx + lz * lz < 4.0
+                    lx * lx + lz * lz < rules.climb_target_sq
                 })
                 .map(|ledge| ledge.pos.y)
                 .unwrap_or(0.0);
             let started = !enemy.climbing;
             enemy.climbing = true;
-            let mult = content.arena.perch_rules.climb_speed_mult;
+            let mult = rules.climb_speed_mult;
+            let slide = rules.climb_slide_rate;
             enemy.pos.y = (enemy.pos.y + speed * mult.max(0.0) * dt).min(top);
-            enemy.pos.x += dx * dt * 0.4;
-            enemy.pos.z += dz * dt * 0.4;
+            enemy.pos.x += dx * dt * slide;
+            enemy.pos.z += dz * dt * slide;
             content.arena.clamp_play(&mut enemy.pos, 0.5);
             return started;
         }

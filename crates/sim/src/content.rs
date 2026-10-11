@@ -1159,7 +1159,11 @@ pub struct ArenaPickup {
 
 #[derive(Clone, Debug)]
 pub struct PerchRules {
-    pub detect_radius: f32,
+    pub perch_radius: f32,
+    pub perch_height_slack: f32,
+    pub climb_trigger_distance: f32,
+    pub climb_slide_rate: f32,
+    pub climb_target_sq: f32,
     pub flow_field_targets: String,
     pub all_perched_grace: f32,
     pub climb_speed_mult: f32,
@@ -1186,8 +1190,8 @@ impl Arena {
         self.ledges.iter().any(|ledge| {
             let dx = pos.x - ledge.pos.x;
             let dz = pos.z - ledge.pos.z;
-            let r = self.perch_rules.detect_radius;
-            dx * dx + dz * dz <= r * r && (pos.y - ledge.pos.y).abs() <= 0.45
+            let r = self.perch_rules.perch_radius;
+            dx * dx + dz * dz <= r * r && (pos.y - ledge.pos.y).abs() <= self.perch_rules.perch_height_slack
         })
     }
 
@@ -1332,7 +1336,8 @@ impl Arena {
         for ledge in &self.ledges {
             let dx = x - ledge.pos.x;
             let dz = z - ledge.pos.z;
-            if dx * dx + dz * dz > 1.44 {
+            let r = self.perch_rules.perch_radius;
+            if dx * dx + dz * dz > r * r {
                 continue;
             }
             let top = ledge.pos.y;
@@ -1592,7 +1597,11 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
     expect_keys(
         table,
         &[
-            "detect_radius",
+            "perch_radius",
+            "perch_height_slack",
+            "climb_trigger_distance",
+            "climb_slide_rate",
+            "climb_target_sq",
             "flow_field_targets",
             "all_perched_grace",
             "climb_speed_mult",
@@ -1609,7 +1618,11 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
     if flow_field_targets != "nearest_grounded_player" {
         return Err(format!("flow_field_targets \"{flow_field_targets}\" is unknown"));
     }
-    let detect_radius = num(table.get("detect_radius").unwrap(), "detect_radius")?;
+    let perch_radius = num(table.get("perch_radius").unwrap(), "perch_radius")?;
+    let perch_height_slack = num(table.get("perch_height_slack").unwrap(), "perch_height_slack")?;
+    let climb_trigger_distance = num(table.get("climb_trigger_distance").unwrap(), "climb_trigger_distance")?;
+    let climb_slide_rate = num(table.get("climb_slide_rate").unwrap(), "climb_slide_rate")?;
+    let climb_target_sq = num(table.get("climb_target_sq").unwrap(), "climb_target_sq")?;
     let all_perched_grace = num(table.get("all_perched_grace").unwrap(), "all_perched_grace")?;
     let climb_speed_mult = num(table.get("climb_speed_mult").unwrap(), "climb_speed_mult")?;
     let budget_shift_to_spitters = num(table.get("budget_shift_to_spitters").unwrap(), "budget_shift_to_spitters")?;
@@ -1617,11 +1630,23 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
         .get("fuel_regen_on_perch")
         .and_then(|v| v.as_bool())
         .ok_or_else(|| "fuel_regen_on_perch must be a bool".to_string())?;
-    if detect_radius <= 0.0 || all_perched_grace < 0.0 || climb_speed_mult < 0.0 || !(0.0..=1.0).contains(&budget_shift_to_spitters) {
+    if perch_radius <= 0.0
+        || perch_height_slack < 0.0
+        || climb_trigger_distance <= 0.0
+        || climb_slide_rate < 0.0
+        || climb_target_sq <= 0.0
+        || all_perched_grace < 0.0
+        || climb_speed_mult < 0.0
+        || !(0.0..=1.0).contains(&budget_shift_to_spitters)
+    {
         return Err("perch_rules numbers are out of range".into());
     }
     Ok(PerchRules {
-        detect_radius,
+        perch_radius,
+        perch_height_slack,
+        climb_trigger_distance,
+        climb_slide_rate,
+        climb_target_sq,
         flow_field_targets,
         all_perched_grace,
         climb_speed_mult,
@@ -1658,7 +1683,7 @@ pub struct CoopRules {
     pub multi_reviver_speedup: f32,
     pub bleedout_pause_while_reviving: bool,
     pub squad_wipe: String,
-    /// Authored only as `max N extra` on the revive speedup comment. Not a table key.
+    /// Extra revivers past the first that still add `multi_reviver_speedup`.
     pub max_extra_revivers: u32,
     pub currency_credit: String,
     pub leave_keeps_earned: bool,

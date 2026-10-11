@@ -92,7 +92,11 @@ pos = [-16.0, 0, 27.7]
 spawns_during = "breather"
 
 [perch_rules]
-detect_radius = 1.5                  # meters, horizontal, around each ledge
+perch_radius = 1.5                   # meters, horizontal. Landing and fuel-pause both use this squared.
+perch_height_slack = 0.45           # meters of vertical slack for "standing on a perch"
+climb_trigger_distance = 1.8        # meters. A swarmer this close in XZ starts the anti-camp climb.
+climb_slide_rate = 0.4              # fraction of the remaining XZ gap closed per second while climbing
+climb_target_sq = 4.0               # dx²+dz². Ledge center inside this (2 m) supplies the climb height.
 flow_field_targets = "nearest_grounded_player"
 all_perched_grace = 8.0          # seconds before anti-camp kicks in
 climb_speed_mult = 0.5           # swarmers climb resin streaks
