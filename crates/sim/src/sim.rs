@@ -2948,28 +2948,28 @@ fn step_enemy(
         let dz = player_pos.z - enemy.pos.z;
         let horiz = (dx * dx + dz * dz).sqrt();
         let rules = &content.arena.perch_rules;
+        // Same disk as detection, landing, and the fuel pause. `player_pos` here is
+        // the flow goal: a perched player routes bugs onto the ledge, so the goal
+        // sits in that disk. Outside perch_radius the swarmer falls through to the
+        // ground chase below.
         if horiz < rules.climb_trigger_distance {
-            let top = content
+            if let Some(top) = content
                 .arena
                 .ledges
                 .iter()
-                .find(|ledge| {
-                    let lx = ledge.pos.x - player_pos.x;
-                    let lz = ledge.pos.z - player_pos.z;
-                    let r = rules.climb_target_radius;
-                    lx * lx + lz * lz < r * r
-                })
+                .find(|ledge| content.arena.in_perch_disk(player_pos.x, player_pos.z, ledge))
                 .map(|ledge| ledge.pos.y)
-                .unwrap_or(0.0);
-            let started = !enemy.climbing;
-            enemy.climbing = true;
-            let mult = rules.climb_speed_mult;
-            let slide = rules.climb_slide_rate;
-            enemy.pos.y = (enemy.pos.y + speed * mult.max(0.0) * dt).min(top);
-            enemy.pos.x += dx * dt * slide;
-            enemy.pos.z += dz * dt * slide;
-            content.arena.clamp_play(&mut enemy.pos, rules.climb_clearance);
-            return started;
+            {
+                let started = !enemy.climbing;
+                enemy.climbing = true;
+                let mult = rules.climb_speed_mult;
+                let slide = rules.climb_slide_rate;
+                enemy.pos.y = (enemy.pos.y + speed * mult.max(0.0) * dt).min(top);
+                enemy.pos.x += dx * dt * slide;
+                enemy.pos.z += dz * dt * slide;
+                content.arena.clamp_play(&mut enemy.pos, rules.climb_clearance);
+                return started;
+            }
         }
     }
     if enemy.climbing {

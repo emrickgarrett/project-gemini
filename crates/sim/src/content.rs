@@ -1501,13 +1501,24 @@ impl Arena {
         Vec3::new(self.boss_area.center.x, 0.0, self.boss_area.center.z)
     }
 
-    pub fn on_perch(&self, pos: Vec3) -> bool {
-        self.ledges.iter().any(|ledge| {
-            let dx = pos.x - ledge.pos.x;
-            let dz = pos.z - ledge.pos.z;
-            let r = self.perch_rules.perch_radius;
-            dx * dx + dz * dz <= r * r && (pos.y - ledge.pos.y).abs() <= self.perch_rules.perch_height_slack
+    /// Horizontal disk shared by detection, landing, the fuel pause, and the climb trigger.
+    pub fn in_perch_disk(&self, x: f32, z: f32, ledge: &Ledge) -> bool {
+        let dx = x - ledge.pos.x;
+        let dz = z - ledge.pos.z;
+        let r = self.perch_rules.perch_radius;
+        dx * dx + dz * dz <= r * r
+    }
+
+    /// Ledge whose disk and vertical slack contain `pos`. Detection uses this.
+    pub fn perch_under(&self, pos: Vec3) -> Option<&Ledge> {
+        self.ledges.iter().find(|ledge| {
+            self.in_perch_disk(pos.x, pos.z, ledge)
+                && (pos.y - ledge.pos.y).abs() <= self.perch_rules.perch_height_slack
         })
+    }
+
+    pub fn on_perch(&self, pos: Vec3) -> bool {
+        self.perch_under(pos).is_some()
     }
 
     pub fn nearest_ledge(&self, from: Vec3) -> Option<&Ledge> {
@@ -1649,10 +1660,7 @@ impl Arena {
 
     fn ledge_top(&self, x: f32, y: f32, z: f32, vel_y: f32, catch: &LedgeCatch) -> Option<f32> {
         for ledge in &self.ledges {
-            let dx = x - ledge.pos.x;
-            let dz = z - ledge.pos.z;
-            let r = self.perch_rules.perch_radius;
-            if dx * dx + dz * dz > r * r {
+            if !self.in_perch_disk(x, z, ledge) {
                 continue;
             }
             let top = ledge.pos.y;
@@ -1965,8 +1973,10 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
     if !(climb_clearance > 0.0) {
         return Err("climb_clearance must be > 0".into());
     }
+    if !(perch_height_slack > 0.0) {
+        return Err("perch_height_slack must be > 0".into());
+    }
     if !(perch_radius > 0.0)
-        || perch_height_slack < 0.0
         || !(climb_trigger_distance > 0.0)
         || climb_slide_rate < 0.0
         || !(climb_target_radius > 0.0)

@@ -1498,6 +1498,11 @@ fn arena_01_vents_perches_and_pickups() {
         let err = parse(&text).expect_err(bad);
         assert!(err.contains("climb_clearance"), "{err}");
     }
+    for bad in ["perch_height_slack = 0", "perch_height_slack = nan", "perch_height_slack = -0.1"] {
+        let text = include_str!("../../../content/arena_01.toml").replacen("perch_height_slack = 0.45", bad, 1);
+        let err = parse(&text).expect_err(bad);
+        assert!(err.contains("perch_height_slack"), "{err}");
+    }
     for bad in ["climb_target_radius = 0.0", "climb_target_radius = -2.0"] {
         let text = include_str!("../../../content/arena_01.toml").replacen("climb_target_radius = 2.0", bad, 1);
         let err = parse(&text).expect_err(bad);
@@ -1598,6 +1603,82 @@ fn arena_01_vents_perches_and_pickups() {
         sim.pending_vents.iter().any(|vent| vent.kind == EnemyKind::Spitter),
         "perched budget should move a share onto spitters"
     );
+}
+
+#[test]
+fn perch_disk_pauses_fuel_once_and_ground_chase_stays_outside_it() {
+    use gemini_sim::content::EnemyKind;
+    let content = Content::embedded();
+    let tower = content
+        .arena
+        .ledges
+        .iter()
+        .find(|ledge| ledge.id == "tower")
+        .unwrap()
+        .pos;
+    assert!(content.arena.on_perch(Vec3::new(tower.x + 1.4, tower.y, tower.z)));
+    assert!(!content.arena.on_perch(Vec3::new(tower.x + 1.6, tower.y, tower.z)));
+
+    let mut perched = Sim::new(&content, "normal", 11);
+    perched.enemies.clear();
+    perched.pending_vents.clear();
+    perched.director.pool = 0.0;
+    perched.director.parked = true;
+    perched.players[0].pos = Vec3::new(tower.x + 1.4, tower.y, tower.z);
+    perched.players[0].vel = Vec3::ZERO;
+    perched.players[0].grounded = true;
+    perched.players[0].fuel = 40.0;
+    perched.players[0].fuel_delay = 0.0;
+    perched.players[0].regen_pause_cue = false;
+    perched.step(&content, PlayerInput::default());
+    assert_eq!(
+        perched.sounds.iter().filter(|sound| sound.id == "fuel_regen_paused").count(),
+        1
+    );
+    assert!(content.arena.on_perch(perched.players[0].pos));
+    assert!((perched.players[0].fuel - 40.0).abs() < 1e-3, "fuel {}", perched.players[0].fuel);
+    perched.step(&content, PlayerInput::default());
+    assert_eq!(
+        perched.sounds.iter().filter(|sound| sound.id == "fuel_regen_paused").count(),
+        0
+    );
+    assert!((perched.players[0].fuel - 40.0).abs() < 1e-3, "fuel {}", perched.players[0].fuel);
+
+    let mut grounded = Sim::new(&content, "normal", 12);
+    grounded.enemies.clear();
+    grounded.pending_vents.clear();
+    grounded.director.pool = 0.0;
+    grounded.director.parked = true;
+    grounded.players[0].pos = Vec3::new(tower.x + 1.6, 0.0, tower.z);
+    grounded.players[0].vel = Vec3::ZERO;
+    grounded.players[0].grounded = true;
+    grounded.players[0].fuel = 40.0;
+    grounded.players[0].fuel_delay = 0.0;
+    grounded.players[0].regen_pause_cue = false;
+    grounded.all_perched_for = content.arena.perch_rules.all_perched_grace;
+    let mut swarmer = bug(EnemyKind::Swarmer);
+    swarmer.speed = 4.0;
+    swarmer.pos = Vec3::new(tower.x + 1.6, 0.0, tower.z + 6.0);
+    grounded.enemies.push(swarmer);
+    let start = grounded.enemies[0].pos;
+    for _ in 0..8 {
+        grounded.step(&content, PlayerInput::default());
+        assert!(
+            !grounded.sounds.iter().any(|sound| sound.id == "fuel_regen_paused"),
+            "fuel pause outside the perch disk"
+        );
+    }
+    let player = grounded.players[0].pos;
+    assert!(grounded.players[0].grounded);
+    assert!(!content.arena.on_perch(player));
+    assert!(grounded.players[0].fuel > 40.0, "fuel {}", grounded.players[0].fuel);
+    assert!(!grounded.players[0].regen_pause_cue);
+    let enemy = &grounded.enemies[0];
+    assert!(!enemy.climbing);
+    assert!(enemy.pos.y.abs() < 1e-3, "y {}", enemy.pos.y);
+    let before = (start.x - player.x).powi(2) + (start.z - player.z).powi(2);
+    let after = (enemy.pos.x - player.x).powi(2) + (enemy.pos.z - player.z).powi(2);
+    assert!(after < before, "ground chase {before} -> {after}");
 }
 
 #[test]
