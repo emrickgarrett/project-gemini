@@ -93,6 +93,9 @@ pub enum MusicMoment {
     MatchEnd,
     BossIntro { boss_id: String },
     BossDown { boss_id: String },
+    LoopSwap { id: String },
+    BossEnrage { boss_id: String },
+    BossPhase { boss_id: String, phase: u8 },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -150,6 +153,21 @@ pub enum AiState {
     Recover { left: f32 },
 }
 
+/// One-tick request from enemy logic. Replaces the old `vel.y` marker.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EnemyCue {
+    #[default]
+    None,
+    /// Spitter or hive telegraph just started. Plays the charge cue, no projectile yet.
+    Charge,
+    /// Brute telegraph. Plays the attack cue.
+    Brute,
+    /// Brood telegraph. Plays the attack cue.
+    Brood,
+    /// Spit or acid actually leaves the bug.
+    Fire,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Enemy {
     pub id: u32,
@@ -181,6 +199,39 @@ pub struct Enemy {
     pub spawn_count: u32,
     pub spawn_interval: f32,
     pub alive: bool,
+    /// Seconds of pose time. The cannon hitbox walks the tail at this time.
+    #[serde(default)]
+    pub anim_time: f32,
+    #[serde(default)]
+    pub cycle_left: f32,
+    #[serde(default)]
+    pub warn_left: f32,
+    #[serde(default)]
+    pub warn_sfx: bool,
+    #[serde(default)]
+    pub warn_pod: u8,
+    #[serde(default)]
+    pub reserved: u32,
+    #[serde(default)]
+    pub enraged: bool,
+    #[serde(default)]
+    pub invuln: f32,
+    #[serde(default)]
+    pub tail_hp: f32,
+    #[serde(default)]
+    pub tail_broken: bool,
+    #[serde(default)]
+    pub acid_cd: f32,
+    #[serde(default)]
+    pub acid_warn: f32,
+    #[serde(default)]
+    pub scythe_cd: f32,
+    #[serde(default)]
+    pub reinforce_cd: f32,
+    #[serde(default)]
+    pub reinforce_warn: f32,
+    #[serde(default)]
+    pub cue: EnemyCue,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -409,6 +460,14 @@ impl Sim {
             if let Some(choice) = input.upgrade_choice {
                 if let Some(id) = options.get(choice as usize).cloned() {
                     self.grant_upgrade(content, &id);
+                    let next = self.director.wave.saturating_add(1);
+                    let now = content.combat_loop_id(self.director.wave, self.endless_mode);
+                    let upcoming = content.combat_loop_id(next, self.endless_mode);
+                    if now != upcoming {
+                        self.music.push(MusicMoment::LoopSwap {
+                            id: upcoming.to_string(),
+                        });
+                    }
                     self.phase = Phase::Breather {
                         left: content.waves.budget.breather_seconds,
                     };
@@ -431,6 +490,7 @@ impl Sim {
         self.tick_projectiles(content, dt);
         self.tick_drones(content, dt);
         self.tick_pickups(content);
+        self.tick_boss_logic(content, dt);
         self.tick_boss_spawns(content);
         self.tick_spawner(content, dt);
         self.reap(content);
@@ -704,19 +764,35 @@ impl Sim {
             }
         }
         let mut opened: Vec<(u32, Vec3)> = Vec::new();
+        let mut phased: Vec<(String, u8, Vec3)> = Vec::new();
         for (enemy, push) in self.enemies.iter_mut().zip(pushes) {
             if !enemy.alive {
                 continue;
             }
+            let before = enemy.phase;
             step_enemy(enemy, content, player_pos, player_alive, push, dt);
             if enemy.just_opened {
                 enemy.just_opened = false;
                 opened.push((enemy.id, enemy.pos));
             }
+            if enemy.kind == EnemyKind::HiveTyrant && enemy.phase > before {
+                phased.push(("hive_tyrant".into(), enemy.phase, enemy.pos));
+            }
         }
         let shell = content.bug(EnemyKind::Brute).audio.shell_open.clone();
         for (owner, pos) in opened {
             self.sound_owned(&shell, pos, owner);
+        }
+        for (boss_id, phase, pos) in phased {
+            if let Some(def) = content.boss(&boss_id) {
+                if !def.fizzle_sfx.is_empty() {
+                    self.sound_at(&def.fizzle_sfx, pos);
+                }
+                if !def.intro_sfx.is_empty() {
+                    self.sound_at(&def.intro_sfx, pos);
+                }
+            }
+            self.music.push(MusicMoment::BossPhase { boss_id, phase });
         }
     }
 
@@ -948,6 +1024,11 @@ impl Sim {
             if self.projectiles[proj_index].hit.contains(&enemy_id) || !self.enemies[enemy_index].alive {
                 continue;
             }
+            if self.enemies[enemy_index].invuln > 0.0 {
+                self.projectiles[proj_index].hit.push(enemy_id);
+                remove = true;
+                break;
+            }
             let mut dmg = self.projectiles[proj_index].damage;
             let mut weak_ok = false;
             let mut ping_pos = self.enemies[enemy_index].pos;
@@ -958,9 +1039,34 @@ impl Sim {
                     }
                     ping_pos = pod_world(content, &self.enemies[enemy_index], pi);
                 }
+                HitSpot::Tail => {
+                    weak_ok = true;
+                    let mult = content
+                        .boss("hive_tyrant")
+                        .and_then(|def| def.phase(0))
+                        .expect("hive_tyrant phase 1 tail_weakpoint_mult")
+                        .tail_weakpoint_mult;
+                    dmg *= mult * (1.0 + mods.weakpoint_damage_pct);
+                    self.enemies[enemy_index].tail_hp = (self.enemies[enemy_index].tail_hp - dmg).max(0.0);
+                    if self.enemies[enemy_index].tail_hp <= 0.0 {
+                        self.enemies[enemy_index].tail_broken = true;
+                    }
+                    self.enemies[enemy_index].hp -= dmg;
+                    ping_pos = self.enemies[enemy_index].pos;
+                }
                 HitSpot::Weak => {
                     weak_ok = true;
-                    let mult = self.enemies[enemy_index].weak_mult * (1.0 + mods.weakpoint_damage_pct);
+                    let mut mult = if self.enemies[enemy_index].kind == EnemyKind::HiveTyrant {
+                        let phase = self.enemies[enemy_index].phase;
+                        content
+                            .boss("hive_tyrant")
+                            .and_then(|def| def.phase(phase))
+                            .expect("hive_tyrant phase core_damage_mult")
+                            .core_damage_mult
+                    } else {
+                        self.enemies[enemy_index].weak_mult
+                    };
+                    mult *= 1.0 + mods.weakpoint_damage_pct;
                     dmg *= mult;
                     let charging = matches!(self.enemies[enemy_index].ai, AiState::Telegraph { .. });
                     let pop = content.bug(self.enemies[enemy_index].kind).hitbox.sac_pop_cancels_shot;
@@ -970,7 +1076,7 @@ impl Sim {
                         let pos = self.enemies[enemy_index].pos;
                         self.enemies[enemy_index].ai = AiState::Chase;
                         self.enemies[enemy_index].attack_cd = content.combat.spitter_cooldown;
-                        self.enemies[enemy_index].vel.y = 0.0;
+                        self.enemies[enemy_index].cue = EnemyCue::None;
                         self.stops.push(SoundStop {
                             id: charge_id,
                             owner: enemy_id,
@@ -1193,6 +1299,258 @@ impl Sim {
         }
     }
 
+    fn tick_boss_logic(&mut self, content: &Content, dt: f32) {
+        let cap = content.waves.budget.live_enemy_cap as usize;
+        let players = self.player_count.max(1) as f32;
+        let mut spawned: Vec<(EnemyKind, Vec3, u32, f32, f32)> = Vec::new();
+        let mut notes: Vec<(String, Vec3, bool, bool)> = Vec::new();
+        for i in 0..self.enemies.len() {
+            if !self.enemies[i].alive {
+                continue;
+            }
+            let kind = self.enemies[i].kind;
+            if kind == EnemyKind::BroodMother {
+                let Some(def) = content.boss("brood_mother").cloned() else { continue };
+                let frac = if self.enemies[i].max_hp > 0.0 {
+                    self.enemies[i].hp / self.enemies[i].max_hp
+                } else {
+                    1.0
+                };
+                if !self.enemies[i].enraged && def.enrage_below_hp > 0.0 && frac <= def.enrage_below_hp {
+                    self.enemies[i].enraged = true;
+                    self.enemies[i].cycle_left = def.enrage_hatch_interval;
+                    let hp = def.pod_hp;
+                    for pod in &mut self.enemies[i].pods {
+                        *pod = hp;
+                    }
+                    notes.push((def.intro_sfx.clone(), self.enemies[i].pos, true, false));
+                }
+                self.advance_hatch(content, i, &def, dt, cap, players, &mut spawned);
+            } else if kind == EnemyKind::HiveTyrant {
+                let Some(def) = content.boss("hive_tyrant").cloned() else { continue };
+                if self.enemies[i].invuln > 0.0 {
+                    continue;
+                }
+                self.advance_hive(content, i, &def, dt, cap, &mut spawned);
+            }
+        }
+        for (sfx, pos, enrage, _fizzle) in notes {
+            if enrage {
+                self.music.push(MusicMoment::BossEnrage {
+                    boss_id: "brood_mother".into(),
+                });
+            }
+            if !sfx.is_empty() {
+                self.sound_at(&sfx, pos);
+            }
+        }
+        for (kind, pos, count, fan_step, radius) in spawned {
+            for n in 0..count.max(1) {
+                let ang = n as f32 * fan_step;
+                let at = pos + Vec3::new(ang.cos() * radius, 0.0, ang.sin() * radius);
+                self.spawn_trash(content, kind, at);
+            }
+        }
+    }
+
+    fn advance_hatch(
+        &mut self,
+        _content: &Content,
+        index: usize,
+        def: &crate::content::BossDef,
+        dt: f32,
+        cap: usize,
+        players: f32,
+        spawned: &mut Vec<(EnemyKind, Vec3, u32, f32, f32)>,
+    ) {
+        let mut cue: Option<(String, Vec3)> = None;
+        let enemy = &mut self.enemies[index];
+        if enemy.warn_left > 0.0 {
+            let before = enemy.warn_left;
+            enemy.warn_left = (enemy.warn_left - dt).max(0.0);
+            let peak = def.hatch_sfx_peak_offset;
+            if !enemy.warn_sfx && before > peak && enemy.warn_left <= peak && !def.hatch_sfx.is_empty() {
+                enemy.warn_sfx = true;
+                cue = Some((def.hatch_sfx.clone(), enemy.pos));
+            }
+            if enemy.warn_left > 0.0 {
+                let _ = enemy;
+                if let Some((id, pos)) = cue {
+                    self.sound_at(&id, pos);
+                }
+                return;
+            }
+            let pod = enemy.warn_pod as usize;
+            enemy.reserved = 0;
+            enemy.warn_pod = 255;
+            let pod_alive = enemy.pods.get(pod).copied().unwrap_or(0.0) > 0.0;
+            if !pod_alive {
+                if !def.fizzle_sfx.is_empty() {
+                    cue = Some((def.fizzle_sfx.clone(), enemy.pos));
+                }
+                let _ = enemy;
+                if let Some((id, pos)) = cue {
+                    self.sound_at(&id, pos);
+                }
+                return;
+            }
+            if let Some(hp) = enemy.pods.get_mut(pod) {
+                *hp = 0.0;
+            }
+            let count = ((def.swarmers_per_pod as f32) * (1.0 + def.swarmer_player_scale * (players - 1.0)))
+                .round()
+                .max(1.0) as u32;
+            let origin = enemy.pos;
+            let Some(kind) = EnemyKind::from_name(&def.spawn_kind) else {
+                let _ = enemy;
+                if let Some((id, pos)) = cue {
+                    self.sound_at(&id, pos);
+                }
+                return;
+            };
+            let _ = enemy;
+            if let Some((id, pos)) = cue {
+                self.sound_at(&id, pos);
+            }
+            spawned.push((kind, origin, count, def.fan_step, def.spawn_radius));
+        } else {
+            enemy.cycle_left -= dt;
+            if enemy.cycle_left > 0.0 {
+                return;
+            }
+            let interval = if enemy.enraged {
+                def.enrage_hatch_interval
+            } else {
+                def.spawn_interval
+            };
+            enemy.cycle_left = interval;
+            let pod = enemy.pods.iter().position(|hp| *hp > 0.0);
+            let _ = enemy;
+            let Some(pod) = pod else { return };
+            let count = ((def.swarmers_per_pod as f32) * (1.0 + def.swarmer_player_scale * (players - 1.0)))
+                .round()
+                .max(1.0) as u32;
+            let alive = self.enemies.iter().filter(|e| e.alive).count();
+            let reserved: usize = self.enemies.iter().map(|e| e.reserved as usize).sum();
+            if !def.queue_on_cap && alive + reserved + count as usize > cap {
+                return;
+            }
+            let enemy = &mut self.enemies[index];
+            enemy.warn_left = def.hatch_telegraph;
+            enemy.warn_sfx = false;
+            enemy.warn_pod = pod as u8;
+            if def.reserve_on_telegraph {
+                enemy.reserved = count;
+            }
+            if !def.charge_sfx.is_empty() {
+                let pos = enemy.pos;
+                let id = def.charge_sfx.clone();
+                let _ = enemy;
+                self.sound_at(&id, pos);
+            }
+        }
+    }
+
+    fn advance_hive(
+        &mut self,
+        content: &Content,
+        index: usize,
+        def: &crate::content::BossDef,
+        dt: f32,
+        cap: usize,
+        spawned: &mut Vec<(EnemyKind, Vec3, u32, f32, f32)>,
+    ) {
+        let phase = self.enemies[index].phase;
+        let Some(row) = def.phase(phase).cloned() else { return };
+        let mut cue: Option<(String, Vec3)> = None;
+        let enemy = &mut self.enemies[index];
+        if row.scythe_interval > 0.0 {
+            enemy.scythe_cd = (enemy.scythe_cd - dt).max(0.0);
+        }
+        if enemy.acid_warn > 0.0 {
+            enemy.acid_warn = (enemy.acid_warn - dt).max(0.0);
+            if enemy.acid_warn <= 0.0 && !enemy.tail_broken {
+                enemy.cue = EnemyCue::Fire;
+                enemy.acid_cd = row.acid_volley_interval;
+            }
+        } else if row.acid_volley_interval > 0.0 && !enemy.tail_broken {
+            enemy.acid_cd = (enemy.acid_cd - dt).max(0.0);
+            if enemy.acid_cd <= 0.0 {
+                enemy.acid_warn = row.acid_telegraph;
+                if !def.acid_sfx.is_empty() {
+                    cue = Some((def.acid_sfx.clone(), enemy.pos));
+                }
+            }
+        }
+        let mut reinforce_now = false;
+        let mut arm_reinforce = false;
+        if enemy.reinforce_warn > 0.0 {
+            enemy.reinforce_warn = (enemy.reinforce_warn - dt).max(0.0);
+            if enemy.reinforce_warn <= 0.0 {
+                reinforce_now = true;
+                enemy.reserved = 0;
+                enemy.reinforce_cd = row.reinforce_interval;
+            }
+        } else if row.reinforce_interval > 0.0 {
+            enemy.reinforce_cd = (enemy.reinforce_cd - dt).max(0.0);
+            if enemy.reinforce_cd <= 0.0 {
+                arm_reinforce = true;
+            }
+        }
+        let origin = enemy.pos;
+        let scythe_ready = row.scythe_range > 0.0 && enemy.scythe_cd <= 0.0;
+        let _ = enemy;
+        if let Some((id, pos)) = cue {
+            self.sound_at(&id, pos);
+        }
+        if reinforce_now {
+            let budget = self.director.wave_budget * row.reinforce_budget_fraction;
+            if let Some(kind) = EnemyKind::from_name(&def.reinforce_kind) {
+                let cost = content.enemy(kind).cost.max(0.01);
+                let mut left = budget;
+                while left + 1e-3 >= cost {
+                    let alive = self.enemies.iter().filter(|e| e.alive).count() + spawned.len();
+                    if alive >= cap {
+                        break;
+                    }
+                    spawned.push((kind, origin, 1, def.fan_step, def.spawn_radius));
+                    left -= cost;
+                }
+            }
+        } else if arm_reinforce {
+            if let Some(kind) = EnemyKind::from_name(&def.reinforce_kind) {
+                let cost = content.enemy(kind).cost.max(0.01);
+                let want = ((self.director.wave_budget * row.reinforce_budget_fraction) / cost).ceil() as usize;
+                let alive = self.enemies.iter().filter(|e| e.alive).count();
+                let reserved: usize = self.enemies.iter().map(|e| e.reserved as usize).sum();
+                if row.reinforce_queue_on_cap || alive + reserved < cap {
+                    let enemy = &mut self.enemies[index];
+                    enemy.reinforce_warn = row.reinforce_telegraph;
+                    if row.reinforce_reserve {
+                        enemy.reserved = want.min(cap.saturating_sub(alive)) as u32;
+                    }
+                } else {
+                    self.enemies[index].reinforce_cd = row.reinforce_interval;
+                }
+            }
+        }
+        let player = self.players.first().map(|p| p.pos).unwrap_or(Vec3::ZERO);
+        let dist = Vec3::new(player.x - origin.x, 0.0, player.z - origin.z).length();
+        if scythe_ready && dist <= row.scythe_range {
+            let dmg = row.scythe_damage;
+            let id = def.scythe_sfx.clone();
+            self.enemies[index].scythe_cd = row.scythe_interval;
+            if let Some(player) = self.players.first_mut() {
+                if player.alive && player.invuln <= 0.0 {
+                    player.hp -= dmg;
+                }
+            }
+            if !id.is_empty() {
+                self.sound_at(&id, origin);
+            }
+        }
+    }
+
     fn tick_boss_spawns(&mut self, content: &Content) {
         let cap = content.waves.budget.live_enemy_cap as usize;
         let dt = SIM_DT;
@@ -1254,7 +1612,8 @@ impl Sim {
             if self.director.pool + 1e-3 < cost {
                 break;
             }
-            if self.enemies.iter().filter(|e| e.alive).count() >= cap as usize {
+            let reserved: usize = self.enemies.iter().map(|e| e.reserved as usize).sum();
+            if self.enemies.iter().filter(|e| e.alive).count() + reserved >= cap as usize {
                 self.park_budget(content.waves.budget.queue_cap_waves);
                 break;
             }
@@ -1326,6 +1685,22 @@ impl Sim {
             open_left: 0.0,
             just_opened: false,
             pods: Vec::new(),
+            anim_time: 0.0,
+            cycle_left: 0.0,
+            warn_left: 0.0,
+            warn_sfx: false,
+            warn_pod: 255,
+            reserved: 0,
+            enraged: false,
+            invuln: 0.0,
+            tail_hp: 0.0,
+            tail_broken: false,
+            acid_cd: 0.0,
+            acid_warn: 0.0,
+            scythe_cd: 0.0,
+            reinforce_cd: 0.0,
+            reinforce_warn: 0.0,
+            cue: EnemyCue::None,
         });
     }
 
@@ -1341,7 +1716,9 @@ impl Sim {
         let (mut hp, dmg) = scaled_stats(content, self, def.hp, def.dmg);
         hp *= hp_scale;
         let pos = Vec3::new(0.0, 0.0, -content.arena.spawn_ring * 0.65);
-        let spawn_kind = EnemyKind::from_name(&def.spawn_kind).unwrap_or(EnemyKind::Swarmer);
+        let Some(spawn_kind) = EnemyKind::from_name(&def.spawn_kind) else {
+            return;
+        };
         let id = self.alloc_id();
         self.director.spawned_this_wave = self.director.spawned_this_wave.saturating_add(1);
         self.enemies.push(Enemy {
@@ -1360,10 +1737,10 @@ impl Sim {
             ai: AiState::Chase,
             weak_exposed: true,
             phase: 0,
-            spawn_acc: def.spawn_interval * 0.5,
+            spawn_acc: 0.0,
             spawn_kind,
             spawn_count: def.spawn_count,
-            spawn_interval: def.spawn_interval,
+            spawn_interval: 0.0,
             alive: true,
             open_left: 0.0,
             just_opened: false,
@@ -1373,9 +1750,27 @@ impl Sim {
             } else {
                 Vec::new()
             },
+            anim_time: 0.0,
+            cycle_left: def.spawn_interval,
+            warn_left: 0.0,
+            warn_sfx: false,
+            warn_pod: 255,
+            reserved: 0,
+            enraged: false,
+            invuln: 0.0,
+            tail_hp: def.phase(0).map(|p| p.tail_hp).unwrap_or(0.0),
+            tail_broken: false,
+            acid_cd: def.phase(0).map(|p| p.acid_volley_interval).unwrap_or(0.0),
+            acid_warn: 0.0,
+            scythe_cd: def.phase(0).map(|p| p.scythe_interval).unwrap_or(0.0),
+            reinforce_cd: def.phase(0).map(|p| p.reinforce_interval).unwrap_or(0.0),
+            reinforce_warn: 0.0,
+            cue: EnemyCue::None,
         });
         let _ = dmg;
-        self.sound_at("boss", pos);
+        if !def.intro_sfx.is_empty() {
+            self.sound_at(&def.intro_sfx, pos);
+        }
         self.music.push(MusicMoment::BossIntro {
             boss_id: boss_id.to_string(),
         });
@@ -1428,6 +1823,14 @@ impl Sim {
             });
         }
         if let Some(boss_id) = boss_id {
+            if let Some(def) = content.boss(boss_id) {
+                if self.enemies[index].warn_left > 0.0 && !def.fizzle_sfx.is_empty() {
+                    self.sound_at(&def.fizzle_sfx, pos);
+                }
+                if !def.death_sfx.is_empty() {
+                    self.sound_at(&def.death_sfx, pos);
+                }
+            }
             self.music.push(MusicMoment::BossDown {
                 boss_id: boss_id.to_string(),
             });
@@ -1673,6 +2076,10 @@ fn step_enemy(
     dt: f32,
 ) {
     enemy.attack_cd = (enemy.attack_cd - dt).max(0.0);
+    enemy.anim_time += dt;
+    if enemy.invuln > 0.0 {
+        enemy.invuln = (enemy.invuln - dt).max(0.0);
+    }
     enemy.vel.x *= 0.9;
     enemy.vel.z *= 0.9;
     let to_player = player_pos - enemy.pos;
@@ -1685,15 +2092,26 @@ fn step_enemy(
     if enemy.kind == EnemyKind::HiveTyrant {
         if let Some(def) = content.boss("hive_tyrant") {
             let frac = if enemy.max_hp > 0.0 { enemy.hp / enemy.max_hp } else { 1.0 };
-            let mut phase = 0usize;
+            let mut phase = 0u8;
             for (i, gate) in def.phase_thresholds.iter().enumerate() {
                 if frac <= *gate {
-                    phase = i + 1;
+                    phase = (i + 1) as u8;
                 }
             }
-            enemy.phase = phase as u8;
-            if let Some(m) = def.phase_speed_mult.get(phase) {
-                speed *= *m;
+            if enemy.tail_broken {
+                phase = phase.max(1);
+            }
+            if phase > enemy.phase {
+                enemy.phase = phase;
+                enemy.invuln = def.transition_invuln;
+                enemy.warn_left = 0.0;
+                enemy.reinforce_warn = 0.0;
+                enemy.acid_warn = 0.0;
+                enemy.reserved = 0;
+            }
+            if let Some(row) = def.phase(enemy.phase) {
+                speed = row.move_speed;
+                enemy.range = row.scythe_range;
             }
         }
     }
@@ -1721,7 +2139,7 @@ fn step_enemy(
                             content.combat.boss_melee_interval
                         };
                         enemy.ai = AiState::Recover { left: 0.2 };
-                        enemy.vel.y = 999.0;
+                        enemy.cue = EnemyCue::Fire;
                     }
                     _ => {
                         enemy.ai = AiState::Lunge { left: 0.12 };
@@ -1795,8 +2213,8 @@ fn step_enemy(
                         content.combat.telegraph_seconds
                     },
                 };
-                // Charge cue is emitted by the sim after movement; mark with vel.y = 1 for one check.
-                enemy.vel.y = 1.0;
+                // Charge cue is emitted by the sim after movement, on this same tick.
+                enemy.cue = EnemyCue::Charge;
             }
         }
         EnemyKind::Brute => {
@@ -1805,24 +2223,17 @@ fn step_enemy(
                 enemy.ai = AiState::Telegraph {
                     left: content.combat.telegraph_seconds,
                 };
-                enemy.vel.y = 2.0;
+                enemy.cue = EnemyCue::Brute;
             }
         }
-        EnemyKind::HiveTyrant => {
-            if dist <= enemy.range && enemy.attack_cd <= 0.0 {
-                enemy.ai = AiState::Telegraph {
-                    left: content.combat.telegraph_seconds,
-                };
-                enemy.vel.y = 1.0;
-            }
-        }
+        EnemyKind::HiveTyrant => {}
         EnemyKind::BroodMother => {
             let reach = hit_radius_of(content, enemy.kind) + 0.4;
             if dist < reach && enemy.attack_cd <= 0.0 {
                 enemy.ai = AiState::Telegraph {
                     left: content.combat.telegraph_seconds,
                 };
-                enemy.vel.y = 3.0;
+                enemy.cue = EnemyCue::Brood;
             }
         }
         EnemyKind::Swarmer => {}
@@ -1840,6 +2251,7 @@ fn step_enemy(
 enum HitSpot {
     Body,
     Weak,
+    Tail,
     Pod(usize),
 }
 
@@ -1869,8 +2281,12 @@ fn gather_enemy_hits(
         }
         if let Some(cannon) = &book.hitbox.cannon {
             if crate::bugs::phase_allows(cannon.active_phase, enemy.phase) {
-                if let Some(t) = shape_hit(cannon, enemy, p0, p1, projectile.radius, 1.0) {
-                    consider(&mut best, t, HitSpot::Body);
+                let mut placed = cannon.clone();
+                if let Some(center) = crate::bugs::cannon_center(&book.visual, enemy.anim_time) {
+                    placed.offset = center;
+                }
+                if let Some(t) = shape_hit(&placed, enemy, p0, p1, projectile.radius, 1.0) {
+                    consider(&mut best, t, HitSpot::Tail);
                 }
             }
         }
@@ -2112,19 +2528,19 @@ fn kind_index(kind: EnemyKind) -> usize {
     }
 }
 
-/// Spitter / hive shots are spawned when an enemy asks for one via `vel.y`.
+/// Spitter / hive shots are spawned when an enemy asks for one via `cue`.
 /// Called from `tick_enemies` after movement so the cue and the projectile share a tick.
 pub fn launch_pending_shots(sim: &mut Sim, content: &Content) {
     let player_pos = sim.players.first().map(|p| p.pos).unwrap_or(Vec3::ZERO);
     let mut spawned: Vec<Projectile> = Vec::new();
     let mut cues: Vec<SoundEvent> = Vec::new();
     for enemy in &mut sim.enemies {
-        let marker = enemy.vel.y;
-        if marker == 0.0 {
+        let marker = enemy.cue;
+        if marker == EnemyCue::None {
             continue;
         }
-        enemy.vel.y = 0.0;
-        if marker == 1.0 && matches!(enemy.ai, AiState::Telegraph { .. }) {
+        enemy.cue = EnemyCue::None;
+        if marker == EnemyCue::Charge && matches!(enemy.ai, AiState::Telegraph { .. }) {
             if enemy.kind == EnemyKind::Spitter {
                 let id = content.bug(enemy.kind).audio.charge.clone();
                 cues.push(SoundEvent {
@@ -2140,21 +2556,21 @@ pub fn launch_pending_shots(sim: &mut Sim, content: &Content) {
                     owner: enemy.id,
                 });
             }
-        } else if marker == 2.0 {
+        } else if marker == EnemyCue::Brute {
             let id = content.bug(EnemyKind::Brute).audio.attack.clone();
             cues.push(SoundEvent {
                 id,
                 pos: enemy.pos,
                 owner: enemy.id,
             });
-        } else if marker == 3.0 {
+        } else if marker == EnemyCue::Brood {
             let id = content.bug(EnemyKind::BroodMother).audio.attack.clone();
             cues.push(SoundEvent {
                 id,
                 pos: enemy.pos,
                 owner: enemy.id,
             });
-        } else if (marker - 999.0).abs() < 0.1
+        } else if marker == EnemyCue::Fire
             && (enemy.kind == EnemyKind::Spitter || enemy.kind == EnemyKind::HiveTyrant)
         {
             let origin = enemy.pos + Vec3::new(0.0, body_lift_of(content, enemy.kind), 0.0);
@@ -2163,10 +2579,9 @@ pub fn launch_pending_shots(sim: &mut Sim, content: &Content) {
             let mut damage = enemy.contact;
             if enemy.kind == EnemyKind::HiveTyrant {
                 if let Some(def) = content.boss("hive_tyrant") {
-                    let phase = enemy.phase as usize;
-                    let base = def.phase_dmg_mult.first().copied().unwrap_or(1.0).max(0.01);
-                    let mult = def.phase_dmg_mult.get(phase).copied().unwrap_or(base);
-                    damage *= mult / base;
+                    if let Some(phase) = def.phase(enemy.phase) {
+                        damage = phase.acid_damage;
+                    }
                 }
             }
             spawned.push(Projectile {

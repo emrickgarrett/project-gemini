@@ -1,0 +1,60 @@
+# Crate reveal visual timeline (seconds). Visual burst = sting hit time.
+# The backend result is known before the drop. A fake-out may flicker at most one tier
+# above the real one and must settle on the real tier. Skip jumps to the reveal card at any time.
+
+# Global switch. Turn off for any paid crate. The backend logs each pull's fake-out decision.
+fakeout_enabled = true
+
+[common]
+tease = "sfx/crate_tease.ogg"
+sting = "stings/crate_common.ogg"
+drop = [0.0, 2.0]
+crack = [2.0, 3.5]
+burst = 3.5
+rise = [3.6, 4.2]
+card = 4.2
+fakeout_allowed = false
+fakeout_chance = 0.0
+fakeout_window = [2.6, 3.0]
+
+[rare]
+tease = "sfx/crate_tease.ogg"
+sting = "stings/crate_rare.ogg"
+drop = [0.0, 2.0]
+crack = [2.0, 3.5]
+burst = 3.5
+rise = [3.6, 5.0]
+card = 5.0
+fakeout_allowed = true
+fakeout_chance = 0.15
+fakeout_window = [2.6, 3.0]
+
+[epic]
+tease = "sfx/crate_tease.ogg"
+sting = "stings/crate_epic.ogg"
+drop = [0.0, 2.0]
+crack = [2.0, 3.5]
+burst = 3.5
+rise = [3.6, 5.3]
+card = 5.3
+fakeout_allowed = true
+fakeout_chance = 0.2
+fakeout_window = [2.6, 3.0]
+
+[legendary]
+tease = "sfx/crate_tease_legendary.ogg"
+sting = "stings/crate_legendary.ogg"
+drop = [0.0, 2.0]
+crack = [2.0, 3.5]
+freeze = [3.5, 4.5]   # screen dims, time freezes
+burst = 4.5
+rise = [4.6, 6.5]
+card = 6.5
+fakeout_allowed = false
+fakeout_chance = 0.0
+fakeout_window = [2.6, 3.0]
+
+[multi_pull]
+pod_interval = 0.35
+full_sequence_for = "highest_rarity"
+summary_grid = true

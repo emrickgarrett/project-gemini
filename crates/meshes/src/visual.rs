@@ -26,9 +26,19 @@ pub struct EnemyVisual {
     pub sac_breathe: [f32; 2],
     pub frenzy_speed: f32,
     pub glow_pulse: f32,
+    pub camera: ShotCamera,
+    pub camera_open: Option<ShotCamera>,
     pub parts: Vec<Part>,
     pub lod: MeshData,
     pub lod_key: String,
+}
+
+/// Concept-sheet camera, baked from the visual table at sculpt time.
+#[derive(Clone, Copy, Debug)]
+pub struct ShotCamera {
+    pub eye: [f32; 3],
+    pub target: [f32; 3],
+    pub fov: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -44,6 +54,20 @@ pub struct Part {
     pub mesh_key: String,
     pub gate: Gate,
     pub foot: Option<u32>,
+    /// Bud that swells into a pod. The slot is the visual count index.
+    pub grows: bool,
+    pub grow_slot: Option<u32>,
+    pub pod_slot: Option<u32>,
+    /// Tail sway, copied from the visual tail part. Zero on every other part.
+    pub sway_rate: f32,
+    pub sway_spread: f32,
+    pub sway_amp: f32,
+    /// Joint oscillation from the visual part. Zero when this joint does not swing.
+    pub swing_hz: f32,
+    pub swing_amp: f32,
+    /// Bud swell once it has grown into a pod. Zero on every other part.
+    pub grown_scale: f32,
+    pub grown_glow: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -87,68 +111,55 @@ pub fn bug(id: &str) -> &'static EnemyVisual {
 }
 
 fn build_all() -> Vec<EnemyVisual> {
-    let file: Book = toml::from_str(include_str!("../../../content/bugs.toml")).expect("bugs.toml");
-    ["swarmer", "spitter", "brute", "brood_mother", "hive_tyrant"]
-        .into_iter()
-        .map(|id| sculpt(id, file.row(id)))
+    let text = include_str!("../../../content/bugs.toml");
+    let rows = rows_with_visual(text).expect("bugs.toml");
+    rows.into_iter()
+        .map(|(id, row)| sculpt(&id, &row).unwrap_or_else(|err| panic!("{id} visual: {err}")))
         .collect()
 }
 
-fn sculpt(id: &str, row: &Row) -> EnemyVisual {
-    let dens = dens_for(id, false);
-    let mut parts = Vec::new();
-    let mut shell_anchor = [0.0_f32, row.visual.height * 0.5, 0.0];
-    let mut shell_size = [1.0_f32, 1.0, 1.0];
+fn rows_with_visual(text: &str) -> Result<Vec<(String, Row)>, String> {
+    let root: toml::Value = toml::from_str(text).map_err(|err| err.to_string())?;
+    let table = root.as_table().ok_or_else(|| "bugs.toml is not a table".to_string())?;
+    let mut rows = Vec::new();
+    for (id, value) in table {
+        let Some(map) = value.as_table() else { continue };
+        if !map.contains_key("visual") {
+            continue;
+        }
+        let row: Row = value.clone().try_into().map_err(|err| format!("{id}: {err}"))?;
+        rows.push((id.clone(), row));
+    }
+    if rows.is_empty() {
+        return Err("bugs.toml has no visual tables".into());
+    }
+    Ok(rows)
+}
 
-    for spec in &row.visual.parts {
-        match spec.shape.as_str() {
-            "sphere" | "capsule" | "cone" | "box" if spec.name == "leg" || spec.ring_radius > 0.0 => {
-                add_legs(&mut parts, id, spec, &dens, row.visual.height);
-            }
-            "capsule" if spec.chain => add_tail(&mut parts, id, spec, &dens),
-            "sphere" | "capsule" | "cone" | "box" => {
-                add_body_part(&mut parts, id, spec, &dens, &row.visual.parts);
-            }
-            "decal" => add_decal(&mut parts, id, spec, &dens, shell_anchor, shell_size),
-            _ => {}
-        }
-        if matches!(spec.name.as_str(), "shell" | "thorax" | "torso") {
-            shell_anchor = spec.offset;
-            shell_size = size3(spec);
-        }
-    }
-    for spec in &row.visual.parts {
-        if spec.name == "veins" && !parts.iter().any(|p| p.name.starts_with("vein")) {
-            add_veins(&mut parts, id, spec);
-        }
-    }
+fn sculpt(id: &str, row: &Row) -> Result<EnemyVisual, String> {
+    let height = row.visual.height;
+    let dens = dens_of(&row.visual.density)?;
+    let mut parts = Vec::new();
+    let mut shell = None;
+    place_parts(&mut parts, id, row, &dens, height, &mut shell)?;
 
     let lod_parts = {
-        let low = dens_for(id, true);
+        let low = dens_of(&row.visual.lod)?;
         let mut low_parts = Vec::new();
+        let mut ignored = None;
         for spec in &row.visual.parts {
             if spec.gate_kind() == GateKind::Vulnerable || spec.gate_kind() == GateKind::PhaseMin {
                 continue;
             }
-            match spec.shape.as_str() {
-                "sphere" | "capsule" | "cone" | "box" if spec.name == "leg" || spec.ring_radius > 0.0 => {
-                    add_legs(&mut low_parts, id, spec, &low, row.visual.height);
-                }
-                "capsule" if spec.chain => add_tail(&mut low_parts, id, spec, &low),
-                "sphere" | "capsule" | "cone" | "box" => {
-                    add_body_part(&mut low_parts, id, spec, &low, &row.visual.parts)
-                }
-                _ => {}
-            }
+            place_one(&mut low_parts, id, spec, &low, &row.visual.parts, height, &mut ignored)?;
         }
         low_parts
     };
-    let visual_stub_gait = row.visual.anim.gait.clone();
     let mut baked = EnemyVisual {
         id: id.to_string(),
-        height: row.visual.height,
+        height,
         lod_distance: row.visual.lod_distance,
-        gait: visual_stub_gait,
+        gait: row.visual.anim.gait.clone(),
         bob_amp: row.visual.anim.bob[0],
         bob_hz: row.visual.anim.bob[1].max(0.2),
         leg_swing_deg: row.visual.anim.leg_swing,
@@ -162,11 +173,13 @@ fn sculpt(id: &str, row: &Row) -> EnemyVisual {
             1.0
         },
         glow_pulse: row.visual.anim.glow_pulse,
+        camera: shot_camera(height, &row.visual.camera),
+        camera_open: row.visual.camera_open.as_ref().map(|cam| open_camera(height, cam)),
         parts: lod_parts,
         lod: MeshData::new(),
         lod_key: format!("{id}:lod"),
     };
-        let rest = pose(
+    let rest = pose(
         &baked,
         AnimInput {
             time: 0.0,
@@ -191,31 +204,134 @@ fn sculpt(id: &str, row: &Row) -> EnemyVisual {
     }
     baked.parts = parts;
     baked.lod = lod;
-    baked
+    Ok(baked)
 }
 
-fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalog: &[VPart]) {
-    if spec.name == "pod" {
-        add_sac_orbs(parts, id, spec, dens, false);
-        return;
+fn place_parts(
+    parts: &mut Vec<Part>,
+    id: &str,
+    row: &Row,
+    dens: &Dens,
+    height: f32,
+    shell: &mut Option<([f32; 3], [f32; 3])>,
+) -> Result<(), String> {
+    // Vein decals parent onto legs, which may be authored later in the table.
+    let mut veins = Vec::new();
+    for spec in &row.visual.parts {
+        if spec.part == "decal" && spec.on.as_deref() == Some("legs") {
+            veins.push(spec);
+            continue;
+        }
+        place_one(parts, id, spec, dens, &row.visual.parts, height, shell)?;
     }
-    if spec.name == "bud" || spec.grows_into_pod_on.is_some() {
-        add_sac_orbs(parts, id, spec, dens, true);
-        return;
+    for spec in veins {
+        add_veins(parts, id, spec)?;
     }
-    if spec.name == "crown" {
-        add_crown(parts, id, spec, dens);
-        return;
+    Ok(())
+}
+
+fn place_one(
+    parts: &mut Vec<Part>,
+    id: &str,
+    spec: &VPart,
+    dens: &Dens,
+    catalog: &[VPart],
+    height: f32,
+    shell: &mut Option<([f32; 3], [f32; 3])>,
+) -> Result<(), String> {
+    if spec.part.is_empty() {
+        return Err(format!("{id} {} is missing part", spec.name));
     }
-    if spec.name == "cannon" || spec.at.as_deref() == Some("tail_end") {
-        add_cannon(parts, id, spec, dens, catalog);
-        return;
+    match spec.part.as_str() {
+        "leg" => add_legs(parts, id, spec, dens, height)?,
+        "tail" => add_tail(parts, id, spec, dens)?,
+        "decal" => {
+            if spec.on.as_deref() == Some("legs") {
+                add_veins(parts, id, spec)?;
+            } else {
+                let (anchor, size) = shell.ok_or_else(|| format!("{id} {} decal has no shell", spec.name))?;
+                add_decal(parts, id, spec, dens, anchor, size);
+            }
+        }
+        "shell" | "gem" | "eyes" | "thorax" | "torso" | "head" | "horn" | "mandible" | "armor" | "forelimb"
+        | "scythe" | "crown" | "pod" | "bud" | "cannon" => {
+            add_body_part(parts, id, spec, dens, catalog)?;
+        }
+        other => return Err(format!("{id} {} has unknown part type \"{other}\"", spec.name)),
+    }
+    if matches!(spec.part.as_str(), "shell" | "thorax" | "torso") {
+        *shell = Some((spec.offset, size3(id, spec)?));
+    }
+    Ok(())
+}
+
+fn shot_camera(height: f32, cam: &VCamera) -> ShotCamera {
+    let dist = height * cam.dist_mul + cam.dist_add;
+    ShotCamera {
+        eye: [dist * cam.eye_x, height * cam.eye_y + cam.eye_y_add, dist * cam.eye_z],
+        target: [0.0, height * cam.look_y, cam.look_z],
+        fov: cam.fov,
+    }
+}
+
+fn open_camera(height: f32, cam: &VCameraOpen) -> ShotCamera {
+    ShotCamera {
+        eye: [height * cam.eye_x, height * cam.eye_y, height * cam.eye_z],
+        target: [0.0, height * cam.look_y, cam.look_z],
+        fov: cam.fov,
+    }
+}
+
+fn req<T>(id: &str, part: &str, field: &str, value: Option<T>) -> Result<T, String> {
+    value.ok_or_else(|| format!("{id} {part} is missing {field}"))
+}
+
+fn req3(id: &str, part: &str, field: &str, value: Option<&[f32]>) -> Result<[f32; 3], String> {
+    match value {
+        Some([x, y, z, ..]) => Ok([*x, *y, *z]),
+        _ => Err(format!("{id} {part} is missing {field}")),
+    }
+}
+
+fn req2(id: &str, part: &str, field: &str, value: Option<&[f32]>) -> Result<[f32; 2], String> {
+    match value {
+        Some([x, y, ..]) => Ok([*x, *y]),
+        _ => Err(format!("{id} {part} is missing {field}")),
+    }
+}
+
+fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalog: &[VPart]) -> Result<(), String> {
+    match spec.part.as_str() {
+        "pod" | "bud" => return add_sac_orbs(parts, id, spec, dens),
+        "crown" => return add_crown(parts, id, spec, dens),
+        "cannon" => return add_cannon(parts, id, spec, dens, catalog),
+        _ => {}
     }
     let gate = spec.gate();
     let emissive = spec.emissive;
     let palette = spec.color.clone();
     let count = if spec.mirror { 2 } else { 1 };
-    let size = size3(spec);
+    let size = size3(id, spec)?;
+    let (swing_hz, swing_amp) = match spec.part.as_str() {
+        "mandible" | "forelimb" | "scythe" => (
+            req(id, &spec.name, "swing_hz", spec.swing_hz)?,
+            req(id, &spec.name, "swing_amp", spec.swing_amp)?,
+        ),
+        _ => (0.0, 0.0),
+    };
+    let limb = if matches!(spec.part.as_str(), "forelimb" | "scythe") {
+        Some(LimbSpec {
+            aim: req3(id, &spec.name, "aim", spec.aim.as_deref())?,
+            seg: req(id, &spec.name, "seg", spec.seg)?,
+            rad: req(id, &spec.name, "rad", spec.rad)?,
+            taper: req(id, &spec.name, "taper", spec.taper)?,
+            blade: req(id, &spec.name, "blade", spec.blade)?,
+            blade_euler: req3(id, &spec.name, "blade_euler", spec.blade_euler.as_deref())?,
+            blade_r: req2(id, &spec.name, "blade_r", spec.blade_r.as_deref())?,
+        })
+    } else {
+        None
+    };
     for i in 0..count {
         let side = if i == 0 { 1.0 } else { -1.0 };
         let mut pos = spec.offset;
@@ -223,70 +339,74 @@ fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cat
             pos[0] = spec.offset[0].abs() * side;
         }
         let mut euler = [0.0_f32, 0.0, 0.0];
-        let (mesh, joint) = match (spec.name.as_str(), spec.shape.as_str()) {
+        let (mesh, joint) = match spec.part.as_str() {
             // Weak points are clean gems at the authored diameter so they read
             // even when bloom is off. No plates on top of them.
-            ("sac" | "abdomen" | "gland" | "core", _) => (
+            "gem" => (
                 gem_mesh([size[0] * 0.5, size[1] * 0.5, size[2] * 0.5], dens),
                 Joint::Sac,
             ),
-            ("eyes", _) => (gem_mesh([size[0] * 0.5, size[1] * 0.5, size[2] * 0.5], &Dens::small()), Joint::Static),
-            ("shell", _) => (dome_shell(&size, dens, id == "swarmer"), Joint::Static),
-            ("thorax", _) => {
+            "eyes" => (gem_mesh([size[0] * 0.5, size[1] * 0.5, size[2] * 0.5], &Dens::small()), Joint::Static),
+            "shell" => {
+                let rear = req(id, &spec.name, "rear_open", spec.rear_open)?;
+                (dome_shell(&size, dens, rear), Joint::Static)
+            }
+            "thorax" => {
                 // Negative tilt raises the back (the sac) and drops the head.
                 euler[0] = -spec.tilt_deg.to_radians();
                 (thorax_mesh(&size, dens), Joint::Static)
             }
-            ("torso", _) => {
+            "torso" => {
                 euler[0] = spec.tilt_deg.to_radians();
                 (torso_mesh(&size, dens), Joint::Static)
             }
-            ("head", "cone") => {
+            "head" if spec.shape == "cone" => {
+                let point = req(id, &spec.name, "point", spec.point.clone())?;
                 let len = size[1].max(size[0]);
                 let rad = size[0].max(0.02);
                 let sides = dens.sides.max(5);
-                if id == "hive_tyrant" {
-                    (cone_up(len, rad, sides), Joint::Static)
-                } else {
-                    (spitter_head(len, rad, sides), Joint::Static)
-                }
-            },
-            ("head", _) => {
-                // Brood's head stays small so the gland hangs in front of it.
-                let k = if id == "brood_mother" { 0.36 } else { 0.5 };
+                let mesh = match point.as_str() {
+                    "up" => tyrant_head(len, rad, sides),
+                    "forward" => spitter_head(len, rad, sides),
+                    other => return Err(format!("{id} {} point \"{other}\" is unknown", spec.name)),
+                };
+                (mesh, Joint::Static)
+            }
+            "head" => {
+                let k = req(id, &spec.name, "fit", spec.fit)?;
                 (gem_mesh([size[0] * k, size[1] * k, size[2] * k], dens), Joint::Static)
             }
-            ("horn", "cone") => {
+            "horn" => {
                 euler[0] = -spec.tilt_deg.to_radians();
                 (horn_mesh(size[1].max(size[0]), size[0].max(0.02), dens.sides.max(5)), Joint::Static)
             }
-            ("mandible", "cone") => {
-                euler[1] = side * 0.55;
-                euler[0] = 0.25;
-                (cone_z(size[1].max(0.08), size[0].max(0.02), dens.sides.max(4)), Joint::Mandible { side })
+            "mandible" => {
+                let yaw = req(id, &spec.name, "yaw", spec.yaw)?;
+                let pitch = req(id, &spec.name, "pitch", spec.pitch)?;
+                euler[1] = side * yaw;
+                euler[0] = pitch;
+                let rad = size[0].max(0.02);
+                (
+                    point_z(size[1].max(0.08), rad, rad * 0.42, dens.sides.max(4)),
+                    Joint::Mandible { side },
+                )
             }
-            ("armor", _) => (armor_frame(&size), Joint::Static),
-            ("forelimb", _) => {
-                euler = aim_down([side * 1.2, -0.42, 1.05]);
-                let len = size[1].max(0.3);
-                let rad = size[0] * 0.40;
-                (segment_mesh(len * 0.52, rad, rad * 0.62, dens.sides), Joint::Claw { side })
+            "armor" => (armor_wrap(&size, dens), Joint::Static),
+            "forelimb" | "scythe" => {
+                let limb = limb.as_ref().expect("limb");
+                if size[1] <= 0.0 {
+                    return Err(format!("{id} {} is missing its length", spec.name));
+                }
+                euler = aim_down([side * limb.aim[0], limb.aim[1], limb.aim[2]]);
+                let rad = size[0] * limb.rad;
+                let joint = if spec.part == "scythe" {
+                    Joint::Scythe { side }
+                } else {
+                    Joint::Claw { side }
+                };
+                (segment_mesh(size[1] * limb.seg, rad, rad * limb.taper, dens.sides), joint)
             }
-            ("scythe", _) => {
-                euler = aim_down([side * 0.72, 1.2, 0.38]);
-                let len = size[1].max(0.4);
-                let rad = size[0] * 0.36;
-                (segment_mesh(len * 0.46, rad, rad * 0.42, dens.sides), Joint::Scythe { side })
-            }
-            (_, "cone") => (cone_z(size[1].max(0.1), size[0].max(0.02), dens.sides.max(4)), Joint::Static),
-            (_, "box") => (box_origin(&size), Joint::Static),
-            (_, "capsule") => (capsule_z(size[1].max(0.2), size[0].max(0.04), dens), Joint::Static),
-            _ => (gem_mesh([size[0] * 0.5, size[1] * 0.5, size[2] * 0.5], dens), Joint::Static),
-        };
-        let parent = if spec.name == "forelimb" || spec.name == "scythe" {
-            None
-        } else {
-            None
+            _ => return Err(format!("{id} {} part type \"{}\" has no mesh", spec.name, spec.part)),
         };
         let key = format!("{id}:{}:{}", spec.name, if spec.mirror { "m" } else { "s" });
         let idx = parts.len();
@@ -296,7 +416,7 @@ fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cat
             } else {
                 spec.name.clone()
             },
-            parent,
+            parent: None,
             rest_pos: pos,
             rest_euler: euler,
             mesh: Arc::new(mesh),
@@ -306,17 +426,33 @@ fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cat
             mesh_key: key,
             gate,
             foot: None,
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
+            swing_hz,
+            swing_amp,
+            grown_scale: 0.0,
+            grown_glow: 0.0,
         });
-        if spec.name == "forelimb" || spec.name == "scythe" {
-            let len = size[1].max(0.3);
-            let rad = size[0] * if spec.name == "scythe" { 0.36 } else { 0.40 };
-            let upper = len * if spec.name == "scythe" { 0.46 } else { 0.52 };
-            let (blade_len, blade_euler, r0, r1) = if spec.name == "scythe" {
-                (len * 0.62, [-1.2, side * 0.12, side * 0.2], rad * 0.48, rad * 0.07)
+        if let Some(limb) = limb.as_ref() {
+            let len = size[1];
+            let rad = size[0] * limb.rad;
+            let upper = len * limb.seg;
+            let blade_len = len * limb.blade;
+            let blade_euler = [limb.blade_euler[0], side * limb.blade_euler[1], side * limb.blade_euler[2]];
+            let blade = if spec.part == "scythe" {
+                curved_blade(blade_len, rad * limb.blade_r[0], (rad * limb.blade_r[1]).max(rad * 0.18))
             } else {
-                (len * 0.46, [1.05, 0.0, side * 0.18], rad * 0.72, rad * 0.1)
+                segment_mesh(blade_len, rad * limb.blade_r[0], rad * limb.blade_r[1].max(rad * 0.22), dens.sides.max(4))
             };
-            let blade = segment_mesh(blade_len, r0, r1, dens.sides.max(4));
+            let joint = if spec.part == "scythe" {
+                Joint::Scythe { side }
+            } else {
+                Joint::Claw { side }
+            };
             parts.push(Part {
                 name: format!("{}_blade{i}", spec.name),
                 parent: Some(idx),
@@ -325,40 +461,81 @@ fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cat
                 mesh: Arc::new(blade),
                 palette: palette.clone(),
                 emissive: false,
-                joint: if spec.name == "scythe" {
-                    Joint::Scythe { side }
-                } else {
-                    Joint::Claw { side }
-                },
+                joint,
                 mesh_key: format!("{id}:{}:blade", spec.name),
                 gate,
                 foot: None,
+                grows: false,
+                grow_slot: None,
+                pod_slot: None,
+                sway_rate: 0.0,
+                sway_spread: 0.0,
+                sway_amp: 0.0,
+                swing_hz,
+                swing_amp,
+                grown_scale: 0.0,
+                grown_glow: 0.0,
             });
         }
     }
+    Ok(())
 }
 
-fn add_legs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, body_height: f32) {
-    let count = spec.count.max(1);
+struct LimbSpec {
+    aim: [f32; 3],
+    seg: f32,
+    rad: f32,
+    taper: f32,
+    blade: f32,
+    blade_euler: [f32; 3],
+    blade_r: [f32; 2],
+}
+
+fn add_legs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, body_height: f32) -> Result<(), String> {
+    if spec.count == 0 {
+        return Err(format!("{id} {} is missing count", spec.name));
+    }
+    let count = spec.count;
     let rows = (count + 1) / 2;
-    let length = spec.size.get(1).copied().unwrap_or(0.4);
-    let radius = spec.size.first().copied().unwrap_or(0.05).max(0.02);
-    let ring = spec.ring_radius.max(0.15);
-    let femur_len = length * if dens.segs > 1 { 0.46 } else { 0.92 };
-    let tibia_len = length * 0.40;
-    let foot_len = length * 0.16;
+    let length = spec
+        .size
+        .get(1)
+        .copied()
+        .filter(|n| *n > 0.0)
+        .ok_or_else(|| format!("{id} {} is missing its length", spec.name))?;
+    let radius = spec
+        .size
+        .first()
+        .copied()
+        .filter(|n| *n > 0.0)
+        .ok_or_else(|| format!("{id} {} is missing its radius", spec.name))?;
+    if spec.ring_radius <= 0.0 {
+        return Err(format!("{id} {} is missing ring_radius", spec.name));
+    }
+    let ring = spec.ring_radius;
+    let femur_frac = if dens.segs > 1 {
+        req(id, &spec.name, "femur", spec.femur)?
+    } else {
+        req(id, &spec.name, "femur_lod", spec.femur_lod)?
+    };
+    let tibia_frac = req(id, &spec.name, "tibia", spec.tibia)?;
+    let foot_frac = req(id, &spec.name, "foot", spec.foot)?;
+    let hip = req(id, &spec.name, "hip", spec.hip)?;
+    let femur_len = length * femur_frac;
+    let tibia_len = length * tibia_frac;
+    let foot_len = length * foot_frac;
     let femur_mesh = Arc::new(segment_mesh(femur_len, radius * 1.85, radius * 1.05, dens.sides));
     let tibia_mesh = Arc::new(segment_mesh(tibia_len, radius * 1.05, radius * 0.58, dens.sides.max(4)));
     let foot_mesh = Arc::new(segment_mesh(foot_len, radius * 0.7, radius * 0.28, 4));
     // Hips sit on the underside of the body. Feet plant wide of the shell.
-    let hip_y = body_height * if count <= 4 { 0.46 } else { 0.36 };
+    let hip_y = body_height * hip;
     for i in 0..count {
         let side = if i % 2 == 0 { 1.0 } else { -1.0 };
         let row = i / 2;
         let t = if rows <= 1 { 0.5 } else { row as f32 / (rows as f32 - 1.0) };
         let along = 0.42 - t;
-        let hip = [side * ring * 0.50, hip_y, along * ring * 0.75];
-        let plant = [side * ring * 1.95, 0.0, along * ring * 1.6];
+        let hip = [side * ring * 0.78, hip_y, along * ring * 0.72];
+        let plant = [side * ring * 1.42, 0.0, along * ring * 1.15];
         let drop = plant[1] - hip[1];
         let femur_dir = normalize([
             plant[0] - hip[0],
@@ -383,6 +560,16 @@ fn add_legs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, body_hei
             mesh_key: format!("{id}:leg:femur"),
             gate: Gate::Always,
             foot: None,
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
+            swing_hz: 0.0,
+            swing_amp: 0.0,
+            grown_scale: 0.0,
+            grown_glow: 0.0,
         });
         if dens.segs == 1 {
             continue;
@@ -409,6 +596,16 @@ fn add_legs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, body_hei
             mesh_key: format!("{id}:leg:tibia"),
             gate: Gate::Always,
             foot: None,
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
+            swing_hz: 0.0,
+            swing_amp: 0.0,
+            grown_scale: 0.0,
+            grown_glow: 0.0,
         });
         parts.push(Part {
             name: format!("leg{i}_foot"),
@@ -422,19 +619,37 @@ fn add_legs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, body_hei
             mesh_key: format!("{id}:leg:foot"),
             gate: Gate::Always,
             foot: Some(i),
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
+            swing_hz: 0.0,
+            swing_amp: 0.0,
+            grown_scale: 0.0,
+            grown_glow: 0.0,
         });
     }
+    Ok(())
 }
 
-fn add_tail(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) {
-    if spec.segment_cap == 0 || spec.segment_scale <= 0.0 || spec.joint_span <= 0.0 {
-        return;
+fn add_tail(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) -> Result<(), String> {
+    if spec.segment_cap == 0 {
+        return Err(format!("{id} tail is missing segment_cap"));
     }
-    let Some(len) = spec.size.get(1).copied() else {
-        return;
-    };
+    if spec.segment_scale <= 0.0 {
+        return Err(format!("{id} tail is missing segment_scale"));
+    }
+    if spec.joint_span <= 0.0 {
+        return Err(format!("{id} tail is missing joint_span"));
+    }
+    let len = spec.size.get(1).copied().ok_or_else(|| format!("{id} tail is missing its length"))?;
+    if len <= 0.0 {
+        return Err(format!("{id} tail length must be positive"));
+    }
     let count = spec.count.max(1).min(spec.segment_cap);
-    let radius = spec.size.first().copied().unwrap_or(0.3);
+    let radius = spec.size.first().copied().filter(|r| *r > 0.0).ok_or_else(|| format!("{id} tail is missing its radius"))?;
     let mesh = Arc::new(segment_mesh(
         len * spec.segment_scale,
         radius,
@@ -465,33 +680,41 @@ fn add_tail(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) {
             mesh_key: format!("{id}:tail"),
             gate: Gate::Always,
             foot: None,
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: spec.sway_rate,
+            sway_spread: spec.sway_spread,
+            sway_amp: spec.sway_amp,
+            swing_hz: 0.0,
+            swing_amp: 0.0,
+            grown_scale: 0.0,
+            grown_glow: 0.0,
         });
         parent = Some(idx);
     }
+    Ok(())
 }
 
-fn add_cannon(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalog: &[VPart]) {
-    let parent = parts.iter().rposition(|p| p.name.starts_with("tail"));
-    let tail = catalog.iter().find(|part| part.name == "tail");
-    let tip_gap = tail.map(|part| part.tip_gap).unwrap_or(0.0);
-    let size = size3(spec);
-    let rad = size[0] * 0.5;
+fn add_cannon(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalog: &[VPart]) -> Result<(), String> {
+    let tail = catalog.iter().find(|part| part.name == "tail").ok_or_else(|| format!("{id} cannon has no tail part"))?;
+    if tail.segment_scale <= 0.0 {
+        return Err(format!("{id} cannon tail is missing segment_scale"));
+    }
+    let len = tail.size.get(1).copied().filter(|n| *n > 0.0).ok_or_else(|| format!("{id} cannon tail is missing its length"))?;
+    let parent = parts.iter().rposition(|p| p.name.starts_with("tail")).ok_or_else(|| format!("{id} cannon has no tail segments"))?;
+    let rad = spec.size.first().copied().filter(|r| *r > 0.0).ok_or_else(|| format!("{id} cannon is missing its size"))? * 0.5;
+    let tip_gap = tail.tip_gap;
     let mut mesh = gem_mesh([rad, rad, rad * 0.92], dens);
     // Barrel continues along the tail (-Y) and sits clear of the last segment's cap.
-    let mut nozzle = cone_z(rad * 1.15, rad * 0.48, dens.sides.max(5));
+    let mut nozzle = point_z(rad * 1.05, rad * 0.55, rad * 0.32, dens.sides.max(5));
     geom::rotate_x(&mut nozzle, std::f32::consts::FRAC_PI_2);
     geom::translate(&mut nozzle, [0.0, -(rad + tip_gap), 0.0]);
     geom::append(&mut mesh, &nozzle);
-    let pos = match (parent, tail) {
-        (Some(_), Some(tail)) => {
-            let len = tail.size.get(1).copied().unwrap_or(0.0);
-            [0.0, -(len * tail.segment_scale + rad + tip_gap), 0.0]
-        }
-        _ => spec.offset,
-    };
+    let pos = [0.0, -(len * tail.segment_scale + rad + tip_gap), 0.0];
     parts.push(Part {
         name: "cannon".into(),
-        parent,
+        parent: Some(parent),
         rest_pos: pos,
         rest_euler: [0.0, 0.0, 0.0],
         mesh: Arc::new(mesh),
@@ -501,12 +724,42 @@ fn add_cannon(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalo
         mesh_key: format!("{id}:cannon"),
         gate: spec.gate(),
         foot: None,
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
+            swing_hz: 0.0,
+            swing_amp: 0.0,
+            grown_scale: 0.0,
+            grown_glow: 0.0,
     });
+    Ok(())
 }
 
-fn add_sac_orbs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, nestled: bool) {
-    let count = spec.count.max(1);
-    let size = size3(spec);
+fn add_sac_orbs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) -> Result<(), String> {
+    let nestled = spec.part == "bud";
+    if spec.ring_radius <= 0.0 {
+        return Err(format!("{id} {} is missing ring_radius", spec.name));
+    }
+    if spec.count == 0 {
+        return Err(format!("{id} {} is missing count", spec.name));
+    }
+    let count = spec.count;
+    let size = size3(id, spec)?;
+    let sink = req(id, &spec.name, "sink", spec.sink)?;
+    let phase = req(id, &spec.name, "ring_phase", spec.ring_phase)?;
+    let ny_floor = req(id, &spec.name, "ny_floor", spec.ny_floor)?;
+    let turn = req(id, &spec.name, "ring_turn", spec.ring_turn)?;
+    let (grown_scale, grown_glow) = if nestled {
+        (
+            req(id, &spec.name, "grown_scale", spec.grown_scale)?,
+            req(id, &spec.name, "grown_glow", spec.grown_glow)?,
+        )
+    } else {
+        (0.0, 0.0)
+    };
     let detail = if dens.slices <= 4 {
         Dens::small()
     } else if nestled {
@@ -515,15 +768,13 @@ fn add_sac_orbs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, nest
         Dens { slices: 6, stacks: 4, ..Dens::small() }
     };
     let mesh = Arc::new(gem_mesh([size[0] * 0.5, size[1] * 0.5, size[2] * 0.5], &detail));
-    let (center, radii) = sac_anchor_from(parts);
-    let sink = if nestled { 0.80 } else { 0.98 };
-    let phase = if nestled { 0.5 } else { 0.0 };
+    let (center, radii) = sac_anchor_from(id, parts)?;
     for i in 0..count {
-        let a = (i as f32 + phase) / count as f32 * std::f32::consts::TAU + 0.4;
-        let ring = if nestled { 0.48 } else { 0.62 };
+        let a = (i as f32 + phase) / count as f32 * std::f32::consts::TAU + turn;
+        let ring = spec.ring_radius;
         let nx = a.cos() * ring;
         let nz = a.sin() * ring;
-        let ny = (1.0 - nx * nx - nz * nz).max(0.25).sqrt();
+        let ny = (1.0 - nx * nx - nz * nz).max(ny_floor).sqrt();
         let pos = [
             center[0] + nx * radii[0] * sink,
             center[1] + ny * radii[1] * sink,
@@ -542,32 +793,59 @@ fn add_sac_orbs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, nest
             mesh_key: format!("{id}:{}", if nestled { "bud" } else { "pod" }),
             gate: Gate::Always,
             foot: None,
+            grows: nestled,
+            grow_slot: if nestled { Some(i) } else { None },
+            pod_slot: if nestled { None } else { Some(i) },
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
+            swing_hz: 0.0,
+            swing_amp: 0.0,
+            grown_scale,
+            grown_glow,
         });
     }
+    Ok(())
 }
 
-fn add_crown(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) {
-    let count = spec.count.max(1);
+fn add_crown(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) -> Result<(), String> {
+    if spec.count == 0 {
+        return Err(format!("{id} {} is missing count", spec.name));
+    }
+    let count = spec.count;
+    let host = spec.on.as_deref().ok_or_else(|| format!("{id} {} is missing on", spec.name))?;
     let head = parts
         .iter()
-        .find(|p| p.name == "head" || p.name.starts_with("head"))
+        .find(|p| p.name == host)
         .map(|p| p.rest_pos)
-        .unwrap_or([0.0, 1.0, 0.5]);
-    let len = spec.size.get(1).copied().unwrap_or(0.4);
-    let rad = spec.size.first().copied().unwrap_or(0.1);
-    let mesh = Arc::new(cone_up(len, rad, dens.sides.max(4).min(5)));
+        .ok_or_else(|| format!("{id} {} host \"{host}\" is missing", spec.name))?;
+    let len = spec
+        .size
+        .get(1)
+        .copied()
+        .filter(|n| *n > 0.0)
+        .ok_or_else(|| format!("{id} {} is missing its length", spec.name))?;
+    let rad = spec
+        .size
+        .first()
+        .copied()
+        .filter(|n| *n > 0.0)
+        .ok_or_else(|| format!("{id} {} is missing its radius", spec.name))?;
+    let spread = req3(id, &spec.name, "spread", spec.spread.as_deref())?;
+    let pitch = req(id, &spec.name, "crown_pitch", spec.crown_pitch)?;
+    let mesh = Arc::new(point_up(len, rad, rad * 0.36, dens.sides.max(4).min(5)));
     for i in 0..count {
         let a = i as f32 / count as f32 * std::f32::consts::TAU;
         let pos = [
-            head[0] + a.sin() * rad * 2.6,
-            head[1] + len * 0.25,
-            head[2] + a.cos() * rad * 1.6,
+            head[0] + a.sin() * rad * spread[0],
+            head[1] + len * spread[1],
+            head[2] + a.cos() * rad * spread[2],
         ];
         parts.push(Part {
             name: format!("crown{i}"),
             parent: None,
             rest_pos: pos,
-            rest_euler: [0.85, a, 0.0],
+            rest_euler: [pitch, a, 0.0],
             mesh: mesh.clone(),
             palette: spec.color.clone(),
             emissive: false,
@@ -575,37 +853,38 @@ fn add_crown(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) {
             mesh_key: format!("{id}:crown"),
             gate: Gate::Always,
             foot: None,
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
+            swing_hz: 0.0,
+            swing_amp: 0.0,
+            grown_scale: 0.0,
+            grown_glow: 0.0,
         });
     }
+    Ok(())
 }
 
 fn add_decal(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, shell: [f32; 3], shell_size: [f32; 3]) {
-    if spec.name == "veins" || spec.on.as_deref() == Some("legs") {
-        add_veins(parts, id, spec);
-        return;
-    }
-    // Raised fissures sit in the gaps between dorsal plates, clear of the shell.
+    // 5 jagged, branching fissures per side, running along the seams between plates.
     let radii = shell_radii(&shell_size, false);
-    let bands = dorsal_bands(&radii, dens.plates.max(4), false);
-    let mut mesh = MeshData::new();
-    let gap = plate_gap(radii[1]);
-    let arch = plate_arch(radii[1]);
+    let bands = dorsal_bands(&radii, dens.plates.max(6), false);
+    let mut seams = Vec::new();
     for i in 0..bands.len().saturating_sub(1) {
-        let z = (bands[i].0 + bands[i + 1].0) * 0.5;
-        let spacing = bands[i].2;
-        let len = (spacing * 0.28).max(0.04);
-        let thick = (radii[1] * 0.12).max(0.04);
-        // Three scars across the gap, separated in X so they never share a face.
-        for (k, x) in [-0.40_f32, 0.0, 0.40].into_iter().enumerate() {
-            let x = radii[0] * x;
-            let y = ellipse_y(&radii, x, z);
-            let width = radii[0] * if k == 1 { 0.22 } else { 0.28 };
-            geom::box_mesh(
-                &mut mesh,
-                [x, y + gap + arch + thick * 0.5 + 0.015, z],
-                [width, thick, len],
-                WHITE,
-            );
+        seams.push((bands[i].0 + bands[i + 1].0) * 0.5);
+    }
+    if seams.is_empty() {
+        seams.push(0.0);
+    }
+    let mut mesh = MeshData::new();
+    let per_side = 5usize;
+    for side in [-1.0_f32, 1.0] {
+        for n in 0..per_side {
+            let seam = seams[(n * seams.len()) / per_side];
+            jagged_crack(&mut mesh, &radii, side, seam, n);
         }
     }
     parts.push(Part {
@@ -620,10 +899,20 @@ fn add_decal(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, shell: 
         mesh_key: format!("{id}:{}", spec.name),
         gate: spec.gate(),
         foot: None,
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
+            swing_hz: 0.0,
+            swing_amp: 0.0,
+            grown_scale: 0.0,
+            grown_glow: 0.0,
     });
 }
 
-fn add_veins(parts: &mut Vec<Part>, id: &str, spec: &VPart) {
+fn add_veins(parts: &mut Vec<Part>, id: &str, spec: &VPart) -> Result<(), String> {
     let legs: Vec<usize> = parts
         .iter()
         .enumerate()
@@ -633,11 +922,9 @@ fn add_veins(parts: &mut Vec<Part>, id: &str, spec: &VPart) {
         })
         .collect();
     if legs.is_empty() {
-        return;
+        return Err(format!("{id} {} has no legs to attach to", spec.name));
     }
-    let mut mesh = MeshData::new();
-    geom::box_mesh(&mut mesh, [0.0, -0.55, 0.0], [0.16, 1.05, 0.1], WHITE);
-    let mesh = Arc::new(mesh);
+    let mesh = Arc::new(segment_mesh(1.05, 0.11, 0.04, 4));
     for (n, idx) in legs.iter().enumerate() {
         let parent_r = parts[*idx]
             .mesh
@@ -648,7 +935,7 @@ fn add_veins(parts: &mut Vec<Part>, id: &str, spec: &VPart) {
         parts.push(Part {
             name: format!("vein{n}"),
             parent: Some(*idx),
-            rest_pos: [0.0, -0.12, parent_r + 0.08],
+            rest_pos: [0.0, -0.2, parent_r + 0.06],
             rest_euler: [0.0, 0.0, 0.0],
             mesh: mesh.clone(),
             palette: spec.color.clone(),
@@ -657,22 +944,36 @@ fn add_veins(parts: &mut Vec<Part>, id: &str, spec: &VPart) {
             mesh_key: format!("{id}:vein"),
             gate: spec.gate(),
             foot: None,
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
+            swing_hz: 0.0,
+            swing_amp: 0.0,
+            grown_scale: 0.0,
+            grown_glow: 0.0,
         });
     }
+    Ok(())
 }
 
-fn sac_anchor_from(parts: &[Part]) -> ([f32; 3], [f32; 3]) {
-    if let Some(sac) = parts.iter().find(|p| p.name == "sac") {
-        let mut max = [0.2_f32, 0.2, 0.2];
-        for p in &sac.mesh.positions {
-            max[0] = max[0].max(p[0].abs());
-            max[1] = max[1].max(p[1].abs());
-            max[2] = max[2].max(p[2].abs());
-        }
-        (sac.rest_pos, [max[0] * 0.92, max[1] * 0.92, max[2] * 0.92])
-    } else {
-        ([0.0, 1.0, 0.0], [0.6, 0.5, 0.6])
+fn sac_anchor_from(id: &str, parts: &[Part]) -> Result<([f32; 3], [f32; 3]), String> {
+    let sac = parts
+        .iter()
+        .find(|p| p.name == "sac")
+        .ok_or_else(|| format!("{id} pod ring has no sac"))?;
+    let mut max = [0.0_f32, 0.0, 0.0];
+    for p in &sac.mesh.positions {
+        max[0] = max[0].max(p[0].abs());
+        max[1] = max[1].max(p[1].abs());
+        max[2] = max[2].max(p[2].abs());
     }
+    if max[0] <= 0.0 || max[1] <= 0.0 || max[2] <= 0.0 {
+        return Err(format!("{id} sac has no extent"));
+    }
+    Ok((sac.rest_pos, [max[0] * 0.92, max[1] * 0.92, max[2] * 0.92]))
 }
 
 /// Round shell plus dorsal plates. Each plate is shorter than its slot and lifted
@@ -777,49 +1078,95 @@ fn torso_mesh(size: &[f32; 3], dens: &Dens) -> MeshData {
     mesh
 }
 
-/// Hollow chest frame. Bars are separated so they don't share faces, and the
-/// whole frame sits in front of the core instead of covering it.
-fn armor_frame(size: &[f32; 3]) -> MeshData {
+/// Curved plates that sit on the chest and leave a front window for the core.
+fn armor_wrap(size: &[f32; 3], dens: &Dens) -> MeshData {
     let mut mesh = MeshData::new();
-    let hx = size[0] * 0.5;
-    let hy = size[1] * 0.5;
-    let t = (size[0].min(size[1]) * 0.16).max(0.08);
-    let gap = 0.04;
-    let depth = (size[2] * 0.28).max(0.06);
-    let z = size[2] * 0.95;
-    geom::box_mesh(&mut mesh, [0.0, hy - t * 0.5, z], [size[0], t, depth], WHITE);
-    geom::box_mesh(&mut mesh, [0.0, -hy + t * 0.5, z], [size[0], t, depth], WHITE);
-    let side_h = (size[1] - t * 2.0 - gap * 2.0).max(t);
-    geom::box_mesh(&mut mesh, [-hx + t * 0.5, 0.0, z], [t, side_h, depth], WHITE);
-    geom::box_mesh(&mut mesh, [hx - t * 0.5, 0.0, z], [t, side_h, depth], WHITE);
+    let rx = size[0] * 0.36;
+    let ry = size[1] * 0.40;
+    let rz = (size[2] * 0.9).max(0.5);
+    let bands = if dens.plates == 0 { 2 } else { 3 };
+    let around = if dens.plates == 0 { 4 } else { 6 };
+    for b in 0..bands {
+        let v = (b as f32 + 0.5) / bands as f32;
+        let y = (v - 0.5) * ry * 1.65;
+        for k in 0..around {
+            let u = (k as f32 + 0.5) / around as f32;
+            let ang = (u - 0.5) * std::f32::consts::PI * 1.2;
+            // The forward gap is the core window. Side and lower plates wrap the chest.
+            if ang.abs() < 0.42 {
+                continue;
+            }
+            let x = ang.sin() * rx;
+            let z = ang.cos() * rz;
+            let mut plate = MeshData::new();
+            geom::plate(
+                &mut plate,
+                [0.0, 0.0, 0.0],
+                ry * 0.52,
+                rx * 0.48,
+                rz * 0.14,
+                dens.nu.max(1).min(2),
+                dens.nv.max(1).min(2),
+                WHITE,
+            );
+            // Plate arch (+Y) swings out to the shell normal.
+            geom::rotate_x(&mut plate, std::f32::consts::FRAC_PI_2);
+            geom::rotate_y(&mut plate, ang);
+            geom::translate(&mut plate, [x, y, z]);
+            geom::append(&mut mesh, &plate);
+        }
+    }
     mesh
 }
 
 fn spitter_head(length: f32, radius: f32, sides: u32) -> MeshData {
-    let mut mesh = cone_z(length, radius, sides);
+    let mut mesh = MeshData::new();
+    geom::gem(
+        &mut mesh,
+        [0.0, 0.0, length * 0.18],
+        [radius * 1.25, radius * 0.85, length * 0.52],
+        sides.max(6).min(8),
+        3,
+        WHITE,
+    );
     for side in [-1.0_f32, 1.0] {
-        let mut fang = cone_z(length * 0.42, radius * 0.22, 4);
-        geom::rotate_x(&mut fang, 0.6);
-        geom::translate(&mut fang, [side * radius * 0.42, -radius * 0.2, length * 0.62]);
-        geom::append(&mut mesh, &fang);
+        let mut jaw = segment_mesh(length * 0.78, radius * 0.36, radius * 0.14, 4);
+        geom::rotate_x(&mut jaw, -1.05);
+        geom::rotate_z(&mut jaw, side * 0.5);
+        geom::translate(&mut jaw, [side * radius * 0.42, -radius * 0.08, length * 0.42]);
+        geom::append(&mut mesh, &jaw);
+    }
+    mesh
+}
+
+fn tyrant_head(length: f32, radius: f32, sides: u32) -> MeshData {
+    let mut mesh = MeshData::new();
+    geom::gem(
+        &mut mesh,
+        [0.0, length * 0.22, 0.04],
+        [radius * 1.05, length * 0.38, radius * 0.82],
+        sides.max(6).min(8),
+        3,
+        WHITE,
+    );
+    for side in [-1.0_f32, 1.0] {
+        let mut jaw = segment_mesh(length * 0.46, radius * 0.26, radius * 0.1, 4);
+        geom::rotate_x(&mut jaw, -1.2);
+        geom::rotate_z(&mut jaw, side * 0.42);
+        geom::translate(&mut jaw, [side * radius * 0.5, length * 0.02, radius * 0.28]);
+        geom::append(&mut mesh, &jaw);
     }
     mesh
 }
 
 fn horn_mesh(length: f32, radius: f32, sides: u32) -> MeshData {
-    let mut mesh = cone_z(length, radius, sides);
-    for side in [-1.0_f32, 1.0] {
-        let mut tusk = cone_z(length * 0.42, radius * 0.42, sides.min(5).max(4));
-        geom::translate(&mut tusk, [side * radius * 1.35, -radius * 0.15, length * 0.12]);
-        geom::append(&mut mesh, &tusk);
-    }
-    mesh
+    point_z(length, radius * 0.85, radius * 0.28, sides.max(5))
 }
 
 fn shell_radii(size: &[f32; 3], rear_open: bool) -> [f32; 3] {
     let mut radii = [size[0] * 0.47, size[1] * 0.47, size[2] * 0.47];
     if rear_open {
-        radii[2] *= 0.70;
+        radii[2] *= 0.84;
     }
     radii
 }
@@ -829,7 +1176,7 @@ fn plate_gap(radius: f32) -> f32 {
 }
 
 fn plate_arch(radius: f32) -> f32 {
-    (radius * 0.06).max(0.01)
+    (radius * 0.12).max(0.016)
 }
 
 /// (z, surface y, slot spacing) along the dorsal ridge. Slots do not overlap.
@@ -875,36 +1222,123 @@ fn gem_mesh(radii: [f32; 3], dens: &Dens) -> MeshData {
     mesh
 }
 
-fn cone_z(length: f32, radius: f32, sides: u32) -> MeshData {
-    let mut mesh = MeshData::new();
-    geom::cone(&mut mesh, length.max(0.04), radius.max(0.01), sides.max(3), WHITE);
+/// Faceted frustum along +Z. The tip stays blunt so it is not a cone.
+fn point_z(length: f32, r0: f32, r1: f32, sides: u32) -> MeshData {
+    let mut mesh = segment_mesh(length, r0, r1.max(r0 * 0.22), sides);
     geom::rotate_x(&mut mesh, -std::f32::consts::FRAC_PI_2);
     mesh
 }
 
-fn cone_up(length: f32, radius: f32, sides: u32) -> MeshData {
-    let mut mesh = MeshData::new();
-    geom::cone(&mut mesh, length.max(0.04), radius.max(0.01), sides.max(3), WHITE);
+/// Faceted frustum along +Y. The tip stays blunt so it is not a cone.
+fn point_up(length: f32, r0: f32, r1: f32, sides: u32) -> MeshData {
+    let mut mesh = segment_mesh(length, r0, r1.max(r0 * 0.22), sides);
     geom::rotate_x(&mut mesh, std::f32::consts::PI);
     mesh
 }
 
-fn capsule_z(length: f32, radius: f32, dens: &Dens) -> MeshData {
+/// Wide crescent. Local -Y is the reach; +Z is the curve. Cross-section is a
+/// tapering diamond, not a box or a stick.
+fn curved_blade(length: f32, width: f32, thick: f32) -> MeshData {
+    let steps = 5u32;
     let mut mesh = MeshData::new();
-    geom::limb(&mut mesh, length, radius, radius * 0.85, dens.sides.max(4), WHITE);
-    geom::rotate_x(&mut mesh, -std::f32::consts::FRAC_PI_2);
+    let mut rings = Vec::with_capacity(steps as usize + 1);
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let ang = 0.2 + t * 1.35;
+        let y = -length * ang.sin() / 1.35;
+        let z = length * (ang - 0.2).sin() * 0.62;
+        let w = width * (1.0 - t * 0.7).max(0.28);
+        let th = thick * (1.0 - t * 0.25).max(thick * 0.45);
+        rings.push([
+            [0.0, y, z + th],
+            [w, y, z + th * 0.12],
+            [0.0, y, z - th * 0.55],
+            [-w, y, z + th * 0.12],
+        ]);
+    }
+    for i in 0..steps as usize {
+        let a = rings[i];
+        let b = rings[i + 1];
+        for k in 0..4 {
+            let n = (k + 1) % 4;
+            geom::add_quad(&mut mesh, a[k], a[n], b[n], b[k], WHITE);
+        }
+    }
+    let last = rings.len() - 1;
+    geom::add_quad(&mut mesh, rings[0][0], rings[0][1], rings[0][2], rings[0][3], WHITE);
+    geom::add_quad(&mut mesh, rings[last][0], rings[last][3], rings[last][2], rings[last][1], WHITE);
     mesh
+}
+
+/// One fissure: a zigzag of thin ribbons along a plate seam, plus a short branch.
+fn jagged_crack(mesh: &mut MeshData, radii: &[f32; 3], side: f32, seam_z: f32, n: usize) {
+    let steps = 5;
+    let mut pts = Vec::with_capacity(steps + 1);
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let x = side * radii[0] * (0.06 + t * 0.7);
+        let zig = if i % 2 == 0 { -1.0 } else { 1.0 };
+        let z = seam_z + zig * radii[2] * 0.045 + side * (n as f32 - 2.0) * radii[2] * 0.012;
+        let y = shell_surface_y(radii, x, z) + plate_gap(radii[1]) + plate_arch(radii[1]) + 0.02;
+        pts.push([x, y, z]);
+    }
+    let half = (radii[1] * 0.07).max(0.03);
+    for w in pts.windows(2) {
+        ribbon(mesh, w[0], w[1], half);
+    }
+    let mid = pts[3];
+    let branch = [
+        mid[0] + side * radii[0] * 0.16,
+        mid[1] + 0.01,
+        mid[2] + radii[2] * 0.1 * if n % 2 == 0 { 1.0 } else { -1.0 },
+    ];
+    let branch_y = shell_surface_y(radii, branch[0], branch[2]) + plate_gap(radii[1]) + 0.02;
+    ribbon(mesh, mid, [branch[0], branch_y, branch[2]], half * 0.8);
+}
+
+fn ribbon(mesh: &mut MeshData, a: [f32; 3], b: [f32; 3], half_w: f32) {
+    let dx = b[0] - a[0];
+    let dz = b[2] - a[2];
+    let len = (dx * dx + dz * dz).sqrt().max(1e-4);
+    let px = -dz / len * half_w;
+    let pz = dx / len * half_w;
+    let lift = half_w * 0.55;
+    geom::add_quad(
+        mesh,
+        [a[0] - px, a[1] + lift, a[2] - pz],
+        [a[0] + px, a[1] + lift, a[2] + pz],
+        [b[0] + px, b[1] + lift, b[2] + pz],
+        [b[0] - px, b[1] + lift, b[2] - pz],
+        WHITE,
+    );
+    // A low fin so the fissure reads from the three-quarter camera, not only from above.
+    let fin = half_w * 2.4;
+    geom::add_quad(
+        mesh,
+        [a[0], a[1], a[2]],
+        [a[0], a[1] + fin, a[2]],
+        [b[0], b[1] + fin, b[2]],
+        [b[0], b[1], b[2]],
+        WHITE,
+    );
+}
+
+fn shell_surface_y(radii: &[f32; 3], x: f32, z: f32) -> f32 {
+    let nx = x / radii[0];
+    let nz = z / radii[2];
+    let r2 = nx * nx + nz * nz;
+    let (x, z) = if r2 > 0.8 {
+        let s = (0.8_f32).sqrt() / r2.sqrt();
+        (x * s, z * s)
+    } else {
+        (x, z)
+    };
+    ellipse_y(radii, x, z)
 }
 
 fn segment_mesh(length: f32, r0: f32, r1: f32, sides: u32) -> MeshData {
     let mut mesh = MeshData::new();
     geom::limb(&mut mesh, length.max(0.04), r0.max(0.01), r1.max(0.008), sides.max(3), WHITE);
-    mesh
-}
-
-fn box_origin(size: &[f32; 3]) -> MeshData {
-    let mut mesh = MeshData::new();
-    geom::box_mesh(&mut mesh, [0.0, 0.0, 0.0], *size, WHITE);
     mesh
 }
 
@@ -953,85 +1387,26 @@ impl Dens {
     }
 }
 
-fn dens_for(id: &str, lod: bool) -> Dens {
-    if lod {
-        return Dens {
-            slices: 4,
-            stacks: 2,
-            plates: 0,
-            nu: 1,
-            nv: 1,
-            sides: 4,
-            segs: 1,
-            spines: 0,
-            extra_plates: 0,
-        };
-    }
-    match id {
-        "swarmer" => Dens {
-            slices: 5,
-            stacks: 3,
-            plates: 3,
-            nu: 2,
-            nv: 2,
-            sides: 4,
-            segs: 2,
-            spines: 0,
-            extra_plates: 0,
-        },
-        "spitter" => Dens {
-            slices: 12,
-            stacks: 7,
-            plates: 8,
-            nu: 4,
-            nv: 2,
-            sides: 8,
-            segs: 2,
-            spines: 0,
-            extra_plates: 0,
-        },
-        "brute" => Dens {
-            slices: 16,
-            stacks: 10,
-            plates: 10,
-            nu: 4,
-            nv: 3,
-            sides: 9,
-            segs: 2,
-            spines: 4,
-            extra_plates: 0,
-        },
-        "brood_mother" => Dens {
-            slices: 8,
-            stacks: 5,
-            plates: 5,
-            nu: 3,
-            nv: 2,
-            sides: 5,
-            segs: 2,
-            spines: 0,
-            extra_plates: 0,
-        },
-        _ => Dens {
-            slices: 8,
-            stacks: 6,
-            plates: 4,
-            nu: 3,
-            nv: 2,
-            sides: 6,
-            segs: 2,
-            spines: 0,
-            extra_plates: 0,
-        },
-    }
+fn dens_of(src: &VDens) -> Result<Dens, String> {
+    Ok(Dens {
+        slices: src.slices,
+        stacks: src.stacks,
+        plates: src.plates,
+        nu: src.nu,
+        nv: src.nv,
+        sides: src.sides,
+        segs: src.segs,
+        spines: src.spines,
+        extra_plates: 0,
+    })
 }
 
-fn size3(spec: &VPart) -> [f32; 3] {
+fn size3(id: &str, spec: &VPart) -> Result<[f32; 3], String> {
     match spec.size.as_slice() {
-        [x, y, z, ..] => [*x, *y, *z],
-        [r, h] => [*r * 2.0, *h, *r * 2.0],
-        [r] => [*r, *r, *r],
-        _ => [0.2, 0.2, 0.2],
+        [x, y, z, ..] => Ok([*x, *y, *z]),
+        [r, h] => Ok([*r * 2.0, *h, *r * 2.0]),
+        [r] => Ok([*r, *r, *r]),
+        _ => Err(format!("{id} {} is missing size", spec.name)),
     }
 }
 
@@ -1043,37 +1418,54 @@ enum GateKind {
 }
 
 #[derive(Deserialize)]
-struct Book {
-    swarmer: Row,
-    spitter: Row,
-    brute: Row,
-    brood_mother: Row,
-    hive_tyrant: Row,
-}
-
-impl Book {
-    fn row(&self, id: &str) -> &Row {
-        match id {
-            "swarmer" => &self.swarmer,
-            "spitter" => &self.spitter,
-            "brute" => &self.brute,
-            "brood_mother" => &self.brood_mother,
-            _ => &self.hive_tyrant,
-        }
-    }
-}
-
-#[derive(Deserialize)]
 struct Row {
     visual: VVisual,
 }
 
 #[derive(Deserialize)]
+struct VCamera {
+    dist_mul: f32,
+    dist_add: f32,
+    eye_x: f32,
+    eye_y: f32,
+    eye_y_add: f32,
+    eye_z: f32,
+    look_y: f32,
+    look_z: f32,
+    fov: f32,
+}
+
+#[derive(Deserialize)]
+struct VCameraOpen {
+    eye_x: f32,
+    eye_y: f32,
+    eye_z: f32,
+    look_y: f32,
+    look_z: f32,
+    fov: f32,
+}
+
+#[derive(Deserialize)]
+struct VDens {
+    slices: u32,
+    stacks: u32,
+    plates: u32,
+    nu: u32,
+    nv: u32,
+    sides: u32,
+    segs: u32,
+    spines: u32,
+}
+
+#[derive(Deserialize)]
 struct VVisual {
     height: f32,
-    #[serde(default)]
     lod_distance: f32,
+    camera: VCamera,
     #[serde(default)]
+    camera_open: Option<VCameraOpen>,
+    density: VDens,
+    lod: VDens,
     parts: Vec<VPart>,
     anim: VAnim,
 }
@@ -1081,6 +1473,8 @@ struct VVisual {
 #[derive(Deserialize)]
 struct VPart {
     name: String,
+    #[serde(default)]
+    part: String,
     #[serde(default)]
     shape: String,
     #[serde(default)]
@@ -1106,8 +1500,6 @@ struct VPart {
     #[serde(default)]
     phase_max: Option<u32>,
     #[serde(default)]
-    chain: bool,
-    #[serde(default)]
     curl_deg: f32,
     #[serde(default)]
     base_pitch: f32,
@@ -1122,11 +1514,67 @@ struct VPart {
     #[serde(default)]
     segment_cap: u32,
     #[serde(default)]
-    at: Option<String>,
+    sway_rate: f32,
+    #[serde(default)]
+    sway_spread: f32,
+    #[serde(default)]
+    sway_amp: f32,
     #[serde(default)]
     pulse_phase: Option<u32>,
     #[serde(default)]
-    grows_into_pod_on: Option<String>,
+    rear_open: Option<bool>,
+    #[serde(default)]
+    point: Option<String>,
+    #[serde(default)]
+    fit: Option<f32>,
+    #[serde(default)]
+    yaw: Option<f32>,
+    #[serde(default)]
+    pitch: Option<f32>,
+    #[serde(default)]
+    aim: Option<Vec<f32>>,
+    #[serde(default)]
+    seg: Option<f32>,
+    #[serde(default)]
+    rad: Option<f32>,
+    #[serde(default)]
+    taper: Option<f32>,
+    #[serde(default)]
+    blade: Option<f32>,
+    #[serde(default)]
+    blade_euler: Option<Vec<f32>>,
+    #[serde(default)]
+    blade_r: Option<Vec<f32>>,
+    #[serde(default)]
+    swing_hz: Option<f32>,
+    #[serde(default)]
+    swing_amp: Option<f32>,
+    #[serde(default)]
+    hip: Option<f32>,
+    #[serde(default)]
+    femur: Option<f32>,
+    #[serde(default)]
+    femur_lod: Option<f32>,
+    #[serde(default)]
+    tibia: Option<f32>,
+    #[serde(default)]
+    foot: Option<f32>,
+    #[serde(default)]
+    ring_phase: Option<f32>,
+    #[serde(default)]
+    sink: Option<f32>,
+    #[serde(default)]
+    ny_floor: Option<f32>,
+    #[serde(default)]
+    ring_turn: Option<f32>,
+    #[serde(default)]
+    grown_scale: Option<f32>,
+    #[serde(default)]
+    grown_glow: Option<f32>,
+    #[serde(default)]
+    spread: Option<Vec<f32>>,
+    #[serde(default)]
+    crown_pitch: Option<f32>,
 }
 
 impl VPart {
@@ -1171,6 +1619,35 @@ struct VAnim {
     sac_breathe: [f32; 2],
     #[serde(default)]
     frenzy_speed: f32,
+}
+
+#[cfg(test)]
+mod chain_errors {
+    use super::*;
+
+    #[test]
+    fn tail_missing_segment_cap_is_an_error() {
+        let mut text = include_str!("../../../content/bugs.toml").to_string();
+        text = text.replacen("segment_cap=12", "segment_cap=0", 1);
+        let rows = rows_with_visual(&text).expect("mutated bugs.toml");
+        let row = rows.iter().find(|(id, _)| id == "hive_tyrant").expect("hive");
+        let err = sculpt("hive_tyrant", &row.1).expect_err("missing cap");
+        assert!(err.contains("segment_cap"), "{err}");
+    }
+
+    #[test]
+    fn cannon_missing_tail_length_is_an_error() {
+        let mut text = include_str!("../../../content/bugs.toml").to_string();
+        text = text.replacen(
+            "{ name=\"tail\",   part=\"tail\",    shape=\"capsule\", size=[0.4,1.0]",
+            "{ name=\"tail\",   part=\"tail\",    shape=\"capsule\", size=[0.4]",
+            1,
+        );
+        let rows = rows_with_visual(&text).expect("mutated bugs.toml");
+        let row = rows.iter().find(|(id, _)| id == "hive_tyrant").expect("hive");
+        let err = sculpt("hive_tyrant", &row.1).expect_err("missing length");
+        assert!(err.contains("length"), "{err}");
+    }
 }
 
 pub fn flat_shaded(mesh: &MeshData) -> bool {

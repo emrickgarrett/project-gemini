@@ -65,10 +65,6 @@ pub fn limb(mesh: &mut MeshData, length: f32, r0: f32, r1: f32, sides: u32, colo
     fan(mesh, [0.0, -length, 0.0], &bot, color, false);
 }
 
-pub fn cone(mesh: &mut MeshData, length: f32, radius: f32, sides: u32, color: [f32; 4]) {
-    limb(mesh, length, radius, radius * 0.08, sides, color);
-}
-
 /// Faceted sphere. Flat faces, not a smooth icosphere.
 pub fn gem(mesh: &mut MeshData, center: [f32; 3], radii: [f32; 3], slices: u32, stacks: u32, color: [f32; 4]) {
     let slices = slices.max(3);
@@ -118,10 +114,12 @@ pub fn plate(
         for iv in 0..=nv {
             let v = iv as f32 / nv as f32;
             let along = (u - 0.5) * length;
-            let across = (v - 0.5) * width;
+            // Narrow toward the ends so a plate reads as a tapered scale, not a rectangle.
+            let taper = 1.0 - (u * 2.0 - 1.0).abs() * 0.38;
+            let across = (v - 0.5) * width * taper;
             let dome = (1.0 - (u * 2.0 - 1.0).powi(2)) * (1.0 - (v * 2.0 - 1.0).powi(2));
             let bevel = if iu == 0 || iv == 0 || iu == nu || iv == nv {
-                arch * 0.35
+                arch * 0.28
             } else {
                 arch
             };

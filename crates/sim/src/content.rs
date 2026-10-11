@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use crate::math::{Aabb, Vec3};
-use crate::music::{MusicDirectorCfg, TrackDef, Transitions};
+use crate::music::{MusicDirectorCfg, MusicRotation, TrackDef, Transitions};
 
 #[derive(Clone, Debug)]
 pub struct Content {
@@ -28,6 +28,7 @@ pub struct Content {
     pub music: MusicFile,
     pub audio: AudioTable,
     pub bugs: crate::bugs::BugBook,
+    pub crate_reveal: CrateReveal,
 }
 
 pub struct Sources<'a> {
@@ -49,6 +50,7 @@ pub struct Sources<'a> {
     pub music: &'a str,
     pub audio: &'a str,
     pub bugs: &'a str,
+    pub crate_reveal: &'a str,
 }
 
 pub fn embedded_sources() -> Sources<'static> {
@@ -69,8 +71,9 @@ pub fn embedded_sources() -> Sources<'static> {
         combat: include_str!("../../../content/combat.toml"),
         palette: include_str!("../../../content/palette.toml"),
         music: include_str!("../../../content/music.toml"),
-        audio: include_str!("../../../content/audio.toml"),
+        audio: include_str!("../../../content/audio_mix.toml"),
         bugs: include_str!("../../../content/bugs.toml"),
+        crate_reveal: include_str!("../../../content/crate_reveal.toml"),
     }
 }
 
@@ -99,6 +102,7 @@ impl Content {
             src.music,
             src.audio,
             src.bugs,
+            src.crate_reveal,
         ]);
         let mut bugs: crate::bugs::BugBook = parse("bugs.toml", src.bugs)?;
         crate::bugs::bind_weak_anchors(&mut bugs).map_err(|err| format!("bugs.toml: {err}"))?;
@@ -112,16 +116,25 @@ impl Content {
             currency: parse("currency.toml", src.currency)?,
             banners: parse("banners.toml", src.banners)?,
             duplicate: parse("duplicate_ranks.toml", src.duplicate_ranks)?,
-            bosses: parse::<BossFile>("bosses.toml", src.bosses)?.boss,
+            bosses: load_bosses(src.bosses).map_err(|err| format!("bosses.toml: {err}"))?,
             weapons: parse("weapons.toml", src.weapons)?,
             hero: parse("hero.toml", src.hero)?,
             arena: parse("arena.toml", src.arena)?,
             presentation: parse("presentation.toml", src.presentation)?,
             combat: parse("combat.toml", src.combat)?,
             palette: parse("palette.toml", src.palette)?,
-            music: parse("music.toml", src.music)?,
-            audio: parse("audio.toml", src.audio)?,
+            music: {
+                let loaded = crate::music::load_music(src.music).map_err(|err| format!("music.toml: {err}"))?;
+                MusicFile {
+                    director: loaded.director,
+                    track: loaded.track,
+                    transitions: loaded.transitions,
+                    rotation: loaded.rotation,
+                }
+            },
+            audio: crate::audio_mix::load_mix(src.audio).map_err(|err| format!("audio_mix.toml: {err}"))?,
             bugs,
+            crate_reveal: parse("crate_reveal.toml", src.crate_reveal)?,
         })
     }
 
@@ -181,7 +194,45 @@ impl Content {
         self.music
             .track
             .values()
-            .find(|t| t.boss_id.as_deref() == Some(boss_id))
+            .find(|t| t.role == "boss" && t.boss_id.as_deref() == Some(boss_id))
+    }
+
+    pub fn boss_track_id(&self, boss_id: &str) -> Option<&str> {
+        self.music
+            .track
+            .iter()
+            .find(|(_, t)| t.role == "boss" && t.boss_id.as_deref() == Some(boss_id))
+            .map(|(id, _)| id.as_str())
+    }
+
+    pub fn phase_track_id(&self, boss_id: &str, phase: u8) -> Option<&str> {
+        let want = format!("phase{}", phase + 1);
+        self.music.track.iter().find(|(id, t)| {
+            t.boss_id.as_deref() == Some(boss_id) && (t.role == "boss" || t.role == "phase") && id.ends_with(&want)
+        }).map(|(id, _)| id.as_str())
+    }
+
+    pub fn enrage_track_id(&self, boss_id: &str) -> Option<&str> {
+        self.music
+            .track
+            .iter()
+            .find(|(_, t)| t.role == "enrage" && t.boss_id.as_deref() == Some(boss_id))
+            .map(|(id, _)| id.as_str())
+    }
+
+    /// Combat loop for this wave.
+    /// `slice_waves_1_5` covers waves 1–5 and `slice_waves_6_10` covers the rest of a slice.
+    /// Endless rotates by `endless_rotate_every_waves`. Load rejects an empty rotation.
+    pub fn combat_loop_id(&self, wave: u32, endless: bool) -> &str {
+        let rot = &self.music.rotation;
+        if endless {
+            let index = (wave.saturating_sub(1) / rot.endless_every) as usize;
+            rot.loops[index % rot.loops.len()].as_str()
+        } else if wave <= 5 {
+            rot.slice_early.as_str()
+        } else {
+            rot.slice_late.as_str()
+        }
     }
 
     pub fn sfx(&self, id: &str) -> Option<&SfxDef> {
@@ -189,11 +240,12 @@ impl Content {
     }
 
     pub fn pitch_range(&self, id: &str) -> Option<(f32, f32)> {
-        self.audio
-            .pitch
-            .iter()
-            .find(|p| p.id == id)
-            .map(|p| (p.min, p.max))
+        let semi = self.sfx(id)?.pitch_semitones;
+        if semi <= 0.0 {
+            return None;
+        }
+        let ratio = 2f32.powf(semi / 12.0);
+        Some((1.0 / ratio, ratio))
     }
 
     pub fn bug(&self, kind: EnemyKind) -> &crate::bugs::BugRow {
@@ -498,12 +550,26 @@ pub struct RankRow {
     pub unlock: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-struct BossFile {
-    boss: Vec<BossDef>,
+#[derive(Clone, Debug)]
+pub struct BossPhase {
+    pub move_speed: f32,
+    pub core_damage_mult: f32,
+    pub tail_hp: f32,
+    pub tail_weakpoint_mult: f32,
+    pub acid_volley_interval: f32,
+    pub acid_telegraph: f32,
+    pub acid_damage: f32,
+    pub scythe_range: f32,
+    pub scythe_damage: f32,
+    pub scythe_interval: f32,
+    pub reinforce_interval: f32,
+    pub reinforce_telegraph: f32,
+    pub reinforce_budget_fraction: f32,
+    pub reinforce_reserve: bool,
+    pub reinforce_queue_on_cap: bool,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct BossDef {
     pub id: String,
     pub hp: f32,
@@ -514,16 +580,243 @@ pub struct BossDef {
     pub spawn_count: u32,
     pub spawn_interval: f32,
     pub weakpoint_mult: f32,
-    #[serde(default)]
     pub pod_count: u32,
-    #[serde(default)]
     pub pod_hp: f32,
-    #[serde(default)]
     pub phase_thresholds: Vec<f32>,
-    #[serde(default)]
-    pub phase_speed_mult: Vec<f32>,
-    #[serde(default)]
-    pub phase_dmg_mult: Vec<f32>,
+    pub hatch_telegraph: f32,
+    pub hatch_sfx_peak_offset: f32,
+    pub swarmers_per_pod: u32,
+    pub swarmer_player_scale: f32,
+    pub enrage_below_hp: f32,
+    pub enrage_hatch_interval: f32,
+    pub reserve_on_telegraph: bool,
+    pub queue_on_cap: bool,
+    pub transition_invuln: f32,
+    pub phases: Vec<BossPhase>,
+    pub intro_sfx: String,
+    pub death_sfx: String,
+    pub fizzle_sfx: String,
+    pub charge_sfx: String,
+    pub hatch_sfx: String,
+    pub acid_sfx: String,
+    pub scythe_sfx: String,
+    pub reinforce_kind: String,
+    pub fan_step: f32,
+    pub spawn_radius: f32,
+}
+
+impl BossDef {
+    pub fn phase(&self, index: u8) -> Option<&BossPhase> {
+        self.phases.get(index as usize)
+    }
+}
+
+fn load_bosses(text: &str) -> Result<Vec<BossDef>, String> {
+    #[derive(Deserialize)]
+    struct File {
+        brood_mother: BroodSrc,
+        hive_tyrant: HiveSrc,
+    }
+    #[derive(Deserialize)]
+    struct BroodSrc {
+        hp: f32,
+        weakpoint_mult: f32,
+        move_speed: f32,
+        dmg: f32,
+        range: f32,
+        pod_count: u32,
+        pod_hp: f32,
+        hatch_interval: f32,
+        hatch_telegraph: f32,
+        hatch_sfx_peak_offset: f32,
+        swarmers_per_pod: u32,
+        swarmer_player_scale: f32,
+        enrage_below_hp: f32,
+        enrage_hatch_interval: f32,
+        reserve_on_telegraph: bool,
+        queue_on_cap: bool,
+        spawn_kind: String,
+        intro_sfx: String,
+        death_sfx: String,
+        fizzle_sfx: String,
+        charge_sfx: String,
+        hatch_sfx: String,
+        hatch_fan_step: f32,
+        spawn_radius: f32,
+    }
+    #[derive(Deserialize)]
+    struct HiveSrc {
+        hp: f32,
+        weakpoint_mult: f32,
+        transition_invuln: f32,
+        phase_thresholds: Vec<f32>,
+        spawn_kind: String,
+        intro_sfx: String,
+        death_sfx: String,
+        fizzle_sfx: String,
+        acid_sfx: String,
+        scythe_sfx: String,
+        reinforce_kind: String,
+        hatch_fan_step: f32,
+        spawn_radius: f32,
+        phase1: PhaseSrc,
+        phase2: PhaseSrc,
+        phase3: PhaseSrc,
+    }
+    #[derive(Deserialize, Default)]
+    struct PhaseSrc {
+        #[serde(default)]
+        move_speed: f32,
+        #[serde(default)]
+        core_damage_mult: f32,
+        #[serde(default)]
+        tail_hp: f32,
+        #[serde(default)]
+        tail_weakpoint_mult: f32,
+        #[serde(default)]
+        acid_volley_interval: f32,
+        #[serde(default)]
+        acid_telegraph: f32,
+        #[serde(default)]
+        acid_damage: f32,
+        #[serde(default)]
+        scythe_range: f32,
+        #[serde(default)]
+        scythe_damage: f32,
+        #[serde(default)]
+        scythe_interval: f32,
+        #[serde(default)]
+        reinforce_interval: f32,
+        #[serde(default)]
+        reinforce_telegraph: f32,
+        #[serde(default)]
+        reinforce_budget_fraction: f32,
+        #[serde(default)]
+        reinforce_reserve_on_telegraph: bool,
+        #[serde(default)]
+        reinforce_queue_on_cap: bool,
+    }
+    let file: File = toml::from_str(text).map_err(|err| err.to_string())?;
+    let brood = file.brood_mother;
+    let hive = file.hive_tyrant;
+    if EnemyKind::from_name(&brood.spawn_kind).is_none() {
+        return Err(format!("brood_mother spawn_kind \"{}\" is unknown", brood.spawn_kind));
+    }
+    if EnemyKind::from_name(&hive.spawn_kind).is_none() {
+        return Err(format!("hive_tyrant spawn_kind \"{}\" is unknown", hive.spawn_kind));
+    }
+    if EnemyKind::from_name(&hive.reinforce_kind).is_none() {
+        return Err(format!("hive_tyrant reinforce_kind \"{}\" is unknown", hive.reinforce_kind));
+    }
+    if brood.hatch_fan_step <= 0.0 {
+        return Err("brood_mother hatch_fan_step must be > 0".into());
+    }
+    if brood.spawn_radius <= 0.0 {
+        return Err("brood_mother spawn_radius must be > 0".into());
+    }
+    if hive.hatch_fan_step <= 0.0 {
+        return Err("hive_tyrant hatch_fan_step must be > 0".into());
+    }
+    if hive.spawn_radius <= 0.0 {
+        return Err("hive_tyrant spawn_radius must be > 0".into());
+    }
+    let phase = |src: PhaseSrc| BossPhase {
+        move_speed: src.move_speed,
+        core_damage_mult: src.core_damage_mult,
+        tail_hp: src.tail_hp,
+        tail_weakpoint_mult: src.tail_weakpoint_mult,
+        acid_volley_interval: src.acid_volley_interval,
+        acid_telegraph: src.acid_telegraph,
+        acid_damage: src.acid_damage,
+        scythe_range: src.scythe_range,
+        scythe_damage: src.scythe_damage,
+        scythe_interval: src.scythe_interval,
+        reinforce_interval: src.reinforce_interval,
+        reinforce_telegraph: src.reinforce_telegraph,
+        reinforce_budget_fraction: src.reinforce_budget_fraction,
+        reinforce_reserve: src.reinforce_reserve_on_telegraph,
+        reinforce_queue_on_cap: src.reinforce_queue_on_cap,
+    };
+    let phases = vec![phase(hive.phase1), phase(hive.phase2), phase(hive.phase3)];
+    if phases[0].tail_weakpoint_mult <= 0.0 {
+        return Err("hive_tyrant.phase1.tail_weakpoint_mult must be > 0".into());
+    }
+    for (i, row) in phases.iter().enumerate() {
+        if row.core_damage_mult <= 0.0 {
+            return Err(format!("hive_tyrant phase {} core_damage_mult must be > 0", i + 1));
+        }
+    }
+    let first = &phases[0];
+    Ok(vec![
+        BossDef {
+            id: "brood_mother".into(),
+            hp: brood.hp,
+            speed: brood.move_speed,
+            dmg: brood.dmg,
+            range: brood.range,
+            spawn_kind: brood.spawn_kind,
+            spawn_count: brood.swarmers_per_pod,
+            spawn_interval: brood.hatch_interval,
+            weakpoint_mult: brood.weakpoint_mult,
+            pod_count: brood.pod_count,
+            pod_hp: brood.pod_hp,
+            phase_thresholds: Vec::new(),
+            hatch_telegraph: brood.hatch_telegraph,
+            hatch_sfx_peak_offset: brood.hatch_sfx_peak_offset,
+            swarmers_per_pod: brood.swarmers_per_pod,
+            swarmer_player_scale: brood.swarmer_player_scale,
+            enrage_below_hp: brood.enrage_below_hp,
+            enrage_hatch_interval: brood.enrage_hatch_interval,
+            reserve_on_telegraph: brood.reserve_on_telegraph,
+            queue_on_cap: brood.queue_on_cap,
+            transition_invuln: 0.0,
+            phases: Vec::new(),
+            intro_sfx: brood.intro_sfx,
+            death_sfx: brood.death_sfx,
+            fizzle_sfx: brood.fizzle_sfx,
+            charge_sfx: brood.charge_sfx,
+            hatch_sfx: brood.hatch_sfx,
+            acid_sfx: String::new(),
+            scythe_sfx: String::new(),
+            reinforce_kind: String::new(),
+            fan_step: brood.hatch_fan_step,
+            spawn_radius: brood.spawn_radius,
+        },
+        BossDef {
+            id: "hive_tyrant".into(),
+            hp: hive.hp,
+            speed: first.move_speed,
+            dmg: first.scythe_damage,
+            range: first.scythe_range,
+            spawn_kind: hive.spawn_kind,
+            spawn_count: 0,
+            spawn_interval: 0.0,
+            weakpoint_mult: hive.weakpoint_mult,
+            pod_count: 0,
+            pod_hp: 0.0,
+            phase_thresholds: hive.phase_thresholds,
+            hatch_telegraph: 0.0,
+            hatch_sfx_peak_offset: 0.0,
+            swarmers_per_pod: 0,
+            swarmer_player_scale: 0.0,
+            enrage_below_hp: 0.0,
+            enrage_hatch_interval: 0.0,
+            reserve_on_telegraph: false,
+            queue_on_cap: false,
+            transition_invuln: hive.transition_invuln,
+            phases,
+            intro_sfx: hive.intro_sfx,
+            death_sfx: hive.death_sfx,
+            fizzle_sfx: hive.fizzle_sfx,
+            charge_sfx: String::new(),
+            hatch_sfx: String::new(),
+            acid_sfx: hive.acid_sfx,
+            scythe_sfx: hive.scythe_sfx,
+            reinforce_kind: hive.reinforce_kind,
+            fan_step: hive.hatch_fan_step,
+            spawn_radius: hive.spawn_radius,
+        },
+    ])
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -784,6 +1077,7 @@ pub struct PaletteKeys {
     pub brute_amber: String,
     pub brute_cracks: String,
     pub brood_sac: String,
+    pub bud_glow: String,
 }
 
 impl Palette {
@@ -796,6 +1090,7 @@ impl Palette {
             "brute_amber" => self.keys.brute_amber.as_str(),
             "brute_cracks" => self.keys.brute_cracks.as_str(),
             "brood_sac" => self.keys.brood_sac.as_str(),
+            "bud_glow" => self.keys.bud_glow.as_str(),
             "hero_teal" | "teal" => self.hero.teal.as_str(),
             "hero_cobalt" | "cobalt" => self.hero.cobalt.as_str(),
             "hero_white" | "white" => self.hero.white.as_str(),
@@ -814,10 +1109,71 @@ impl Palette {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct CrateReveal {
+    pub fakeout_enabled: bool,
+    pub common: CrateTier,
+    pub rare: CrateTier,
+    pub epic: CrateTier,
+    pub legendary: CrateTier,
+    pub multi_pull: CrateMulti,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct CrateTier {
+    pub tease: String,
+    pub sting: String,
+    pub drop: [f32; 2],
+    pub crack: [f32; 2],
+    pub burst: f32,
+    pub rise: [f32; 2],
+    pub card: f32,
+    pub fakeout_allowed: bool,
+    pub fakeout_chance: f32,
+    pub fakeout_window: [f32; 2],
+    #[serde(default)]
+    pub freeze: Option<[f32; 2]>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct CrateMulti {
+    pub pod_interval: f32,
+    pub full_sequence_for: String,
+    pub summary_grid: bool,
+}
+
+impl CrateReveal {
+    pub fn tier(&self, id: &str) -> Option<&CrateTier> {
+        match id {
+            "common" => Some(&self.common),
+            "rare" => Some(&self.rare),
+            "epic" => Some(&self.epic),
+            "legendary" => Some(&self.legendary),
+            _ => None,
+        }
+    }
+
+    pub fn tease(&self, id: &str) -> Option<&str> {
+        self.tier(id).map(|tier| tier.tease.as_str())
+    }
+
+    /// True while `t` is inside the tier's fake-out window and the global switch allows it.
+    pub fn fakeout_open(&self, id: &str, t: f32) -> bool {
+        let Some(tier) = self.tier(id) else {
+            return false;
+        };
+        if !self.fakeout_enabled || !tier.fakeout_allowed || tier.fakeout_chance <= 0.0 {
+            return false;
+        }
+        t >= tier.fakeout_window[0] && t <= tier.fakeout_window[1]
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct MusicFile {
     pub director: MusicDirectorCfg,
     pub track: BTreeMap<String, TrackDef>,
     pub transitions: Transitions,
+    pub rotation: MusicRotation,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -846,6 +1202,13 @@ pub struct SfxDef {
     pub crowd: bool,
     #[serde(default)]
     pub critical: bool,
+    #[serde(default)]
+    pub max_instances: u32,
+    #[serde(default)]
+    pub looped: bool,
+    /// Half-range of the deterministic pitch offset, in semitones.
+    #[serde(default)]
+    pub pitch_semitones: f32,
 }
 
 #[derive(Clone, Debug, Deserialize)]

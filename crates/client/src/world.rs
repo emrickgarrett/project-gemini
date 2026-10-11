@@ -111,14 +111,8 @@ pub fn scene(
             .unwrap_or("brute_amber");
         material(&mut bank, &mut materials, content, shell, false, false);
     }
-    for kind in [
-        EnemyKind::Swarmer,
-        EnemyKind::Spitter,
-        EnemyKind::Brute,
-        EnemyKind::BroodMother,
-        EnemyKind::HiveTyrant,
-    ] {
-        let row = &content.bug(kind).visual;
+    for (_, row) in content.bugs.rows() {
+        let row = &row.visual;
         if !row.bud_color.is_empty() {
             material(&mut bank, &mut materials, content, &row.bud_color, false, false);
         }
@@ -447,7 +441,7 @@ fn spawn_bug(commands: &mut Commands, bank: &Bank, game: &Game, kind: EnemyKind,
     let mut parts = Vec::new();
     for (index, part) in visual.parts.iter().enumerate() {
         let mesh = bank.meshes.get(&part.mesh_key).cloned().unwrap_or_else(|| bank.tracer.clone());
-        let bud = part.name.starts_with("bud");
+        let bud = part.grows;
         let rest_key = if bud && !colors.bud_color.is_empty() {
             colors.bud_color.as_str()
         } else {
@@ -461,7 +455,7 @@ fn spawn_bug(commands: &mut Commands, bank: &Bank, game: &Game, kind: EnemyKind,
         } else {
             rest.clone()
         };
-        let pod_slot = part.name.strip_prefix("pod").and_then(|n| n.parse().ok());
+        let pod_slot = part.pod_slot;
         let entity = commands
             .spawn((
                 Mesh3d(mesh),
@@ -471,7 +465,7 @@ fn spawn_bug(commands: &mut Commands, bank: &Bank, game: &Game, kind: EnemyKind,
                 BugPart {
                     index,
                     emissive: part.emissive,
-                    grows: part.name.starts_with("bud"),
+                    grows: part.grows,
                     pod_slot,
                     rest,
                     hot,

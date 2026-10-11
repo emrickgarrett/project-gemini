@@ -1,0 +1,24 @@
+source_take: tyrant_take2.mp3
+bpm: 140.00
+beats_per_bar: 4
+loop_bars: 16
+sample_rate: 48000
+sample_length: 1316571
+phase1_start_s: 27.8713
+phase1_local_bpm: 140.01
+phase1_stretch: none
+phase1_key: E major (runner-up E minor)
+phase1_raw_rms_db: -19.31
+phase1_onsets_per_s: 7.44
+phase2_start_s: 103.2967
+phase2_local_bpm: 139.99
+phase2_stretch: none
+phase2_key: E major (runner-up E minor)
+phase2_raw_rms_db: -16.80
+phase2_onsets_per_s: 7.44
+phase3_start_s: 144.4340
+phase3_local_bpm: 140.05
+phase3_stretch: none
+phase3_key: E major (runner-up A minor)
+phase3_raw_rms_db: -15.00
+phase3_onsets_per_s: 6.02

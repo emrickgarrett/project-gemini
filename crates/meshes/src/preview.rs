@@ -26,20 +26,42 @@ pub fn still_anim() -> AnimInput {
 pub fn raster_bug(id: &str, width: u32, height: u32) -> Vec<u8> {
     let visual = bug(id);
     let palette = palette_of();
-    draw(visual, &palette, width, height, false)
+    draw(visual, &palette, width, height, false, None)
+}
+
+/// Color still from a visual that authors `camera_open` (the brute's open shell).
+pub fn raster_crown(id: &str, width: u32, height: u32) -> Vec<u8> {
+    let visual = bug(id);
+    let palette = palette_of();
+    let cam = visual
+        .camera_open
+        .unwrap_or_else(|| panic!("{id} has no camera_open"));
+    draw(visual, &palette, width, height, false, Some((cam.eye, cam.target, cam.fov)))
 }
 
 pub fn raster(visual: &EnemyVisual, palette: &dyn Fn(&str) -> [f32; 4], width: u32, height: u32) -> Vec<u8> {
-    draw(visual, palette, width, height, false)
+    draw(visual, palette, width, height, false, None)
 }
 
 /// Color panel on the left, untextured silhouette on the right. Each panel is square.
 pub fn still(id: &str, panel: u32) -> (u32, u32, Vec<u8>) {
+    compose(id, panel, None)
+}
+
+/// Same paired still as `still`, using `camera_open` when the bug authors one.
+/// The brute's open-shell sheet is a three-quarter view with the silhouette.
+pub fn still_open(id: &str, panel: u32) -> (u32, u32, Vec<u8>) {
+    let visual = bug(id);
+    let cam = visual.camera_open.map(|c| (c.eye, c.target, c.fov));
+    compose(id, panel, cam)
+}
+
+fn compose(id: &str, panel: u32, camera: Option<([f32; 3], [f32; 3], f32)>) -> (u32, u32, Vec<u8>) {
     let panel = panel.max(8);
-    let color = raster_bug(id, panel, panel);
     let visual = bug(id);
     let palette = palette_of();
-    let sil = draw(visual, &palette, panel, panel, true);
+    let color = draw(visual, &palette, panel, panel, false, camera);
+    let sil = draw(visual, &palette, panel, panel, true, camera);
     let w = panel * 2;
     let mut out = vec![0u8; (w * panel * 3) as usize];
     for y in 0..panel {
@@ -83,6 +105,7 @@ fn draw(
     width: u32,
     height: u32,
     silhouette: bool,
+    camera: Option<([f32; 3], [f32; 3], f32)>,
 ) -> Vec<u8> {
     let w = width.max(8);
     let h = height.max(8);
@@ -92,7 +115,7 @@ fn draw(
     }
     let mut depth = vec![f32::INFINITY; (w * h) as usize];
     let posed = pose(visual, still_anim(), &[]);
-    let (eye, target, fov_deg) = concept_camera(&visual.id, visual.height);
+    let (eye, target, fov_deg) = camera.unwrap_or((visual.camera.eye, visual.camera.target, visual.camera.fov));
     let forward = norm(sub(target, eye));
     let right = norm(cross(forward, [0.0, 1.0, 0.0]));
     let up = cross(right, forward);
@@ -146,40 +169,6 @@ fn draw(
         }
     }
     color
-}
-
-/// Concept-sheet angles. +Z is the head, -Z is the abdomen / sac.
-fn concept_camera(id: &str, height: f32) -> ([f32; 3], [f32; 3], f32) {
-    let dist = height * 2.35 + 0.9;
-    match id {
-        // Rear three-quarter: the glowing abdomen faces the camera.
-        "swarmer" => (
-            [dist * 0.55, height * 1.05 + 0.12, -dist * 1.15],
-            [0.0, height * 0.42, -0.08],
-            30.0,
-        ),
-        // Side view. Camera on +X puts the head (screen left) opposite the sac.
-        "spitter" => (
-            [dist * 1.35, height * 0.46, dist * 0.02],
-            [0.0, height * 0.46, -0.02],
-            28.0,
-        ),
-        "brute" => (
-            [dist * 0.78, height * 0.58, dist * 0.95],
-            [0.0, height * 0.42, 0.05],
-            30.0,
-        ),
-        "brood_mother" => (
-            [dist * 0.68, height * 0.62, dist * 0.92],
-            [0.0, height * 0.40, 0.1],
-            30.0,
-        ),
-        _ => (
-            [dist * 0.82, height * 0.46, dist * 0.74],
-            [0.0, height * 0.46, 0.05],
-            28.0,
-        ),
-    }
 }
 
 pub fn palette_of() -> impl Fn(&str) -> [f32; 4] {

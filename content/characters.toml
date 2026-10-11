@@ -1,0 +1,60 @@
+# Launch heroes. Original names/designs. Stats are base; duplicate_ranks.toml adds on top.
+# ability cooldowns override controller.toml default_cooldown.
+
+[[hero]]
+id = "vex"
+name = "Vex Calder"
+role = "assault"
+accent = "#F97316"            # orange
+max_hp = 100
+move_speed_mult = 1.0
+weapon = "pulse_rifle"
+ability = { id = "overdrive", cooldown = 20.0, desc = "6s: +35% fire rate, infinite magazine" }
+passive = "kills during overdrive refund 1s of cooldown"
+fantasy = "the all-rounder; easiest to pick up"
+
+[[hero]]
+id = "nyra"
+name = "Nyra Sol"
+role = "support"
+accent = "#7DD3FC"            # ice-white + sky blue
+max_hp = 90
+move_speed_mult = 1.05
+weapon = "arc_caster"        # chaining beam, short range
+ability = { id = "mend_field", cooldown = 24.0, desc = "drop a 6m field for 8s: heals 8 hp/s, revives inside it take 50% less time" }
+passive = "revives teammates 25% faster"
+fantasy = "keeps the squad standing; solo she self-heals in her own field"
+
+[[hero]]
+id = "brakk"
+name = "Brakk"
+role = "heavy"
+accent = "#DC2626"            # crimson
+max_hp = 140
+move_speed_mult = 0.9
+weapon = "scatter_cannon"    # shotgun, big knockback
+ability = { id = "bulwark", cooldown = 18.0, desc = "4s: frontal shield blocks all projectiles, then slams for 150 damage + knockback" }
+passive = "takes 15% less damage from melee"
+fantasy = "holds the chokepoint against brutes"
+
+[[hero]]
+id = "kip"
+name = "Kip Rowan"
+role = "scout"
+accent = "#FDE047"            # yellow
+max_hp = 85
+move_speed_mult = 1.12
+weapon = "rail_needle"       # precision, pierces, slow fire
+ability = { id = "mark", cooldown = 16.0, desc = "ping a 15m area for 6s: marked bugs show weak points through walls and take +30% weak-point damage for the squad" }
+passive = "+50% jetpack fuel"
+fantasy = "spots and deletes spitters and boss weak points"
+
+[weapons]
+pulse_rifle    = { dmg = 14, rps = 9.0, mag = 36, reload = 1.6, spread_deg = 1.2 }
+arc_caster     = { dmg = 22, rps = 6.0, mag = 30, reload = 1.8, range = 14, chain_targets = 2, chain_falloff = 0.5 }
+scatter_cannon = { dmg = 9, pellets = 10, rps = 1.4, mag = 6, reload = 2.4, spread_deg = 7.0, knockback = 6.0 }
+rail_needle    = { dmg = 85, rps = 1.2, mag = 5, reload = 2.0, pierce = 3, spread_deg = 0.0 }
+sidearm        = { dmg = 12, rps = 4.0, mag = 12, reload = 1.2, spread_deg = 1.5 }   # downed / self-revive
+
+[unlock]
+starter = "vex"              # guests start with Vex; others come from crates
