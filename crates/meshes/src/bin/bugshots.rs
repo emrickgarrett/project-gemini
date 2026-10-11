@@ -11,7 +11,7 @@ use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use gemini_meshes::{missing_glow_keys, painted_pixels, raster_bug, still};
+use gemini_meshes::{missing_glow_keys, painted_pixels, raster_bug, raster_crown, still};
 
 fn main() {
     let mut out = "art/bugs".to_string();
@@ -40,6 +40,15 @@ fn main() {
         write_png(&path, w, h, &rgb);
         println!("wrote {path} ({painted} px)");
     }
+    let open = raster_crown("brute", panel, panel);
+    let open_painted = painted_pixels(&open);
+    if open_painted < 800 {
+        eprintln!("brute_open still failed ({open_painted} px)");
+        failed = true;
+    }
+    let open_path = format!("{out}/brute_open.png");
+    write_png(&open_path, panel, panel, &open);
+    println!("wrote {open_path} ({open_painted} px)");
     if failed {
         std::process::exit(1);
     }

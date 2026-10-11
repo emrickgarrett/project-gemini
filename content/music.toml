@@ -1,84 +1,89 @@
-# One clock per track. Do not add a global bpm.
-# combat_01 and boss_brood are the measured stubs; theme_main is the
-# earlier ~144 reading; boss_hive is an unmeasured placeholder with its
-# own clock so it cannot inherit another track's tempo.
+# Adaptive combat layers. Layers fade in/out on the bar line only (each track's own tempo, see [track.*]).
+# intensity = clamp(max(pressure, progress_floor), 0, 1), plus overrides below
+#   pressure       = alive_enemy_cost / (this wave's scaled budget * pressure_full_at)
+#   progress_floor = 0.6 * (wave / 10) in the slice; endless holds at 0.6
+# Uses budget cost (brute counts 8, swarmer 1), so it works at any player count.
+pressure_full_at = 0.4   # 40% of the wave's budget alive at once = full intensity
+progress_floor_cap = 0.6  # 0.6 * (wave / progress_wave); endless holds at the cap
+progress_wave = 10
 
-[director]
-intensity_per_wave = 0.08
-boss_intensity_bonus = 0.22
-intensity_cap = 1.0
-# File length vs bpm*beats*bars. Warn above this; never drive the clock from bpm.
-bpm_warn_ms = 4.0
+[[layer]]
+stem = "drums"
+on_at = 0.0     # always on during a wave
+[[layer]]
+stem = "bass"
+on_at = 0.25
+[[layer]]
+stem = "synth"
+on_at = 0.5
+[[layer]]
+stem = "lead"
+on_at = 0.8
+[overrides]
+breather = ["drums"]          # between waves: drums only
+breather_db = -6.0
+player_downed_any = 0.2        # bump intensity while a teammate is down
+boss_alive = "boss_track"     # boss track replaces combat layers
+hysteresis_bars = 2           # a layer must hold for 2 bars before it changes again
+difficulty_floor = { normal = 0.0, hard = 0.25, heroic = 0.5, legendary = 0.5 }
 
-[director.difficulty_bias]
-normal = 0.0
-hard = 0.18
-heroic = 0.40
-legendary = 0.62
+[rotation]                     # which combat loop set plays; swaps only during the breather
+loops = ["combat_01", "combat_02"]   # combat_02 = take B style, same tempo
+slice_waves_1_5 = "combat_01"
+slice_waves_6_10 = "combat_02"       # falls back to combat_01 until combat_02 exists
+endless_rotate_every_waves = 5
 
-[track.theme_main]
-bpm = 144
-beats_per_bar = 4
-loop_bars = 16
-fade_bars = 1.0
-role = "menu"
-path = "audio/music/theme_main.ogg"
-
+# Per-track tempo. Never share a global tempo.
+# Bar timing comes from each file's sample length / loop_bars; bpm is only a sanity check.
 [track.combat_01]
+path = "music/combat_01/"
+bpm = 141.58
+beats_per_bar = 4
+loop_bars = 16          # 27.123s
+[track.combat_02]
+path = "music/combat_02/"   # take B style, 141.58 (sped up 0.07%)
 bpm = 141.58
 beats_per_bar = 4
 loop_bars = 16
-fade_bars = 1.0
-role = "combat"
-
-[[track.combat_01.layer]]
-id = "drums"
-path = "audio/music/combat_01/drums.ogg"
-min_intensity = 0.0
-
-[[track.combat_01.layer]]
-id = "bass"
-path = "audio/music/combat_01/bass.ogg"
-min_intensity = 0.22
-
-[[track.combat_01.layer]]
-id = "synth"
-path = "audio/music/combat_01/synth.ogg"
-min_intensity = 0.48
-
-[[track.combat_01.layer]]
-id = "lead"
-path = "audio/music/combat_01/lead.ogg"
-min_intensity = 0.72
-
-[track.boss_brood]
+[track.boss_brood_loop]
+path = "music/boss_brood/boss_loop.ogg"
+bpm = 137.67
+beats_per_bar = 4
+loop_bars = 16          # 27.892s
+[track.boss_brood_enrage]
+path = "music/boss_brood/boss_enrage.ogg"   # final; reads E major vs loop E minor (unverified by ear)
 bpm = 137.67
 beats_per_bar = 4
 loop_bars = 16
-fade_bars = 1.0
-role = "boss"
-boss_id = "brood_mother"
-path = "audio/music/boss_brood.ogg"
 
-# Placeholder until the hive cue is timed. Distinct from combat_01 and boss_brood.
-[track.boss_hive]
-bpm = 128
+[track.boss_tyrant]
+path = "music/boss_tyrant/"
+phases = ["phase1.ogg", "phase2.ogg", "phase3.ogg"]   # armored, cracked, frenzy
+bpm = 140.00
+beats_per_bar = 4
+loop_bars = 16          # 1,316,571 samples
+
+
+[director]
+# File length vs bpm*beats*bars. Warn above this; the clock still reads the file.
+bpm_warn_ms = 4.0
+layer_fade_bars = 1.0
+
+[track.theme_main]
+path = "music/theme_main.ogg"
+bpm = 144
 beats_per_bar = 4
 loop_bars = 16
-fade_bars = 1.0
-role = "boss"
-boss_id = "hive_tyrant"
-path = "audio/music/boss_hive.ogg"
+role = "menu"
 
-# combat↔boss is always a hard cut on a cue: boss roar going in, death sting
-# coming out. Never a beat-matched crossfade, even if tempos are later edited
-# to match. Crossfades are only legal between tracks that share a tempo, and
-# only on a bar line of the track that is currently playing.
 [transitions]
-combat_to_boss = "hard_cut"
-combat_to_boss_cue = "boss_roar"
-boss_to_combat = "hard_cut"
-boss_to_combat_cue = "death_sting"
+combat_to_boss = "hard_cut_on_boss_roar"
+boss_to_combat = "hard_cut_on_death_sting"
+boss_loop_to_enrage = "crossfade_on_bar"   # same tempo, possible key clash
+boss_loop_to_enrage_beats = 1             # on the enrage roar; lengthen once heard in game
+tyrant_phase_change = "crossfade_on_roar"   # inside the 2.5s transition_invuln
+tyrant_phase_change_beats = 1
+combat_loop_swap = "breather_only"
 menu_to_combat = "hard_cut"
 menu_to_combat_cue = "match_start"
 combat_to_menu = "hard_cut"

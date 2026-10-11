@@ -1,32 +1,87 @@
-# Boss bodies referenced by waves.toml `boss` ids.
-# HP, brood spawn count, and hive phase splits are the numbers from the
-# waves.toml comments (comments are not data, so they live here).
-
-[[boss]]
-id = "brood_mother"
+# Boss adds (hatches, reinforcements):
+#   - count toward live_enemy_cap (300)
+#   - scale with player count using waves.toml per_extra_player, re-read at each spawn
+#   - cap is checked when the telegraph starts; if full, no glow and the spawn is skipped (never queued)
+#   - reserve_on_telegraph: cap room is held during the warning so ordinary spawns can't take it
+#   - fizzle (dim + green puff + hiss) only if the spawn is cancelled mid-warning (boss dies or phase change)
+# HP scales by waves.toml boss_hp_per_extra_player at spawn, then by difficulty.enemy_hp.
+[brood_mother]
+wave = 5
 hp = 4000
-speed = 2.4
+weakpoint = "gland"
+weakpoint_mult = 2.0
+move_speed = 2.0
 dmg = 28
 range = 3.5
-spawn_kind = "swarmer"
-spawn_count = 6
-spawn_interval = 8.0
-weakpoint_mult = 2.0
-# Pod hitboxes live in bugs.toml. This is their HP; the mesh does not own it.
 pod_count = 6
-pod_hp = 100
+pod_hp = 150                 # shooting a pod before it hatches cancels that hatch
+hatch_interval = 8.0
+hatch_telegraph = 1.5        # pods glow and the squelch starts this long before each hatch
+hatch_sfx_peak_offset = 0.9   # brood_pod_hatch.ogg bursts ~0.95s in; start sound this early so pop lands on hatch
+swarmers_per_pod = 1
+swarmer_player_scale = 0.6  # * (1 + scale*(players-1)), rounded
+enrage_below_hp = 0.3
+enrage_hatch_interval = 5.0  # below 30%: hatch interval drops, pods regrow
+spawns_count_toward_live_cap = true
+queue_on_cap = false
+reserve_on_telegraph = true
+spawn_kind = "swarmer"
+intro_sfx = "brood_roar"
+death_sfx = "brood_death"
+fizzle_sfx = "brood_pod_fizzle"
+charge_sfx = "brood_pod_charge"
+hatch_sfx = "brood_pod_hatch"
 
-[[boss]]
-id = "hive_tyrant"
+[hive_tyrant]
+wave = 10
 hp = 12000
-speed = 3.0
-dmg = 24
-range = 24.0
-spawn_kind = "spitter"
-spawn_count = 2
-spawn_interval = 9.0
+weakpoint = "core"
 weakpoint_mult = 2.0
-# Phase index advances when hp/max drops through these fractions.
+transition_invuln = 2.5      # armor-shard burst + roar; music swaps layers here
 phase_thresholds = [0.66, 0.33]
-phase_speed_mult = [1.0, 1.28, 1.65]
-phase_dmg_mult = [1.0, 1.25, 1.55]
+spawn_kind = "swarmer"
+intro_sfx = "tyrant_roar"
+death_sfx = "tyrant_death"
+fizzle_sfx = "brood_pod_fizzle"
+acid_sfx = "tyrant_tail_charge"
+scythe_sfx = "tyrant_scythe_swipe"
+reinforce_kind = "swarmer"
+
+[hive_tyrant.phase1]         # Armored: ends when tail breaks OR hp <= 66%
+core_damage_mult = 0.25      # core only hittable through cracks
+tail_hp = 1500               # tail damage also counts toward boss hp
+tail_weakpoint_mult = 1.5
+acid_volley_interval = 6.0
+acid_telegraph = 1.0         # tail glows before firing
+acid_damage = 24
+scythe_range = 6.0
+scythe_damage = 35
+scythe_interval = 3.0
+move_speed = 2.5
+
+[hive_tyrant.phase2]         # Cracked: hp 66% to 33%
+core_damage_mult = 2.0
+acid_volley_interval = 7.0
+acid_telegraph = 1.0
+acid_damage = 24
+reinforce_queue_on_cap = false
+reinforce_reserve_on_telegraph = true
+reinforce_interval = 12.0
+reinforce_telegraph = 1.5
+reinforce_budget_fraction = 0.15   # spends 15% of the wave budget
+move_speed = 2.5
+scythe_range = 6.0
+scythe_damage = 35
+scythe_interval = 3.0
+
+[hive_tyrant.phase3]         # Frenzy: below 33%
+core_damage_mult = 2.0
+move_speed = 3.6
+scythe_range = 8.0
+scythe_damage = 35
+scythe_interval = 2.5
+reinforce_interval = 18.0
+reinforce_telegraph = 1.5
+reinforce_budget_fraction = 0.15
+reinforce_reserve_on_telegraph = true
+reinforce_queue_on_cap = false

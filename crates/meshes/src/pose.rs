@@ -109,7 +109,7 @@ pub fn pose(visual: &EnemyVisual, anim: AnimInput, prev_lift: &[f32]) -> Pose {
                 euler[0] += (anim.time * 1.4).sin() * 0.12 * side.signum();
             }
             Joint::Tail { index } => {
-                euler[0] += (anim.time * 1.6 + index as f32 * 0.4).sin() * 0.06;
+                euler[0] += (anim.time * part.sway_rate + index as f32 * part.sway_spread).sin() * part.sway_amp;
             }
             Joint::Static => {
                 if part.emissive && visual.glow_pulse > 0.0 {
@@ -118,7 +118,7 @@ pub fn pose(visual: &EnemyVisual, anim: AnimInput, prev_lift: &[f32]) -> Pose {
             }
         }
         // Dull sac-colored buds swell to pod size and take the pod glow on regrow.
-        if let Some(slot) = bud_slot(&part.name) {
+        if let Some(slot) = part.grow_slot {
             if slot < anim.regrow {
                 scale = [2.4, 2.4, 2.4];
                 glow = 2.2;
@@ -165,10 +165,6 @@ fn gate_open(part: &Part, anim: &AnimInput) -> bool {
         Gate::PhaseMax(max) => anim.phase + 1 <= max,
         Gate::PhaseMin(min) => anim.preview_glow || anim.phase + 1 >= min,
     }
-}
-
-fn bud_slot(name: &str) -> Option<u32> {
-    name.strip_prefix("bud")?.parse().ok()
 }
 
 fn leg_phase(visual: &EnemyVisual, index: u32, time: f32, rate: f32) -> f32 {

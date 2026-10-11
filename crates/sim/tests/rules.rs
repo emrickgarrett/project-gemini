@@ -346,6 +346,21 @@ fn spitter_at(z: f32) -> gemini_sim::sim::Enemy {
         open_left: 0.0,
         just_opened: false,
         pods: Vec::new(),
+        anim_time: 0.0,
+        cycle_left: 0.0,
+        warn_left: 0.0,
+        warn_sfx: false,
+        warn_pod: 255,
+        reserved: 0,
+        enraged: false,
+        invuln: 0.0,
+        tail_hp: 0.0,
+        tail_broken: false,
+        acid_cd: 0.0,
+        acid_warn: 0.0,
+        scythe_cd: 0.0,
+        reinforce_cd: 0.0,
+        reinforce_warn: 0.0,
     }
 }
 
@@ -376,6 +391,21 @@ fn hurt(sim: &mut Sim, content: &Content) {
         open_left: 0.0,
         just_opened: false,
         pods: Vec::new(),
+        anim_time: 0.0,
+        cycle_left: 0.0,
+        warn_left: 0.0,
+        warn_sfx: false,
+        warn_pod: 255,
+        reserved: 0,
+        enraged: false,
+        invuln: 0.0,
+        tail_hp: 0.0,
+        tail_broken: false,
+        acid_cd: 0.0,
+        acid_warn: 0.0,
+        scythe_cd: 0.0,
+        reinforce_cd: 0.0,
+        reinforce_warn: 0.0,
     });
     sim.step(content, PlayerInput::default());
 }
@@ -452,6 +482,21 @@ fn bug(kind: gemini_sim::content::EnemyKind) -> gemini_sim::sim::Enemy {
         open_left: 0.0,
         just_opened: false,
         pods: Vec::new(),
+        anim_time: 0.0,
+        cycle_left: 0.0,
+        warn_left: 0.0,
+        warn_sfx: false,
+        warn_pod: 255,
+        reserved: 0,
+        enraged: false,
+        invuln: 0.0,
+        tail_hp: 0.0,
+        tail_broken: false,
+        acid_cd: 0.0,
+        acid_warn: 0.0,
+        scythe_cd: 0.0,
+        reinforce_cd: 0.0,
+        reinforce_warn: 0.0,
     }
 }
 
@@ -603,7 +648,7 @@ fn weakpoint_hitboxes_overlap_their_glowing_parts() {
     let content = Content::embedded();
     let brood = &content.bug(EnemyKind::BroodMother).visual;
     assert_eq!(brood.bud_color, "brood_sac");
-    assert_eq!(brood.grown_color, "swarmer_glow");
+    assert_eq!(brood.grown_color, "bud_glow");
 
     let mut saw = 0;
     for (bug, row) in content.bugs.rows() {
@@ -660,12 +705,21 @@ fn missing_weakpoint_anchor_fails_content_load() {
         })
     };
 
-    let misspelled = bugs.replacen("name = \"abdomen\"", "name = \"abdomenn\"", 1);
+    let misspelled = bugs.replacen("anchor = \"abdomen\"", "anchor = \"abdomenn\"", 1);
     let err = load(&misspelled).expect_err("a misspelled anchor must fail load");
     assert!(err.contains("abdomenn"), "{err}");
     assert!(err.contains("does not resolve"), "{err}");
 
-    let missing = bugs.replacen("name = \"abdomen\"", "name = \"\"", 1);
+    let missing = bugs.replacen("anchor = \"abdomen\"", "anchor = \"\"", 1);
+    let missing = missing.replacen("name = \"abdomen\"", "name = \"\"", 1);
     let err = load(&missing).expect_err("a weak point with no name must fail load");
     assert!(err.contains("no anchor name"), "{err}");
+
+    let authored = bugs.replacen(
+        "anchor = \"abdomen\", shape = \"sphere\", radius = 0.15",
+        "anchor = \"abdomen\", shape = \"sphere\", radius = 0.15, offset = [0, 0.35, -0.25]",
+        1,
+    );
+    let err = load(&authored).expect_err("an authored weak-point offset must fail load");
+    assert!(err.contains("must not author an offset"), "{err}");
 }

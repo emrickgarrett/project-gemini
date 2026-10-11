@@ -38,6 +38,9 @@ pub struct Music {
     pub loops: Vec<f32>,
     pub entities: Vec<Entity>,
     pub pending: Option<String>,
+    /// One-beat overlap. Outgoing stems ramp down while the new track ramps up.
+    pub fade_left: f32,
+    pub fade_dur: f32,
 }
 
 #[derive(Resource, Default)]
@@ -89,17 +92,15 @@ pub fn play(
             continue;
         }
         let mut speed = 1.0;
-        if voice.id == "shot" {
-            if let Some((min, max)) = game.content.pitch_range("shot") {
-                let h = (fx.tick as u32).wrapping_mul(17).wrapping_add(shot_i.wrapping_mul(13));
-                let t = (h % 1000) as f32 / 1000.0;
-                speed = min + (max - min) * t;
-            }
+        if let Some((min, max)) = game.content.pitch_range(&voice.id) {
+            let h = (fx.tick as u32).wrapping_mul(17).wrapping_add(shot_i.wrapping_mul(13));
+            let t = (h % 1000) as f32 / 1000.0;
+            speed = min + (max - min) * t;
             shot_i += 1;
         }
         let atten = attenuate(&game.content, voice.pos, listener);
         let volume = def.volume * atten;
-        let looping = voice.id == "spitter_charge";
+        let looping = def.looped;
         let settings = if looping {
             PlaybackSettings::LOOP
         } else {
@@ -189,14 +190,25 @@ fn apply_moments(
     sim: &gemini_sim::sim::Sim,
 ) {
     for moment in moments {
+        let wave = sim.director.wave.max(1);
+        let combat = content.combat_loop_id(wave, sim.endless_mode).to_string();
         let (kind, target) = match moment {
-            MusicMoment::MatchStart => (TransitionKind::MenuToCombat, combat_id(content)),
+            MusicMoment::MatchStart => (TransitionKind::MenuToCombat, content.combat_loop_id(1, false).to_string()),
             MusicMoment::MatchEnd => (TransitionKind::CombatToMenu, menu_id(content)),
             MusicMoment::BossIntro { boss_id } => (
                 TransitionKind::CombatToBoss,
-                boss_track_id(content, boss_id).unwrap_or_else(|| combat_id(content)),
+                content.boss_track_id(boss_id).unwrap_or(combat.as_str()).to_string(),
             ),
-            MusicMoment::BossDown { .. } => (TransitionKind::BossToCombat, combat_id(content)),
+            MusicMoment::BossDown { .. } => (TransitionKind::BossToCombat, combat),
+            MusicMoment::LoopSwap { id } => (TransitionKind::LoopSwap, id.clone()),
+            MusicMoment::BossEnrage { boss_id } => (
+                TransitionKind::BossEnrage,
+                content.enrage_track_id(boss_id).unwrap_or(combat.as_str()).to_string(),
+            ),
+            MusicMoment::BossPhase { boss_id, phase } => (
+                TransitionKind::BossPhase,
+                content.phase_track_id(boss_id, *phase).unwrap_or(combat.as_str()).to_string(),
+            ),
         };
         switch_to(commands, assets, content, music, kind, &target, sim);
     }
@@ -232,7 +244,15 @@ fn switch_to(
         SwitchClock::WaitForBar => {
             let _ = sim;
             music.pending = Some(target.to_string());
-            let _ = PlannedSwitch::HardCut { cue: String::new() };
+        }
+        SwitchClock::FadeNow => {
+            let bars = match plan {
+                PlannedSwitch::CrossfadeOnBar { fade_bars, .. } => fade_bars,
+                PlannedSwitch::HardCut { .. } => 0.0,
+            };
+            let clock = FileClock::measure(&from, from_loop);
+            let seconds = clock.bar_seconds() * bars;
+            fade_now(commands, assets, content, music, target, seconds);
         }
     }
 }
@@ -242,6 +262,8 @@ fn start_track(commands: &mut Commands, assets: &AssetServer, content: &Content,
         commands.entity(entity).despawn();
     }
     music.pending = None;
+    music.fade_left = 0.0;
+    music.fade_dur = 0.0;
     let Some(track) = content.track(id) else { return };
     let loops = decoded_loops(content, track);
     let warn = content.music.director.bpm_warn_seconds();
@@ -256,8 +278,7 @@ fn start_track(commands: &mut Commands, assets: &AssetServer, content: &Content,
             );
         }
     }
-    let boss = sim_boss_alive_guess(content, id);
-    let intensity = combat_intensity(&content.music.director, "normal", 1, boss);
+    let intensity = combat_intensity(&content.music.director, "normal", 1, false, 0.0, 1.0, false);
     let paths = stem_paths(track);
     if track.layer.is_empty() {
         music.mixer = None;
@@ -293,16 +314,68 @@ fn start_track(commands: &mut Commands, assets: &AssetServer, content: &Content,
 
 fn advance(game: &Game, music: &mut Music, dt: f32) {
     let Some(track) = game.content.track(&music.track).cloned() else { return };
+    if music.fade_dur > 0.0 {
+        music.fade_left = (music.fade_left - dt).max(0.0);
+    }
     if track.layer.is_empty() {
         return;
     }
-    let boss = game.sim.enemies.iter().any(|e| {
-        e.alive && matches!(e.kind, gemini_sim::content::EnemyKind::BroodMother | gemini_sim::content::EnemyKind::HiveTyrant)
-    });
-    let intensity = combat_intensity(&game.content.music.director, &game.difficulty, game.sim.director.wave, boss);
+    let downed = game.sim.players.first().map(|p| p.downed).unwrap_or(false);
+    let alive_cost: f32 = game
+        .sim
+        .enemies
+        .iter()
+        .filter(|e| e.alive)
+        .map(|e| game.content.enemy(e.kind).cost)
+        .sum();
+    let intensity = combat_intensity(
+        &game.content.music.director,
+        &game.difficulty,
+        game.sim.director.wave,
+        game.sim.endless_mode,
+        alive_cost,
+        game.sim.director.wave_budget,
+        downed,
+    );
+    let breather = match game.sim.phase {
+        gemini_sim::sim::Phase::Breather { .. } => Some((
+            game.content.music.director.breather_stems.as_slice(),
+            db_to_gain(game.content.music.director.breather_db),
+        )),
+        _ => None,
+    };
     if let Some(mixer) = music.mixer.as_mut() {
-        mixer.advance(&track, dt, intensity);
+        mixer.advance(
+            &track,
+            dt,
+            intensity,
+            game.content.music.director.hysteresis_bars,
+            breather,
+        );
+        if music.fade_dur > 0.0 && music.fade_left > 0.0 {
+            let ramp = 1.0 - music.fade_left / music.fade_dur;
+            for voice in &mut mixer.voices {
+                voice.current *= ramp;
+            }
+        }
     }
+}
+
+fn db_to_gain(db: f32) -> f32 {
+    10f32.powf(db / 20.0)
+}
+
+fn fade_now(
+    commands: &mut Commands,
+    assets: &AssetServer,
+    content: &Content,
+    music: &mut Music,
+    target: &str,
+    seconds: f32,
+) {
+    start_track(commands, assets, content, music, target);
+    music.fade_dur = seconds.max(0.0);
+    music.fade_left = music.fade_dur;
 }
 
 pub fn sync_gains(music: Res<Music>, mut stems: Query<(&MusicStem, &mut AudioSink)>) {
@@ -353,16 +426,6 @@ fn stem_name(track: &TrackDef, index: usize) -> String {
         .unwrap_or_else(|| "track".into())
 }
 
-fn combat_id(content: &Content) -> String {
-    content
-        .music
-        .track
-        .iter()
-        .find(|(_, t)| t.role == "combat")
-        .map(|(id, _)| id.clone())
-        .unwrap_or_else(|| "combat_01".into())
-}
-
 fn menu_id(content: &Content) -> String {
     content
         .music
@@ -373,15 +436,6 @@ fn menu_id(content: &Content) -> String {
         .unwrap_or_else(|| "theme_main".into())
 }
 
-fn boss_track_id(content: &Content, boss_id: &str) -> Option<String> {
-    content
-        .music
-        .track
-        .iter()
-        .find(|(_, t)| t.boss_id.as_deref() == Some(boss_id))
-        .map(|(id, _)| id.clone())
-}
-
 fn ogg_seconds(path: &str) -> Option<f32> {
     let bytes: &[u8] = match path {
         "audio/music/theme_main.ogg" => include_bytes!("../../../assets/audio/music/theme_main.ogg"),
@@ -389,8 +443,15 @@ fn ogg_seconds(path: &str) -> Option<f32> {
         "audio/music/combat_01/bass.ogg" => include_bytes!("../../../assets/audio/music/combat_01/bass.ogg"),
         "audio/music/combat_01/synth.ogg" => include_bytes!("../../../assets/audio/music/combat_01/synth.ogg"),
         "audio/music/combat_01/lead.ogg" => include_bytes!("../../../assets/audio/music/combat_01/lead.ogg"),
-        "audio/music/boss_brood.ogg" => include_bytes!("../../../assets/audio/music/boss_brood.ogg"),
-        "audio/music/boss_hive.ogg" => include_bytes!("../../../assets/audio/music/boss_hive.ogg"),
+        "audio/music/combat_02/drums.ogg" => include_bytes!("../../../assets/audio/music/combat_02/drums.ogg"),
+        "audio/music/combat_02/bass.ogg" => include_bytes!("../../../assets/audio/music/combat_02/bass.ogg"),
+        "audio/music/combat_02/synth.ogg" => include_bytes!("../../../assets/audio/music/combat_02/synth.ogg"),
+        "audio/music/combat_02/lead.ogg" => include_bytes!("../../../assets/audio/music/combat_02/lead.ogg"),
+        "audio/music/boss_brood/boss_loop.ogg" => include_bytes!("../../../assets/audio/music/boss_brood/boss_loop.ogg"),
+        "audio/music/boss_brood/boss_enrage.ogg" => include_bytes!("../../../assets/audio/music/boss_brood/boss_enrage.ogg"),
+        "audio/music/boss_tyrant/phase1.ogg" => include_bytes!("../../../assets/audio/music/boss_tyrant/phase1.ogg"),
+        "audio/music/boss_tyrant/phase2.ogg" => include_bytes!("../../../assets/audio/music/boss_tyrant/phase2.ogg"),
+        "audio/music/boss_tyrant/phase3.ogg" => include_bytes!("../../../assets/audio/music/boss_tyrant/phase3.ogg"),
         _ => return None,
     };
     vorbis_seconds(bytes)
@@ -417,10 +478,6 @@ fn owner_of(events: &[SoundEvent], id: &str, pos: SimVec) -> u32 {
         .find(|e| e.id == id && (e.pos.x - pos.x).abs() < 0.05 && (e.pos.z - pos.z).abs() < 0.05)
         .map(|e| e.owner)
         .unwrap_or(0)
-}
-
-fn sim_boss_alive_guess(content: &Content, id: &str) -> bool {
-    content.track(id).and_then(|t| t.boss_id.clone()).is_some()
 }
 
 #[allow(dead_code)]

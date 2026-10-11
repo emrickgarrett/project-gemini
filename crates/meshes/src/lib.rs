@@ -7,7 +7,7 @@ mod preview;
 mod visual;
 
 pub use pose::{pose, AnimInput, Pose, Xform};
-pub use preview::{missing_glow_keys, painted_pixels, raster, raster_bug, still};
+pub use preview::{missing_glow_keys, painted_pixels, raster, raster_bug, raster_crown, still};
 pub use visual::{bug, catalog, flat_shaded, EnemyVisual, Gate, Joint, Part};
 
 #[derive(Clone, Debug)]

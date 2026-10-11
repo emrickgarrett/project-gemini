@@ -44,6 +44,14 @@ pub struct Part {
     pub mesh_key: String,
     pub gate: Gate,
     pub foot: Option<u32>,
+    /// Bud that swells into a pod. The slot is the visual count index.
+    pub grows: bool,
+    pub grow_slot: Option<u32>,
+    pub pod_slot: Option<u32>,
+    /// Tail sway, copied from the visual tail part. Zero on every other part.
+    pub sway_rate: f32,
+    pub sway_spread: f32,
+    pub sway_amp: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -90,11 +98,13 @@ fn build_all() -> Vec<EnemyVisual> {
     let file: Book = toml::from_str(include_str!("../../../content/bugs.toml")).expect("bugs.toml");
     ["swarmer", "spitter", "brute", "brood_mother", "hive_tyrant"]
         .into_iter()
-        .map(|id| sculpt(id, file.row(id)))
+        .map(|id| {
+            sculpt(id, file.row(id)).unwrap_or_else(|err| panic!("{id} visual: {err}"))
+        })
         .collect()
 }
 
-fn sculpt(id: &str, row: &Row) -> EnemyVisual {
+fn sculpt(id: &str, row: &Row) -> Result<EnemyVisual, String> {
     let dens = dens_for(id, false);
     let mut parts = Vec::new();
     let mut shell_anchor = [0.0_f32, row.visual.height * 0.5, 0.0];
@@ -102,12 +112,12 @@ fn sculpt(id: &str, row: &Row) -> EnemyVisual {
 
     for spec in &row.visual.parts {
         match spec.shape.as_str() {
-            "sphere" | "capsule" | "cone" | "box" if spec.name == "leg" || spec.ring_radius > 0.0 => {
+            "sphere" | "capsule" | "cone" | "box" if spec.name == "leg" => {
                 add_legs(&mut parts, id, spec, &dens, row.visual.height);
             }
-            "capsule" if spec.chain => add_tail(&mut parts, id, spec, &dens),
+            "capsule" if spec.chain => add_tail(&mut parts, id, spec, &dens)?,
             "sphere" | "capsule" | "cone" | "box" => {
-                add_body_part(&mut parts, id, spec, &dens, &row.visual.parts);
+                add_body_part(&mut parts, id, spec, &dens, &row.visual.parts)?;
             }
             "decal" => add_decal(&mut parts, id, spec, &dens, shell_anchor, shell_size),
             _ => {}
@@ -131,12 +141,12 @@ fn sculpt(id: &str, row: &Row) -> EnemyVisual {
                 continue;
             }
             match spec.shape.as_str() {
-                "sphere" | "capsule" | "cone" | "box" if spec.name == "leg" || spec.ring_radius > 0.0 => {
+                "sphere" | "capsule" | "cone" | "box" if spec.name == "leg" => {
                     add_legs(&mut low_parts, id, spec, &low, row.visual.height);
                 }
-                "capsule" if spec.chain => add_tail(&mut low_parts, id, spec, &low),
+                "capsule" if spec.chain => add_tail(&mut low_parts, id, spec, &low)?,
                 "sphere" | "capsule" | "cone" | "box" => {
-                    add_body_part(&mut low_parts, id, spec, &low, &row.visual.parts)
+                    add_body_part(&mut low_parts, id, spec, &low, &row.visual.parts)?;
                 }
                 _ => {}
             }
@@ -191,25 +201,20 @@ fn sculpt(id: &str, row: &Row) -> EnemyVisual {
     }
     baked.parts = parts;
     baked.lod = lod;
-    baked
+    Ok(baked)
 }
 
-fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalog: &[VPart]) {
-    if spec.name == "pod" {
-        add_sac_orbs(parts, id, spec, dens, false);
-        return;
-    }
-    if spec.name == "bud" || spec.grows_into_pod_on.is_some() {
-        add_sac_orbs(parts, id, spec, dens, true);
-        return;
+fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalog: &[VPart]) -> Result<(), String> {
+    if spec.name == "pod" || spec.name == "bud" || spec.grows_into_pod_on.is_some() {
+        let nestled = spec.name == "bud" || spec.grows_into_pod_on.is_some();
+        return add_sac_orbs(parts, id, spec, dens, nestled);
     }
     if spec.name == "crown" {
         add_crown(parts, id, spec, dens);
-        return;
+        return Ok(());
     }
     if spec.name == "cannon" || spec.at.as_deref() == Some("tail_end") {
-        add_cannon(parts, id, spec, dens, catalog);
-        return;
+        return add_cannon(parts, id, spec, dens, catalog);
     }
     let gate = spec.gate();
     let emissive = spec.emissive;
@@ -306,6 +311,12 @@ fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cat
             mesh_key: key,
             gate,
             foot: None,
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
         });
         if spec.name == "forelimb" || spec.name == "scythe" {
             let len = size[1].max(0.3);
@@ -333,9 +344,16 @@ fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cat
                 mesh_key: format!("{id}:{}:blade", spec.name),
                 gate,
                 foot: None,
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
             });
         }
     }
+    Ok(())
 }
 
 fn add_legs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, body_height: f32) {
@@ -383,6 +401,12 @@ fn add_legs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, body_hei
             mesh_key: format!("{id}:leg:femur"),
             gate: Gate::Always,
             foot: None,
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
         });
         if dens.segs == 1 {
             continue;
@@ -409,6 +433,12 @@ fn add_legs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, body_hei
             mesh_key: format!("{id}:leg:tibia"),
             gate: Gate::Always,
             foot: None,
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
         });
         parts.push(Part {
             name: format!("leg{i}_foot"),
@@ -422,19 +452,32 @@ fn add_legs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, body_hei
             mesh_key: format!("{id}:leg:foot"),
             gate: Gate::Always,
             foot: Some(i),
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
         });
     }
 }
 
-fn add_tail(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) {
-    if spec.segment_cap == 0 || spec.segment_scale <= 0.0 || spec.joint_span <= 0.0 {
-        return;
+fn add_tail(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) -> Result<(), String> {
+    if spec.segment_cap == 0 {
+        return Err(format!("{id} tail is missing segment_cap"));
     }
-    let Some(len) = spec.size.get(1).copied() else {
-        return;
-    };
+    if spec.segment_scale <= 0.0 {
+        return Err(format!("{id} tail is missing segment_scale"));
+    }
+    if spec.joint_span <= 0.0 {
+        return Err(format!("{id} tail is missing joint_span"));
+    }
+    let len = spec.size.get(1).copied().ok_or_else(|| format!("{id} tail is missing its length"))?;
+    if len <= 0.0 {
+        return Err(format!("{id} tail length must be positive"));
+    }
     let count = spec.count.max(1).min(spec.segment_cap);
-    let radius = spec.size.first().copied().unwrap_or(0.3);
+    let radius = spec.size.first().copied().filter(|r| *r > 0.0).ok_or_else(|| format!("{id} tail is missing its radius"))?;
     let mesh = Arc::new(segment_mesh(
         len * spec.segment_scale,
         radius,
@@ -465,33 +508,37 @@ fn add_tail(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) {
             mesh_key: format!("{id}:tail"),
             gate: Gate::Always,
             foot: None,
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: spec.sway_rate,
+            sway_spread: spec.sway_spread,
+            sway_amp: spec.sway_amp,
         });
         parent = Some(idx);
     }
+    Ok(())
 }
 
-fn add_cannon(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalog: &[VPart]) {
-    let parent = parts.iter().rposition(|p| p.name.starts_with("tail"));
-    let tail = catalog.iter().find(|part| part.name == "tail");
-    let tip_gap = tail.map(|part| part.tip_gap).unwrap_or(0.0);
-    let size = size3(spec);
-    let rad = size[0] * 0.5;
+fn add_cannon(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalog: &[VPart]) -> Result<(), String> {
+    let tail = catalog.iter().find(|part| part.name == "tail").ok_or_else(|| format!("{id} cannon has no tail part"))?;
+    if tail.segment_scale <= 0.0 {
+        return Err(format!("{id} cannon tail is missing segment_scale"));
+    }
+    let len = tail.size.get(1).copied().filter(|n| *n > 0.0).ok_or_else(|| format!("{id} cannon tail is missing its length"))?;
+    let parent = parts.iter().rposition(|p| p.name.starts_with("tail")).ok_or_else(|| format!("{id} cannon has no tail segments"))?;
+    let rad = spec.size.first().copied().filter(|r| *r > 0.0).ok_or_else(|| format!("{id} cannon is missing its size"))? * 0.5;
+    let tip_gap = tail.tip_gap;
     let mut mesh = gem_mesh([rad, rad, rad * 0.92], dens);
     // Barrel continues along the tail (-Y) and sits clear of the last segment's cap.
     let mut nozzle = cone_z(rad * 1.15, rad * 0.48, dens.sides.max(5));
     geom::rotate_x(&mut nozzle, std::f32::consts::FRAC_PI_2);
     geom::translate(&mut nozzle, [0.0, -(rad + tip_gap), 0.0]);
     geom::append(&mut mesh, &nozzle);
-    let pos = match (parent, tail) {
-        (Some(_), Some(tail)) => {
-            let len = tail.size.get(1).copied().unwrap_or(0.0);
-            [0.0, -(len * tail.segment_scale + rad + tip_gap), 0.0]
-        }
-        _ => spec.offset,
-    };
+    let pos = [0.0, -(len * tail.segment_scale + rad + tip_gap), 0.0];
     parts.push(Part {
         name: "cannon".into(),
-        parent,
+        parent: Some(parent),
         rest_pos: pos,
         rest_euler: [0.0, 0.0, 0.0],
         mesh: Arc::new(mesh),
@@ -501,10 +548,23 @@ fn add_cannon(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalo
         mesh_key: format!("{id}:cannon"),
         gate: spec.gate(),
         foot: None,
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
     });
+    Ok(())
 }
 
-fn add_sac_orbs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, nestled: bool) {
+fn add_sac_orbs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, nestled: bool) -> Result<(), String> {
+    if spec.ring_radius <= 0.0 {
+        return Err(format!("{id} {} is missing ring_radius", spec.name));
+    }
+    if spec.count == 0 {
+        return Err(format!("{id} {} is missing count", spec.name));
+    }
     let count = spec.count.max(1);
     let size = size3(spec);
     let detail = if dens.slices <= 4 {
@@ -520,7 +580,7 @@ fn add_sac_orbs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, nest
     let phase = if nestled { 0.5 } else { 0.0 };
     for i in 0..count {
         let a = (i as f32 + phase) / count as f32 * std::f32::consts::TAU + 0.4;
-        let ring = if nestled { 0.48 } else { 0.62 };
+        let ring = spec.ring_radius;
         let nx = a.cos() * ring;
         let nz = a.sin() * ring;
         let ny = (1.0 - nx * nx - nz * nz).max(0.25).sqrt();
@@ -542,8 +602,15 @@ fn add_sac_orbs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, nest
             mesh_key: format!("{id}:{}", if nestled { "bud" } else { "pod" }),
             gate: Gate::Always,
             foot: None,
+            grows: nestled,
+            grow_slot: if nestled { Some(i) } else { None },
+            pod_slot: if nestled { None } else { Some(i) },
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
         });
     }
+    Ok(())
 }
 
 fn add_crown(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) {
@@ -575,6 +642,12 @@ fn add_crown(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) {
             mesh_key: format!("{id}:crown"),
             gate: Gate::Always,
             foot: None,
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
         });
     }
 }
@@ -620,6 +693,12 @@ fn add_decal(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, shell: 
         mesh_key: format!("{id}:{}", spec.name),
         gate: spec.gate(),
         foot: None,
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
     });
 }
 
@@ -657,6 +736,12 @@ fn add_veins(parts: &mut Vec<Part>, id: &str, spec: &VPart) {
             mesh_key: format!("{id}:vein"),
             gate: spec.gate(),
             foot: None,
+            grows: false,
+            grow_slot: None,
+            pod_slot: None,
+            sway_rate: 0.0,
+            sway_spread: 0.0,
+            sway_amp: 0.0,
         });
     }
 }
@@ -1122,6 +1207,12 @@ struct VPart {
     #[serde(default)]
     segment_cap: u32,
     #[serde(default)]
+    sway_rate: f32,
+    #[serde(default)]
+    sway_spread: f32,
+    #[serde(default)]
+    sway_amp: f32,
+    #[serde(default)]
     at: Option<String>,
     #[serde(default)]
     pulse_phase: Option<u32>,
@@ -1171,6 +1262,33 @@ struct VAnim {
     sac_breathe: [f32; 2],
     #[serde(default)]
     frenzy_speed: f32,
+}
+
+#[cfg(test)]
+mod chain_errors {
+    use super::*;
+
+    #[test]
+    fn tail_missing_segment_cap_is_an_error() {
+        let mut text = include_str!("../../../content/bugs.toml").to_string();
+        text = text.replacen("segment_cap=12", "segment_cap=0", 1);
+        let file: Book = toml::from_str(&text).expect("mutated bugs.toml");
+        let err = sculpt("hive_tyrant", file.row("hive_tyrant")).expect_err("missing cap");
+        assert!(err.contains("segment_cap"), "{err}");
+    }
+
+    #[test]
+    fn cannon_missing_tail_length_is_an_error() {
+        let mut text = include_str!("../../../content/bugs.toml").to_string();
+        text = text.replacen(
+            "{ name=\"tail\",    shape=\"capsule\", size=[0.4,1.0]",
+            "{ name=\"tail\",    shape=\"capsule\", size=[0.4]",
+            1,
+        );
+        let file: Book = toml::from_str(&text).expect("mutated bugs.toml");
+        let err = sculpt("hive_tyrant", file.row("hive_tyrant")).expect_err("missing length");
+        assert!(err.contains("length"), "{err}");
+    }
 }
 
 pub fn flat_shaded(mesh: &MeshData) -> bool {

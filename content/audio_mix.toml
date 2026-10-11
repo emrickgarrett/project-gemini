@@ -1,0 +1,674 @@
+# Mixer policy. These sit beside the per-file rows. Critical cues ignore the voice cap.
+voice_cap = 32
+crowd_radius = 30.0
+crowd_full_count = 18
+min_distance = 0.5
+critical = ["spitter_charge", "player_downed", "wave_start", "brood_roar", "tyrant_roar"]
+
+# Sim event ids that name a file. Unlisted events stay silent.
+[alias]
+shot = "blaster_fire"
+hit = "acid_impact"
+hurt = "player_hurt"
+downed = "player_downed"
+pickup = "pickup"
+wave = "wave_start"
+dash = "jetpack_boost"
+reload = "blaster_reload"
+swarmer_crowd = "swarmer_crowd_loop"
+spitter_fire = "spitter_spit"
+swarmer_footstep = "swarmer_click_01"
+brute_footstep = "brute_step_01"
+brute_attack = "brute_grunt"
+tyrant_attack = "tyrant_scythe_swipe"
+weakpoint_hit = "weakpoint_hit"
+
+[sting.crate_common]
+path = "audio/stings/crate_common.ogg"
+[sting.crate_rare]
+path = "audio/stings/crate_rare.ogg"
+[sting.crate_epic]
+path = "audio/stings/crate_epic.ogg"
+[sting.crate_legendary]
+path = "audio/stings/crate_legendary.ogg"
+
+# Project Gemini SFX mix table. One [table] per file in audio/sfx/ (key = file name without .ogg).
+# volume_db            gain applied on playback, dB relative to the file (files are all peak-normalized to -2 dBFS).
+#                      Derived from each file's max 100 ms RMS (hp 60 Hz) toward a per-category target level
+#                      (boss roars/deaths loudest, weapons/UI clear, swarmer clicks/crowd bed quietest), clamped to [-18, +2].
+# pitch_rand_semitones  +/- random pitch per play (0 = fixed; UI and timed telegraphs stay fixed).
+# max_instances        concurrent voices of this sound; extra plays steal the oldest (all count toward the global 32-voice cap).
+# loop                 true = seamless loop, play until stopped.
+# category / measured_rms_db are informational. Placeholder levels: tune by ear.
+
+[acid_impact]
+volume_db = 0.4
+pitch_rand_semitones = 0.5
+max_instances = 4
+loop = false
+category = "enemy"
+measured_rms_db = -14.4
+
+[blaster_fire]
+volume_db = -2.9
+pitch_rand_semitones = 0.5
+max_instances = 6
+loop = false
+category = "weapon"
+measured_rms_db = -8.1
+
+[blaster_fire_02]
+volume_db = -2.6
+pitch_rand_semitones = 0.5
+max_instances = 6
+loop = false
+category = "weapon"
+measured_rms_db = -8.4
+
+[blaster_fire_03]
+volume_db = -2.7
+pitch_rand_semitones = 0.5
+max_instances = 6
+loop = false
+category = "weapon"
+measured_rms_db = -8.3
+
+[blaster_reload]
+volume_db = 2
+pitch_rand_semitones = 0.5
+max_instances = 4
+loop = false
+category = "player"
+measured_rms_db = -18.5
+
+[brood_death]
+volume_db = -1.0
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "boss_big"
+measured_rms_db = -7.0
+
+[brood_drone_loop]
+volume_db = 0.1
+pitch_rand_semitones = 0.3
+max_instances = 1
+loop = true
+category = "boss"
+measured_rms_db = -11.1
+
+[brood_pod_charge]
+volume_db = 1.1
+pitch_rand_semitones = 0
+max_instances = 3
+loop = false
+category = "boss"
+measured_rms_db = -12.1
+
+[brood_pod_fizzle]
+volume_db = 2
+pitch_rand_semitones = 0.3
+max_instances = 3
+loop = false
+category = "boss"
+measured_rms_db = -14.7
+
+[brood_pod_hatch]
+volume_db = -1.3
+pitch_rand_semitones = 0.3
+max_instances = 3
+loop = false
+category = "boss"
+measured_rms_db = -9.7
+
+[brood_roar]
+volume_db = 2
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "boss_big"
+measured_rms_db = -10.4
+
+[brute_death]
+volume_db = -6.0
+pitch_rand_semitones = 0.5
+max_instances = 4
+loop = false
+category = "enemy"
+measured_rms_db = -8.0
+
+[brute_grunt]
+volume_db = -2.9
+pitch_rand_semitones = 0.5
+max_instances = 4
+loop = false
+category = "enemy"
+measured_rms_db = -11.1
+
+[brute_shell_crack]
+volume_db = 0.5
+pitch_rand_semitones = 0.5
+max_instances = 4
+loop = false
+category = "enemy"
+measured_rms_db = -14.5
+
+[brute_shell_open]
+volume_db = -0.6
+pitch_rand_semitones = 0
+max_instances = 4
+loop = false
+category = "enemy"
+measured_rms_db = -13.4
+
+[brute_step_01]
+volume_db = -7.5
+pitch_rand_semitones = 1
+max_instances = 4
+loop = false
+category = "step"
+measured_rms_db = -6.5
+
+[brute_step_02]
+volume_db = -6.8
+pitch_rand_semitones = 1
+max_instances = 4
+loop = false
+category = "step"
+measured_rms_db = -7.2
+
+[brute_step_03]
+volume_db = -6.7
+pitch_rand_semitones = 1
+max_instances = 4
+loop = false
+category = "step"
+measured_rms_db = -7.3
+
+[crate_open]
+volume_db = 1.0
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "ui_meta"
+measured_rms_db = -14.0
+
+[crate_tease]
+volume_db = 0.2
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "ui_meta"
+measured_rms_db = -13.2
+
+[crate_fakeout]
+volume_db = 0.0
+pitch_rand_semitones = 0
+max_instances = 1
+loop = false
+category = "ui_meta"
+measured_rms_db = -13.0
+
+[crate_tease_legendary]
+volume_db = 0.7
+pitch_rand_semitones = 0
+max_instances = 1
+loop = false
+category = "ui_meta"
+measured_rms_db = -13.7
+
+[currency_gain]
+volume_db = -1.1
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "ui_meta"
+measured_rms_db = -11.9
+
+[currency_tick]
+volume_db = -2.3
+pitch_rand_semitones = 0
+max_instances = 4
+loop = false
+category = "ui"
+measured_rms_db = -17.7
+
+[dupe_upgrade]
+volume_db = -1.0
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "ui_meta"
+measured_rms_db = -12.0
+
+[invite_received]
+volume_db = -1.0
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "ui_meta"
+measured_rms_db = -12.0
+
+[jetpack_boost]
+volume_db = -3.9
+pitch_rand_semitones = 0.3
+max_instances = 2
+loop = false
+category = "player"
+measured_rms_db = -9.1
+
+[jetpack_empty]
+volume_db = 2
+pitch_rand_semitones = 0.3
+max_instances = 2
+loop = false
+category = "player"
+measured_rms_db = -16.6
+
+[jetpack_hover_loop]
+volume_db = 0.9
+pitch_rand_semitones = 0
+max_instances = 1
+loop = true
+category = "player"
+measured_rms_db = -15.9
+
+[pickup]
+volume_db = -1.9
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "ui_meta"
+measured_rms_db = -11.1
+
+[player_downed]
+volume_db = -3.9
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "player_alert"
+measured_rms_db = -5.1
+
+[player_hurt]
+volume_db = -4.1
+pitch_rand_semitones = 0.5
+max_instances = 2
+loop = false
+category = "player_alert"
+measured_rms_db = -4.9
+
+[player_join]
+volume_db = -3.3
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "ui_meta"
+measured_rms_db = -9.7
+
+[player_leave]
+volume_db = -3.9
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "ui_meta"
+measured_rms_db = -9.1
+
+[reconnect]
+volume_db = -1.0
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "ui_meta"
+measured_rms_db = -12.0
+
+[revive_complete]
+volume_db = -0.4
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "ui_meta"
+measured_rms_db = -12.6
+
+[spitter_charge]
+volume_db = -2.2
+pitch_rand_semitones = 0
+max_instances = 4
+loop = false
+category = "enemy"
+measured_rms_db = -11.8
+
+[spitter_death]
+volume_db = -1.8
+pitch_rand_semitones = 0.5
+max_instances = 4
+loop = false
+category = "enemy"
+measured_rms_db = -12.2
+
+[spitter_sac_pop]
+volume_db = 2
+pitch_rand_semitones = 0.5
+max_instances = 4
+loop = false
+category = "enemy"
+measured_rms_db = -16.8
+
+[spitter_spit]
+volume_db = 2
+pitch_rand_semitones = 0.5
+max_instances = 4
+loop = false
+category = "enemy"
+measured_rms_db = -16.0
+
+[swarmer_click_01]
+volume_db = -1.4
+pitch_rand_semitones = 1
+max_instances = 8
+loop = false
+category = "swarm_click"
+measured_rms_db = -22.6
+
+[swarmer_click_02]
+volume_db = -4.6
+pitch_rand_semitones = 1
+max_instances = 8
+loop = false
+category = "swarm_click"
+measured_rms_db = -19.4
+
+[swarmer_click_03]
+volume_db = -4.4
+pitch_rand_semitones = 1
+max_instances = 8
+loop = false
+category = "swarm_click"
+measured_rms_db = -19.6
+
+[swarmer_click_04]
+volume_db = -2.8
+pitch_rand_semitones = 1
+max_instances = 8
+loop = false
+category = "swarm_click"
+measured_rms_db = -21.2
+
+[swarmer_crowd_loop]
+volume_db = -4.2
+pitch_rand_semitones = 0
+max_instances = 1
+loop = true
+category = "swarm_bed"
+measured_rms_db = -17.8
+
+[swarmer_death]
+volume_db = -4.7
+pitch_rand_semitones = 1
+max_instances = 8
+loop = false
+category = "swarm"
+measured_rms_db = -13.3
+
+[tyrant_death]
+volume_db = 0.4
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "boss_big"
+measured_rms_db = -8.4
+
+[tyrant_roar]
+volume_db = 2
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "boss_big"
+measured_rms_db = -11.1
+
+[tyrant_scythe_swipe]
+volume_db = 2
+pitch_rand_semitones = 0.3
+max_instances = 3
+loop = false
+category = "boss"
+measured_rms_db = -13.2
+
+[tyrant_tail_charge]
+volume_db = -0.5
+pitch_rand_semitones = 0
+max_instances = 3
+loop = false
+category = "boss"
+measured_rms_db = -10.5
+
+[ui_click]
+volume_db = 2
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "ui"
+measured_rms_db = -19.3
+
+[upgrade_pick]
+volume_db = -1.4
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "ui_meta"
+measured_rms_db = -11.6
+
+[wave_clear]
+volume_db = -0.5
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "ui_meta"
+measured_rms_db = -12.5
+
+[wave_start]
+volume_db = -5.0
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "ui_meta"
+measured_rms_db = -8.0
+
+[weakpoint_hit]
+volume_db = 2
+pitch_rand_semitones = 0.3
+max_instances = 4
+loop = false
+category = "feedback"
+measured_rms_db = -17.0
+
+[vex_fire]
+volume_db = -2.6
+pitch_rand_semitones = 0.4
+max_instances = 6
+loop = false
+category = "player"
+measured_rms_db = -10.4
+
+[vex_reload]
+volume_db = 2
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "player"
+measured_rms_db = -24.3
+
+[vex_ability]
+volume_db = -5.9
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "player"
+measured_rms_db = -7.1
+
+[vex_ability_end]
+volume_db = -3.2
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "player"
+measured_rms_db = -9.8
+
+[nyra_fire]
+volume_db = -2.1
+pitch_rand_semitones = 0.4
+max_instances = 6
+loop = false
+category = "player"
+measured_rms_db = -10.9
+
+[nyra_reload]
+volume_db = 2
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "player"
+measured_rms_db = -22.3
+
+[nyra_ability]
+volume_db = -1.6
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "player"
+measured_rms_db = -11.4
+
+[nyra_ability_loop]
+volume_db = -3.0
+pitch_rand_semitones = 0
+max_instances = 1
+loop = true
+category = "player"
+measured_rms_db = -10.0
+
+[nyra_ability_end]
+volume_db = -3.6
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "player"
+measured_rms_db = -9.4
+
+[brakk_fire]
+volume_db = -5.0
+pitch_rand_semitones = 0.4
+max_instances = 3
+loop = false
+category = "player"
+measured_rms_db = -8.0
+
+[brakk_reload]
+volume_db = 2
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "player"
+measured_rms_db = -20.4
+
+[brakk_ability]
+volume_db = -6.4
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "player"
+measured_rms_db = -6.6
+
+[brakk_ability_end]
+volume_db = -2.2
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "player"
+measured_rms_db = -10.8
+
+[kip_fire]
+volume_db = 2
+pitch_rand_semitones = 0.4
+max_instances = 3
+loop = false
+category = "player"
+measured_rms_db = -21.7
+
+[kip_reload]
+volume_db = 2
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "player"
+measured_rms_db = -23.7
+
+[kip_ability]
+volume_db = -5.2
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "player"
+measured_rms_db = -7.8
+
+[kip_ability_end]
+volume_db = -3.6
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "player"
+measured_rms_db = -9.4
+
+[part_equip]
+volume_db = 2.0
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "ui_meta"
+measured_rms_db = -23.3
+
+[part_unequip]
+volume_db = 2.0
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "ui_meta"
+measured_rms_db = -23.0
+
+[shard_gain]
+volume_db = -0.7
+pitch_rand_semitones = 0
+max_instances = 3
+loop = false
+category = "ui_meta"
+measured_rms_db = -12.3
+
+[reroll_spin]
+volume_db = 2.0
+pitch_rand_semitones = 0
+max_instances = 1
+loop = false
+category = "ui_meta"
+measured_rms_db = -19.2
+
+[reroll_result]
+volume_db = -2.3
+pitch_rand_semitones = 0
+max_instances = 1
+loop = false
+category = "ui_meta"
+measured_rms_db = -10.7
+
+[legendary_perk_reveal]
+volume_db = -7.5
+pitch_rand_semitones = 0
+max_instances = 1
+loop = false
+category = "ui_meta"
+measured_rms_db = -5.5
+
+[cosmetic_equip]
+volume_db = 2.0
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "ui_meta"
+measured_rms_db = -15.4

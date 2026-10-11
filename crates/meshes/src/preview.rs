@@ -26,11 +26,21 @@ pub fn still_anim() -> AnimInput {
 pub fn raster_bug(id: &str, width: u32, height: u32) -> Vec<u8> {
     let visual = bug(id);
     let palette = palette_of();
-    draw(visual, &palette, width, height, false)
+    draw(visual, &palette, width, height, false, None)
+}
+
+/// Color still from above the shell, so the open cracks read on their own.
+pub fn raster_crown(id: &str, width: u32, height: u32) -> Vec<u8> {
+    let visual = bug(id);
+    let palette = palette_of();
+    let height_m = visual.height;
+    let eye = [height_m * 0.15, height_m * 2.15, -height_m * 0.55];
+    let target = [0.0, height_m * 0.62, -0.05];
+    draw(visual, &palette, width, height, false, Some((eye, target, 32.0)))
 }
 
 pub fn raster(visual: &EnemyVisual, palette: &dyn Fn(&str) -> [f32; 4], width: u32, height: u32) -> Vec<u8> {
-    draw(visual, palette, width, height, false)
+    draw(visual, palette, width, height, false, None)
 }
 
 /// Color panel on the left, untextured silhouette on the right. Each panel is square.
@@ -39,7 +49,7 @@ pub fn still(id: &str, panel: u32) -> (u32, u32, Vec<u8>) {
     let color = raster_bug(id, panel, panel);
     let visual = bug(id);
     let palette = palette_of();
-    let sil = draw(visual, &palette, panel, panel, true);
+    let sil = draw(visual, &palette, panel, panel, true, None);
     let w = panel * 2;
     let mut out = vec![0u8; (w * panel * 3) as usize];
     for y in 0..panel {
@@ -83,6 +93,7 @@ fn draw(
     width: u32,
     height: u32,
     silhouette: bool,
+    camera: Option<([f32; 3], [f32; 3], f32)>,
 ) -> Vec<u8> {
     let w = width.max(8);
     let h = height.max(8);
@@ -92,7 +103,7 @@ fn draw(
     }
     let mut depth = vec![f32::INFINITY; (w * h) as usize];
     let posed = pose(visual, still_anim(), &[]);
-    let (eye, target, fov_deg) = concept_camera(&visual.id, visual.height);
+    let (eye, target, fov_deg) = camera.unwrap_or_else(|| concept_camera(&visual.id, visual.height));
     let forward = norm(sub(target, eye));
     let right = norm(cross(forward, [0.0, 1.0, 0.0]));
     let up = cross(right, forward);

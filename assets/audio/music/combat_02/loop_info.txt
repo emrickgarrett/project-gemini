@@ -1,0 +1,10 @@
+source_take: combat2_take1.mp3
+source_bpm: 141.48
+bpm: 141.58
+time_stretch_ratio: 1.000721 (soxr very-high-quality resample, identical linear op on all stems; pitch +1.25 cents)
+beats_per_bar: 4
+loop_bars: 16
+loop_start_s: 58.3640
+sample_rate: 48000
+sample_length: 1301879
+key_estimate: E major (runner-up E minor)

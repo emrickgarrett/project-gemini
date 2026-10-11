@@ -134,12 +134,17 @@ impl DifficultyBias {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct MusicDirectorCfg {
-    pub intensity_per_wave: f32,
-    pub boss_intensity_bonus: f32,
-    pub intensity_cap: f32,
     /// File-vs-bpm warning window, in milliseconds per loop.
     pub bpm_warn_ms: f32,
-    pub difficulty_bias: DifficultyBias,
+    pub pressure_full_at: f32,
+    pub progress_floor_cap: f32,
+    pub progress_wave: f32,
+    pub downed_bump: f32,
+    pub breather_db: f32,
+    pub hysteresis_bars: u32,
+    pub layer_fade_bars: f32,
+    pub difficulty_floor: DifficultyBias,
+    pub breather_stems: Vec<String>,
 }
 
 impl MusicDirectorCfg {
@@ -151,9 +156,12 @@ impl MusicDirectorCfg {
 #[derive(Clone, Debug, Deserialize)]
 pub struct Transitions {
     pub combat_to_boss: String,
-    pub combat_to_boss_cue: String,
     pub boss_to_combat: String,
-    pub boss_to_combat_cue: String,
+    pub boss_loop_to_enrage: String,
+    pub boss_loop_to_enrage_beats: f32,
+    pub tyrant_phase_change: String,
+    pub tyrant_phase_change_beats: f32,
+    pub combat_loop_swap: String,
     pub menu_to_combat: String,
     pub menu_to_combat_cue: String,
     pub combat_to_menu: String,
@@ -162,12 +170,24 @@ pub struct Transitions {
     pub different_tempo: String,
 }
 
+impl Transitions {
+    /// Cue named by `hard_cut_on_<cue>`. Empty when the mode is not a hard cut.
+    pub fn cue_of(&self, mode: &str) -> String {
+        mode.strip_prefix("hard_cut_on_")
+            .unwrap_or("")
+            .to_string()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TransitionKind {
     MenuToCombat,
     CombatToMenu,
     CombatToBoss,
     BossToCombat,
+    BossEnrage,
+    BossPhase,
+    LoopSwap,
     /// Any other pair. Mode comes from same_tempo / different_tempo.
     Other,
 }
@@ -178,7 +198,7 @@ pub enum PlannedSwitch {
     HardCut { cue: String },
     /// Only produced when both tracks share bpm and beats_per_bar.
     /// `fade_bars` is the outgoing track's fade, in that track's bars.
-    CrossfadeOnBar { fade_bars: f32 },
+    CrossfadeOnBar { fade_bars: f32, wait_for_bar: bool },
 }
 
 /// Decide how to leave `from` for `to`.
@@ -196,38 +216,52 @@ pub fn plan_switch(
     transitions: &Transitions,
     warn_seconds: f32,
 ) -> PlannedSwitch {
-    let (mode, cue) = match kind {
+    let (mode, cue, fade_bars) = match kind {
         TransitionKind::CombatToBoss => (
             transitions.combat_to_boss.as_str(),
-            transitions.combat_to_boss_cue.clone(),
+            transitions.cue_of(&transitions.combat_to_boss),
+            from.fade_bars,
         ),
         TransitionKind::BossToCombat => (
             transitions.boss_to_combat.as_str(),
-            transitions.boss_to_combat_cue.clone(),
+            transitions.cue_of(&transitions.boss_to_combat),
+            from.fade_bars,
         ),
         TransitionKind::MenuToCombat => (
             transitions.menu_to_combat.as_str(),
             transitions.menu_to_combat_cue.clone(),
+            from.fade_bars,
         ),
         TransitionKind::CombatToMenu => (
             transitions.combat_to_menu.as_str(),
             transitions.combat_to_menu_cue.clone(),
+            from.fade_bars,
         ),
+        TransitionKind::BossEnrage => (
+            transitions.boss_loop_to_enrage.as_str(),
+            String::new(),
+            transitions.boss_loop_to_enrage_beats / from.beats_per_bar.max(1) as f32,
+        ),
+        TransitionKind::BossPhase => (
+            transitions.tyrant_phase_change.as_str(),
+            String::new(),
+            transitions.tyrant_phase_change_beats / from.beats_per_bar.max(1) as f32,
+        ),
+        TransitionKind::LoopSwap => (transitions.combat_loop_swap.as_str(), String::new(), from.fade_bars),
         TransitionKind::Other => {
             if same_bar_grid(from, to, from_loop_seconds, to_loop_seconds, warn_seconds) {
-                (transitions.same_tempo.as_str(), String::new())
+                (transitions.same_tempo.as_str(), String::new(), from.fade_bars)
             } else {
-                (transitions.different_tempo.as_str(), String::new())
+                (transitions.different_tempo.as_str(), String::new(), from.fade_bars)
             }
         }
     };
 
-    let wants_crossfade = mode == "crossfade_on_bar";
-    if wants_crossfade && same_bar_grid(from, to, from_loop_seconds, to_loop_seconds, warn_seconds)
-    {
-        PlannedSwitch::CrossfadeOnBar {
-            fade_bars: from.fade_bars,
-        }
+    let wants_crossfade = mode.starts_with("crossfade");
+    let tempos_ok = same_bar_grid(from, to, from_loop_seconds, to_loop_seconds, warn_seconds);
+    if wants_crossfade && tempos_ok {
+        let wait_for_bar = !matches!(kind, TransitionKind::BossEnrage | TransitionKind::BossPhase);
+        PlannedSwitch::CrossfadeOnBar { fade_bars, wait_for_bar }
     } else {
         PlannedSwitch::HardCut { cue }
     }
@@ -245,21 +279,44 @@ fn same_bar_grid(
     from.shares_tempo_with(to) && (from_loop_seconds - to_loop_seconds).abs() <= warn_seconds
 }
 
+/// `pressure = alive_cost / (wave_budget * pressure_full_at)`, then
+/// `max(pressure, progress floor)` plus the downed bump, clamped to the difficulty floor.
 pub fn combat_intensity(
     director: &MusicDirectorCfg,
     difficulty: &str,
     wave: u32,
-    boss_alive: bool,
+    endless: bool,
+    alive_cost: f32,
+    wave_budget: f32,
+    player_downed: bool,
 ) -> f32 {
-    let mut v = director.difficulty_bias.for_id(difficulty)
-        + director.intensity_per_wave * wave.saturating_sub(1) as f32;
-    if boss_alive {
-        v += director.boss_intensity_bonus;
+    let full = director.pressure_full_at.max(f32::EPSILON);
+    let pressure = if wave_budget <= f32::EPSILON {
+        0.0
+    } else {
+        alive_cost / (wave_budget * full)
+    };
+    let wave_span = director.progress_wave.max(1.0);
+    let progress = if endless {
+        director.progress_floor_cap
+    } else {
+        director.progress_floor_cap * (wave as f32 / wave_span).min(1.0)
+    };
+    let mut value = pressure.max(progress);
+    if player_downed {
+        value += director.downed_bump;
     }
-    v.clamp(0.0, director.intensity_cap)
+    value.clamp(director.difficulty_floor.for_id(difficulty), 1.0)
 }
 
-pub fn layer_targets(track: &TrackDef, intensity: f32) -> Vec<f32> {
+pub fn layer_targets(track: &TrackDef, intensity: f32, breather: Option<(&[String], f32)>) -> Vec<f32> {
+    if let Some((stems, gain)) = breather {
+        return track
+            .layer
+            .iter()
+            .map(|layer| if stems.iter().any(|id| id == &layer.id) { gain } else { 0.0 })
+            .collect();
+    }
     track
         .layer
         .iter()
@@ -280,6 +337,9 @@ pub struct StemVoice {
     pub loop_seconds: f32,
     pub current: f32,
     pub target: f32,
+    /// Bars the desired gain has held. A layer changes only after hysteresis.
+    pub held_bars: u32,
+    pub pending: f32,
 }
 
 /// Stem gains for one track. Each voice keeps the decoded length of its own file.
@@ -290,7 +350,7 @@ pub struct StemMixer {
 
 impl StemMixer {
     pub fn start(track: &TrackDef, loop_seconds: &[f32], intensity: f32) -> Self {
-        let target = layer_targets(track, intensity);
+        let target = layer_targets(track, intensity, None);
         let voices = target
             .iter()
             .enumerate()
@@ -299,21 +359,38 @@ impl StemMixer {
                 loop_seconds: loop_seconds.get(i).copied().unwrap_or(0.0),
                 current: *gain,
                 target: *gain,
+                held_bars: 0,
+                pending: *gain,
             })
             .collect();
         Self { voices }
     }
 
     /// Intensity changes latch on each stem's own file-derived bar line,
-    /// then slew across `fade_bars` of that same bar.
-    pub fn advance(&mut self, track: &TrackDef, dt: f32, intensity: f32) {
-        let desired = layer_targets(track, intensity);
+    /// after `hysteresis_bars` of the same request, then slew across `fade_bars`.
+    pub fn advance(
+        &mut self,
+        track: &TrackDef,
+        dt: f32,
+        intensity: f32,
+        hysteresis_bars: u32,
+        breather: Option<(&[String], f32)>,
+    ) {
+        let desired = layer_targets(track, intensity, breather);
+        let need = hysteresis_bars.max(1);
         for (voice, want) in self.voices.iter_mut().zip(desired) {
             let clock = FileClock::measure(track, voice.loop_seconds);
             let prev = voice.elapsed;
             voice.elapsed += dt;
+            if (want - voice.pending).abs() > 1e-4 {
+                voice.pending = want;
+                voice.held_bars = 0;
+            }
             if clock.crossed_bar(prev, voice.elapsed) {
-                voice.target = want;
+                voice.held_bars = voice.held_bars.saturating_add(1);
+                if voice.held_bars >= need {
+                    voice.target = voice.pending;
+                }
             }
             let fade = clock.fade_seconds().max(1e-4);
             let step = dt / fade;
@@ -329,16 +406,213 @@ impl StemMixer {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SwitchClock {
-    /// New track starts at elapsed 0. Used for hard cuts (boss roar / death sting).
+    /// New track starts at elapsed 0. Used for hard cuts (boss roar / death sting / breather swap).
     Reset,
     /// Wait until `from` crosses a bar, then start the destination.
     WaitForBar,
+    /// Start the destination now and slew across `fade_bars` (enrage roar, tyrant phase).
+    FadeNow,
 }
 
 pub fn switch_clock(plan: &PlannedSwitch) -> SwitchClock {
     match plan {
         PlannedSwitch::HardCut { .. } => SwitchClock::Reset,
-        PlannedSwitch::CrossfadeOnBar { .. } => SwitchClock::WaitForBar,
+        PlannedSwitch::CrossfadeOnBar { wait_for_bar, .. } => {
+            if *wait_for_bar {
+                SwitchClock::WaitForBar
+            } else {
+                SwitchClock::FadeNow
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct MusicRotation {
+    pub loops: Vec<String>,
+    pub slice_early: String,
+    pub slice_late: String,
+    pub endless_every: u32,
+}
+
+#[derive(Clone, Debug)]
+pub struct LoadedMusic {
+    pub director: MusicDirectorCfg,
+    pub track: std::collections::BTreeMap<String, TrackDef>,
+    pub transitions: Transitions,
+    pub rotation: MusicRotation,
+}
+
+pub fn load_music(text: &str) -> Result<LoadedMusic, String> {
+    #[derive(Deserialize)]
+    struct MusicSrc {
+        pressure_full_at: f32,
+        progress_floor_cap: f32,
+        progress_wave: f32,
+        #[serde(default)]
+        layer: Vec<LayerSrc>,
+        overrides: OverrideSrc,
+        rotation: RotationSrc,
+        director: DirectorSrc,
+        track: std::collections::BTreeMap<String, TrackSrc>,
+        transitions: Transitions,
+    }
+    #[derive(Deserialize)]
+    struct LayerSrc {
+        stem: String,
+        on_at: f32,
+    }
+    #[derive(Deserialize)]
+    struct OverrideSrc {
+        breather: Vec<String>,
+        breather_db: f32,
+        player_downed_any: f32,
+        hysteresis_bars: u32,
+        difficulty_floor: DifficultyBias,
+    }
+    #[derive(Deserialize)]
+    struct RotationSrc {
+        loops: Vec<String>,
+        slice_waves_1_5: String,
+        slice_waves_6_10: String,
+        endless_rotate_every_waves: u32,
+    }
+    #[derive(Deserialize)]
+    struct DirectorSrc {
+        bpm_warn_ms: f32,
+        layer_fade_bars: f32,
+    }
+    #[derive(Deserialize)]
+    struct TrackSrc {
+        path: String,
+        bpm: f32,
+        beats_per_bar: u32,
+        loop_bars: u32,
+        #[serde(default)]
+        role: String,
+        #[serde(default)]
+        boss_id: Option<String>,
+        #[serde(default)]
+        phases: Vec<String>,
+        #[serde(default)]
+        fade_bars: f32,
+    }
+
+    let src: MusicSrc = toml::from_str(text).map_err(|err| err.to_string())?;
+    let mut track = std::collections::BTreeMap::new();
+    for (id, row) in src.track {
+        let fade = if row.fade_bars > 0.0 {
+            row.fade_bars
+        } else {
+            src.director.layer_fade_bars
+        };
+        if !row.phases.is_empty() {
+            let dir = audio_path(&row.path);
+            for (i, phase) in row.phases.iter().enumerate() {
+                let key = format!("{id}_phase{}", i + 1);
+                let role = if i == 0 { "boss" } else { "phase" };
+                track.insert(
+                    key,
+                    TrackDef {
+                        bpm: row.bpm,
+                        beats_per_bar: row.beats_per_bar,
+                        loop_bars: row.loop_bars,
+                        fade_bars: fade,
+                        role: role.into(),
+                        boss_id: Some(boss_for(&id, row.boss_id.clone())),
+                        path: Some(format!("{dir}{phase}")),
+                        layer: Vec::new(),
+                    },
+                );
+            }
+            continue;
+        }
+        let role = if !row.role.is_empty() {
+            row.role.clone()
+        } else if id.contains("enrage") {
+            "enrage".into()
+        } else if id.contains("loop") {
+            "boss".into()
+        } else if id.starts_with("combat") {
+            "combat".into()
+        } else {
+            "music".into()
+        };
+        let boss_id = if row.boss_id.is_some() || role == "menu" || role == "combat" {
+            row.boss_id.clone()
+        } else {
+            Some(boss_for(&id, None))
+        };
+        let layered = row.path.ends_with('/');
+        let layer = if layered {
+            src.layer
+                .iter()
+                .map(|stem| MusicLayer {
+                    id: stem.stem.clone(),
+                    path: format!("{}{}.ogg", audio_path(&row.path), stem.stem),
+                    min_intensity: stem.on_at,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let path = if layered { None } else { Some(audio_path(&row.path)) };
+        track.insert(
+            id,
+            TrackDef {
+                bpm: row.bpm,
+                beats_per_bar: row.beats_per_bar,
+                loop_bars: row.loop_bars,
+                fade_bars: fade,
+                role,
+                boss_id,
+                path,
+                layer,
+            },
+        );
+    }
+    Ok(LoadedMusic {
+        director: MusicDirectorCfg {
+            bpm_warn_ms: src.director.bpm_warn_ms,
+            pressure_full_at: src.pressure_full_at,
+            progress_floor_cap: src.progress_floor_cap,
+            progress_wave: src.progress_wave,
+            downed_bump: src.overrides.player_downed_any,
+            breather_db: src.overrides.breather_db,
+            hysteresis_bars: src.overrides.hysteresis_bars,
+            layer_fade_bars: src.director.layer_fade_bars,
+            difficulty_floor: src.overrides.difficulty_floor,
+            breather_stems: src.overrides.breather,
+        },
+        track,
+        transitions: src.transitions,
+        rotation: MusicRotation {
+            loops: src.rotation.loops,
+            slice_early: src.rotation.slice_waves_1_5,
+            slice_late: src.rotation.slice_waves_6_10,
+            endless_every: src.rotation.endless_rotate_every_waves,
+        },
+    })
+}
+
+fn audio_path(path: &str) -> String {
+    if path.starts_with("audio/") {
+        path.to_string()
+    } else {
+        format!("audio/{path}")
+    }
+}
+
+fn boss_for(id: &str, explicit: Option<String>) -> String {
+    if let Some(id) = explicit {
+        return id;
+    }
+    if id.contains("brood") {
+        "brood_mother".into()
+    } else if id.contains("tyrant") {
+        "hive_tyrant".into()
+    } else {
+        String::new()
     }
 }
 
@@ -395,12 +669,12 @@ mod tests {
         track.layer[0].min_intensity = 0.2;
         track.layer[1].min_intensity = 0.2;
         let mut mixer = StemMixer::start(&track, &[8.0, 4.0], 0.0);
-        mixer.advance(&track, 1.9, 1.0);
+        mixer.advance(&track, 1.9, 1.0, 1, None);
         // 8s file / 4 bars = 2.0s; 1.9s has not crossed a bar.
         assert!((mixer.voices[0].target - 0.0).abs() < 1e-4);
         // 4s file / 4 bars = 1.0s; that stem latched on its own grid.
         assert!((mixer.voices[1].target - 1.0).abs() < 1e-4);
-        mixer.advance(&track, 0.2, 1.0);
+        mixer.advance(&track, 0.2, 1.0, 1, None);
         assert!((mixer.voices[0].target - 1.0).abs() < 1e-4);
     }
 
@@ -468,7 +742,7 @@ mod tests {
     fn embedded_tracks_have_distinct_clocks() {
         let music = &Content::embedded().music;
         let combat = music.track.get("combat_01").unwrap();
-        let brood = music.track.get("boss_brood").unwrap();
+        let brood = music.track.get("boss_brood_loop").unwrap();
         let theme = music.track.get("theme_main").unwrap();
         assert!((combat.bpm - 141.58).abs() < 1e-3);
         assert!((brood.bpm - 137.67).abs() < 1e-3);
@@ -476,8 +750,10 @@ mod tests {
         assert_eq!(brood.loop_bars, 16);
         assert!(theme.bpm != combat.bpm);
         assert_ne!(combat.bpm, brood.bpm);
-        assert_eq!(music.transitions.combat_to_boss, "hard_cut");
-        assert_eq!(music.transitions.combat_to_boss_cue, "boss_roar");
-        assert_eq!(music.transitions.boss_to_combat_cue, "death_sting");
+        assert_eq!(music.transitions.combat_to_boss, "hard_cut_on_boss_roar");
+        assert_eq!(music.transitions.cue_of(&music.transitions.combat_to_boss), "boss_roar");
+        assert_eq!(music.transitions.cue_of(&music.transitions.boss_to_combat), "death_sting");
+        assert!(music.track.contains_key("combat_02"));
+        assert!(music.track.contains_key("boss_tyrant_phase1"));
     }
 }
