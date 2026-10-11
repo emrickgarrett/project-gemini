@@ -1463,7 +1463,7 @@ impl Sim {
                 player.self_revives_used += 1;
                 player.self_revive_held = 0.0;
                 player.invuln = content.controller.downed.revive_invuln;
-                let frac = content.controller.downed.solo_self_revive_hp_frac;
+                let frac = content.controller.downed.solo_self_revive_hp_fraction;
                 player.hp = (player.max_hp * frac).max(1.0);
                 player.bleedout = content.controller.downed.bleedout_time;
                 return;

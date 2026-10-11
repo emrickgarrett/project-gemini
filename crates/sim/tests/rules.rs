@@ -31,7 +31,7 @@ fn tables_drive_the_controller_and_clocks() {
     assert!((content.controller.downed.bleedout_time - 30.0).abs() < 1e-4);
     assert_eq!(content.controller.downed.solo_self_revives_per_wave, 1);
     assert!((content.controller.downed.solo_self_revive_time - 5.0).abs() < 1e-4);
-    assert!((content.controller.downed.solo_self_revive_hp_frac - 0.5).abs() < 1e-4);
+    assert!((content.controller.downed.solo_self_revive_hp_fraction - 0.5).abs() < 1e-4);
     assert!((content.combat.spitter_min_range - 6.0).abs() < 1e-4);
     assert_eq!(content.combat.keep_away_ratios, [0.55, 0.35]);
     assert!(!content.controller.aim.mouse_aim_assist);
@@ -245,7 +245,7 @@ fn solo_self_revive_once_per_wave() {
     }
     assert!(!sim.players[0].downed, "hold should self-revive");
     assert!(sim.players[0].alive);
-    let frac = content.controller.downed.solo_self_revive_hp_frac;
+    let frac = content.controller.downed.solo_self_revive_hp_fraction;
     assert!((sim.players[0].hp - sim.players[0].max_hp * frac).abs() < 0.05);
     assert!(sim.players[0].sidearm.ammo < sidearm_before);
     assert_eq!(sim.players[0].self_revives_used, 1);
@@ -255,6 +255,98 @@ fn solo_self_revive_once_per_wave() {
     hurt(&mut sim, &content);
     assert!(matches!(sim.phase, Phase::Defeat));
     assert!(!sim.players[0].alive);
+}
+
+#[test]
+fn self_revive_hp_and_spitter_standoff_come_from_content() {
+    use gemini_sim::sim::AiState;
+
+    let mut content = Content::embedded();
+    content.controller.downed.solo_self_revive_hp_fraction = 0.25;
+    let mut sim = Sim::new(&content, "normal", 3);
+    sim.enemies.clear();
+    sim.director.pool = 1.0;
+    sim.director.parked = true;
+    sim.players[0].hp = 5.0;
+    sim.players[0].invuln = 0.0;
+    hurt(&mut sim, &content);
+    sim.enemies.clear();
+    sim.director.pool = 1.0;
+    sim.director.parked = true;
+    let input = PlayerInput {
+        interact_held: true,
+        ..PlayerInput::default()
+    };
+    let ticks = (content.controller.downed.solo_self_revive_time * 30.0).ceil() as i32 + 2;
+    for _ in 0..ticks {
+        sim.step(&content, input);
+    }
+    assert!(!sim.players[0].downed);
+    assert!((sim.players[0].hp - sim.players[0].max_hp * 0.25).abs() < 0.05);
+
+    content.combat.spitter_min_range = 20.0;
+    content.combat.keep_away_ratios = [0.6, 0.5];
+    let mut sim = Sim::new(&content, "normal", 4);
+    sim.enemies.clear();
+    sim.director.pool = 0.0;
+    sim.director.parked = true;
+    sim.enemies.push(spitter_at(8.0));
+    sim.step(&content, PlayerInput::default());
+    let back = sim.enemies.iter().find(|e| e.id == 42).unwrap();
+    assert!(back.pos.z > 8.0, "inside the back-away ratio, z moved to {}", back.pos.z);
+    assert!(matches!(back.ai, AiState::Chase), "8 < 20 * 0.5, so it must not spit");
+
+    content.combat.keep_away_ratios = [0.5, 0.2];
+    let mut sim = Sim::new(&content, "normal", 5);
+    sim.enemies.clear();
+    sim.director.pool = 0.0;
+    sim.director.parked = true;
+    sim.enemies.push(spitter_at(8.0));
+    sim.step(&content, PlayerInput::default());
+    let firing = sim.enemies.iter().find(|e| e.id == 42).unwrap();
+    assert!(matches!(firing.ai, AiState::Telegraph { .. }));
+
+    content.combat.spitter_min_range = 4.0;
+    content.combat.keep_away_ratios = [0.2, 0.1];
+    let mut sim = Sim::new(&content, "normal", 6);
+    sim.enemies.clear();
+    sim.director.pool = 0.0;
+    sim.director.parked = true;
+    sim.enemies.push(spitter_at(8.0));
+    let before = 8.0;
+    sim.step(&content, PlayerInput::default());
+    let close = sim.enemies.iter().find(|e| e.id == 42).unwrap();
+    assert!(close.pos.z < before, "outside keep-away, it should close, z={}", close.pos.z);
+}
+
+fn spitter_at(z: f32) -> gemini_sim::sim::Enemy {
+    use gemini_sim::content::EnemyKind;
+    use gemini_sim::sim::AiState;
+    gemini_sim::sim::Enemy {
+        id: 42,
+        kind: EnemyKind::Spitter,
+        pos: Vec3::new(0.0, 0.0, z),
+        vel: Vec3::ZERO,
+        yaw: 0.0,
+        hp: 90.0,
+        max_hp: 90.0,
+        speed: 4.0,
+        contact: 8.0,
+        range: 4.0,
+        weak_mult: 2.0,
+        attack_cd: 0.0,
+        ai: AiState::Chase,
+        weak_exposed: true,
+        phase: 0,
+        spawn_acc: 0.0,
+        spawn_kind: EnemyKind::Spitter,
+        spawn_count: 0,
+        spawn_interval: 0.0,
+        alive: true,
+        open_left: 0.0,
+        just_opened: false,
+        pods: Vec::new(),
+    }
 }
 
 fn hurt(sim: &mut Sim, content: &Content) {

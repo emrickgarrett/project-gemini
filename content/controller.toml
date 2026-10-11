@@ -40,6 +40,6 @@ downed_can_fire_sidearm = true
 revive_invuln = 1.5
 solo_self_revives_per_wave = 1
 solo_self_revive_time = 5.0
-solo_self_revive_hp_frac = 0.5
+solo_self_revive_hp_fraction = 0.5
 [ability]                   # one active ability per character
 default_cooldown = 18.0

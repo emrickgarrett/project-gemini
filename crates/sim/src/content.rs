@@ -385,7 +385,7 @@ pub struct DownedCfg {
     pub revive_invuln: f32,
     pub solo_self_revives_per_wave: u32,
     pub solo_self_revive_time: f32,
-    pub solo_self_revive_hp_frac: f32,
+    pub solo_self_revive_hp_fraction: f32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
