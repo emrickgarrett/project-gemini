@@ -656,11 +656,14 @@ pub fn grade(
     mut cameras: Query<&mut ColorGrading, (With<Camera3d>, Without<ViewmodelCamera>)>,
 ) {
     let hud = &game.content.presentation.hud.away;
+    let look = away.view.look.clamp(0.0, 1.0);
     for mut grading in &mut cameras {
-        if away.view.frozen {
-            let factor = (1.0 - hud.world_dim).clamp(hud.dim_floor, 1.0);
+        if look > 0.0 {
+            let dim = hud.away_dim * look;
+            let desat = hud.away_desaturation * look;
+            let factor = (1.0 - dim).clamp(hud.dim_floor, 1.0);
             grading.global.exposure = factor.log2();
-            grading.global.post_saturation = hud.world_saturation;
+            grading.global.post_saturation = 1.0 - desat;
             grading.global.temperature = 0.0;
             grading.global.tint = 0.0;
         } else {

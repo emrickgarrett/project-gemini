@@ -590,6 +590,7 @@ fn paint_away(commands: &mut Commands, root: Entity, game: &Game, away: &Away) {
         let scale = hud.count_scale_from + (hud.count_scale_to - hud.count_scale_from) * u;
         let alpha = (1.0 - u).clamp(0.0, 1.0);
         let outline = game.content.palette.key(&hud.count_outline);
+        let shadow = game.content.palette.key(&hud.count_shadow);
         let shift = hud.count_outline_px;
         let label = digit.to_string();
         let place = |dx: f32, dy: f32| Node {
@@ -604,6 +605,24 @@ fn paint_away(commands: &mut Commands, root: Entity, game: &Game, away: &Away) {
             ),
             ..default()
         };
+        let drop = hud.count_shadow_px;
+        let soft = hud.count_shadow_soft_px;
+        let mut shadow_marks = vec![(drop, drop, 1.0)];
+        if soft > 0.0 {
+            for (ox, oy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
+                shadow_marks.push((drop + ox * soft * 0.5, drop + oy * soft * 0.5, 0.45));
+            }
+        }
+        for (dx, dy, weight) in shadow_marks {
+            commands.spawn((
+                Text::new(label.clone()),
+                TextFont::from_font_size(hud.count_px * scale),
+                TextColor(Color::srgba(shadow[0], shadow[1], shadow[2], hud.count_shadow_alpha * weight * alpha)),
+                place(dx, dy),
+                ChildOf(root),
+                HudNode,
+            ));
+        }
         for (dx, dy) in [
             (-shift, 0.0),
             (shift, 0.0),

@@ -418,6 +418,115 @@ impl StemMixer {
     }
 }
 
+/// Open cutoff. High enough that the low-pass is a bypass for music.
+pub const MUSIC_OPEN_HZ: f32 = 18_000.0;
+/// Muffled cutoff while the host is away. Glows in the mix stay, the top end does not.
+pub const MUSIC_DUCK_LOWPASS_HZ: f32 = 800.0;
+
+/// Gain and low-pass for the away mix. `look` is 1 while away and eases to 0 over the countdown.
+/// The stem clock is not an input: ducking never restarts the beat.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AwayMix {
+    pub gain: f32,
+    pub lowpass_hz: f32,
+}
+
+pub fn away_mix(look: f32, duck_db: f32) -> AwayMix {
+    let look = if look.is_finite() { look.clamp(0.0, 1.0) } else { 0.0 };
+    let ducked = 10f32.powf(duck_db / 20.0);
+    AwayMix {
+        gain: 1.0 + (ducked - 1.0) * look,
+        lowpass_hz: MUSIC_OPEN_HZ + (MUSIC_DUCK_LOWPASS_HZ - MUSIC_OPEN_HZ) * look,
+    }
+}
+
+/// RBJ biquad low-pass. One state per channel. A high cutoff returns the sample unchanged.
+#[derive(Clone, Copy, Debug)]
+pub struct Lowpass {
+    b0: f32,
+    b1: f32,
+    b2: f32,
+    a1: f32,
+    a2: f32,
+    x1: f32,
+    x2: f32,
+    y1: f32,
+    y2: f32,
+    cutoff: f32,
+    rate: f32,
+}
+
+impl Default for Lowpass {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Lowpass {
+    pub fn new() -> Self {
+        Self {
+            b0: 1.0,
+            b1: 0.0,
+            b2: 0.0,
+            a1: 0.0,
+            a2: 0.0,
+            x1: 0.0,
+            x2: 0.0,
+            y1: 0.0,
+            y2: 0.0,
+            cutoff: -1.0,
+            rate: 0.0,
+        }
+    }
+
+    pub fn process(&mut self, sample: f32, cutoff_hz: f32, sample_rate: f32) -> f32 {
+        let sample = if sample.is_finite() { sample } else { 0.0 };
+        let rate = if sample_rate > 1.0 { sample_rate } else { 44_100.0 };
+        let open = cutoff_hz >= MUSIC_OPEN_HZ - 1.0 || cutoff_hz >= rate * 0.45;
+        if open {
+            self.x1 = sample;
+            self.x2 = sample;
+            self.y1 = sample;
+            self.y2 = sample;
+            self.cutoff = cutoff_hz;
+            self.rate = rate;
+            return sample;
+        }
+        let cutoff_hz = cutoff_hz.clamp(20.0, rate * 0.45 - 1.0);
+        if (cutoff_hz - self.cutoff).abs() > 1.0 || (rate - self.rate).abs() > 1.0 {
+            self.retune(cutoff_hz, rate);
+        }
+        let y = self.b0 * sample + self.b1 * self.x1 + self.b2 * self.x2 - self.a1 * self.y1 - self.a2 * self.y2;
+        let y = if y.is_finite() { y } else { 0.0 };
+        self.x2 = self.x1;
+        self.x1 = sample;
+        self.y2 = self.y1;
+        self.y1 = y;
+        y
+    }
+
+    fn retune(&mut self, cutoff_hz: f32, sample_rate: f32) {
+        let q = 0.707;
+        let w0 = std::f32::consts::TAU * cutoff_hz / sample_rate;
+        let cos_w = w0.cos();
+        let sin_w = w0.sin();
+        let alpha = sin_w / (2.0 * q);
+        let b0 = (1.0 - cos_w) * 0.5;
+        let b1 = 1.0 - cos_w;
+        let b2 = (1.0 - cos_w) * 0.5;
+        let a0 = 1.0 + alpha;
+        let a1 = -2.0 * cos_w;
+        let a2 = 1.0 - alpha;
+        self.b0 = b0 / a0;
+        self.b1 = b1 / a0;
+        self.b2 = b2 / a0;
+        self.a1 = a1 / a0;
+        self.a2 = a2 / a0;
+        self.cutoff = cutoff_hz;
+        self.rate = sample_rate;
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SwitchClock {
     /// New track starts at elapsed 0. Used for hard cuts (boss roar / death sting / breather swap).

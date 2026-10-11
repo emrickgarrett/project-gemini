@@ -1644,6 +1644,10 @@ fn coop_table_rejects_missing_keys() {
     let bad_slate = base.presentation.replace("slate = \"ui_panel_slate\"", "slate = \"not_a_color\"");
     let err = Content::parse(&sources_present(&base, &bad_slate)).expect_err("palette typo");
     assert!(err.contains("not_a_color"), "{err}");
+    assert!((content.presentation.hud.away.away_desaturation - 0.6).abs() < 1e-4);
+    assert!((content.presentation.hud.away.away_dim - 0.3).abs() < 1e-4);
+    assert!((content.presentation.hud.away.music_duck_db - -12.0).abs() < 1e-4);
+    assert!((content.presentation.hud.away.count_outline_px - 4.0).abs() < 1e-4);
 
     let unknown = format!("{}\n[extra]\nnope = 1\n", base.coop);
     let err = Content::parse(&sources_with(&base, &unknown)).expect_err("unknown table");
@@ -1668,6 +1672,45 @@ fn host_away_mix_row_and_sync_at_fail_load() {
     sources.audio = &late_sync;
     let err = Content::parse(&sources).expect_err("sync_at far from the countdown");
     assert!(err.contains("sync_at"), "{err}");
+}
+
+#[test]
+fn away_look_and_duck_fail_load() {
+    let base = gemini_sim::content::embedded_sources();
+    for key in [
+        "away_desaturation",
+        "away_dim",
+        "music_duck_db",
+        "count_shadow",
+        "count_shadow_px",
+        "count_shadow_soft_px",
+        "count_shadow_alpha",
+    ] {
+        let stripped = base
+            .presentation
+            .lines()
+            .filter(|line| !line.contains(&format!("{key} =")))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let err = Content::parse(&sources_present(&base, &stripped)).expect_err(key);
+        assert!(err.contains(key), "{key}: {err}");
+    }
+    let cases = [
+        ("away_desaturation = 0.6", "away_desaturation = 1.4", "away_desaturation"),
+        ("away_desaturation = 0.6", "away_desaturation = nan", "away_desaturation"),
+        ("away_dim = 0.3", "away_dim = -0.1", "away_dim"),
+        ("away_dim = 0.3", "away_dim = 1.5", "away_dim"),
+        ("music_duck_db = -12.0", "music_duck_db = 4.0", "music_duck_db"),
+        ("music_duck_db = -12.0", "music_duck_db = nan", "music_duck_db"),
+        ("count_shadow_px = 14.0", "count_shadow_px = 0.0", "count_shadow_px"),
+        ("count_shadow_alpha = 0.40", "count_shadow_alpha = 0.0", "count_shadow_alpha"),
+        ("count_shadow_soft_px = 8.0", "count_shadow_soft_px = -1", "count_shadow_soft_px"),
+    ];
+    for (from, to, key) in cases {
+        let text = base.presentation.replace(from, to);
+        let err = Content::parse(&sources_present(&base, &text)).expect_err(key);
+        assert!(err.contains(key), "{key}: {err}");
+    }
 }
 
 fn sources_present<'a>(base: &'a gemini_sim::content::Sources<'a>, presentation: &'a str) -> gemini_sim::content::Sources<'a> {
@@ -2055,6 +2098,167 @@ fn a_hidden_host_freezes_bleedout_revive_and_the_breather() {
         Phase::Breather { left } => assert!((left - 8.0).abs() < 1e-6),
         other => panic!("breather moved to {other:?}"),
     }
+}
+
+#[test]
+fn countdown_at_one_leaves_positions_and_timers() {
+    use gemini_sim::host_away::on_host_visibility_changed;
+
+    let content = Content::embedded();
+    let mut sim = Sim::new(&content, "normal", 6);
+    sim.phase = Phase::Breather { left: 8.0 };
+    sim.players[0].pos = Vec3::new(3.0, 1.0, 4.0);
+    sim.players[0].vel = Vec3::ZERO;
+    sim.players[0].ability_cd = 4.5;
+    sim.players[0].primary.cooldown = 0.35;
+    sim.director.spawn_wait = 1.25;
+    let rules = &content.coop.host_away;
+    let mut clock = gemini_sim::host_away::HostAwayClock::new(false);
+    on_host_visibility_changed(&mut clock, true, 0.0, rules, &sim);
+    on_host_visibility_changed(&mut clock, true, 50.0, rules, &sim);
+    on_host_visibility_changed(&mut clock, false, 50.0, rules, &sim);
+    let frame = on_host_visibility_changed(&mut clock, false, 52.0, rules, &sim);
+    assert_eq!(frame.frame.digit, Some(1), "two seconds of a three-second countdown shows 1");
+    assert!((frame.frame.look - 1.0 / rules.resume_countdown_seconds).abs() < 1e-3);
+    assert!(frame.frame.frozen);
+
+    let pos = sim.players[0].pos;
+    let cd = sim.players[0].ability_cd;
+    let ammo = sim.players[0].primary.ammo;
+    let cooldown = sim.players[0].primary.cooldown;
+    let tick = sim.tick;
+    let time = sim.time;
+    let wait = sim.director.spawn_wait;
+    sim.present_countdown = true;
+    let input = PlayerInput {
+        move_x: 1.0,
+        move_z: 1.0,
+        yaw: 1.2,
+        pitch: -0.25,
+        fire: true,
+        ability: true,
+        jump_pressed: true,
+        sprint: true,
+        ..PlayerInput::default()
+    };
+    for _ in 0..30 {
+        sim.step_peers(&content, &[input]);
+    }
+    assert!((sim.players[0].pos.x - pos.x).abs() < 1e-6);
+    assert!((sim.players[0].pos.y - pos.y).abs() < 1e-6);
+    assert!((sim.players[0].pos.z - pos.z).abs() < 1e-6);
+    assert!((sim.players[0].ability_cd - cd).abs() < 1e-6);
+    assert_eq!(sim.players[0].primary.ammo, ammo);
+    assert!((sim.players[0].primary.cooldown - cooldown).abs() < 1e-6);
+    assert_eq!(sim.tick, tick);
+    assert!((sim.time - time).abs() < 1e-6);
+    assert!((sim.director.spawn_wait - wait).abs() < 1e-6);
+    match sim.phase {
+        Phase::Breather { left } => assert!((left - 8.0).abs() < 1e-6),
+        other => panic!("phase moved to {other:?}"),
+    }
+}
+
+#[test]
+fn countdown_input_changes_the_camera_only() {
+    let content = Content::embedded();
+    let mut sim = Sim::new(&content, "normal", 4);
+    sim.players[0].pos = Vec3::new(2.0, 0.0, -3.0);
+    sim.players[0].yaw = 0.15;
+    sim.players[0].pitch = 0.05;
+    sim.players[0].ability_cd = 2.0;
+    let ammo = sim.players[0].primary.ammo;
+    let pos = sim.players[0].pos;
+    let tick = sim.tick;
+    let time = sim.time;
+    sim.present_countdown = true;
+    let input = PlayerInput {
+        move_x: 1.0,
+        move_z: -1.0,
+        yaw: 1.35,
+        pitch: -0.4,
+        fire: true,
+        ability: true,
+        jump_pressed: true,
+        reload: true,
+        interact_held: true,
+        sprint: true,
+        ..PlayerInput::default()
+    };
+    let aimed = gemini_sim::sim::countdown_aim(input);
+    assert!(!aimed.fire);
+    assert!(!aimed.ability);
+    assert!(!aimed.jump_pressed);
+    assert_eq!(aimed.move_x, 0.0);
+    assert_eq!(aimed.move_z, 0.0);
+    assert!((aimed.yaw - input.yaw).abs() < 1e-6);
+    sim.step_peers(&content, &[input]);
+    assert!((sim.players[0].yaw - input.yaw).abs() < 1e-4, "aim follows the look");
+    assert!((sim.players[0].pitch - input.pitch).abs() < 1e-4);
+    assert!((sim.players[0].pos.x - pos.x).abs() < 1e-6);
+    assert!((sim.players[0].pos.z - pos.z).abs() < 1e-6);
+    assert_eq!(sim.players[0].primary.ammo, ammo);
+    assert!((sim.players[0].ability_cd - 2.0).abs() < 1e-6);
+    assert_eq!(sim.tick, tick);
+    assert!((sim.time - time).abs() < 1e-6);
+    assert!(sim.projectiles.is_empty());
+}
+
+#[test]
+fn away_mix_ducks_music_and_keeps_the_beat() {
+    use gemini_sim::music::{away_mix, StemMixer, MUSIC_DUCK_LOWPASS_HZ, MUSIC_OPEN_HZ};
+
+    let content = Content::embedded();
+    let duck_db = content.presentation.hud.away.music_duck_db;
+    let ducked = away_mix(1.0, duck_db);
+    let full = 10f32.powf(duck_db / 20.0);
+    assert!((ducked.gain - full).abs() < 1e-3, "{}", ducked.gain);
+    assert!((ducked.lowpass_hz - MUSIC_DUCK_LOWPASS_HZ).abs() < 1.0);
+    let open = away_mix(0.0, duck_db);
+    assert!((open.gain - 1.0).abs() < 1e-4);
+    assert!((open.lowpass_hz - MUSIC_OPEN_HZ).abs() < 1.0);
+    let at_one = away_mix(1.0 / content.coop.host_away.resume_countdown_seconds, duck_db);
+    assert!(at_one.gain > ducked.gain && at_one.gain < open.gain);
+    assert!(at_one.lowpass_hz > ducked.lowpass_hz && at_one.lowpass_hz < open.lowpass_hz);
+
+    let track = content.track("combat_01").expect("combat_01");
+    let loops = vec![8.0; track.layer.len().max(1)];
+    let mut mixer = StemMixer::start(track, &loops, 0.8);
+    for _ in 0..30 {
+        let _mix = away_mix(1.0, duck_db);
+        mixer.advance(track, gemini_sim::SIM_DT, 0.8, 4, None);
+    }
+    assert!(
+        (mixer.voices[0].elapsed - 1.0).abs() < 1e-3,
+        "the beat clock keeps moving and does not restart, elapsed {}",
+        mixer.voices[0].elapsed
+    );
+
+    let low = sine_rms(120.0, MUSIC_DUCK_LOWPASS_HZ);
+    let high = sine_rms(4000.0, MUSIC_DUCK_LOWPASS_HZ);
+    assert!(low > high * 3.0, "lowpass keeps {low} and cuts {high}");
+    let high_open = sine_rms(4000.0, MUSIC_OPEN_HZ);
+    assert!(high_open > 0.5, "{high_open}");
+
+    let back = content.sfx("host_back").expect("host_back");
+    assert!((back.sync_at.expect("sync_at") - content.coop.host_away.resume_countdown_seconds).abs() <= gemini_sim::SIM_DT);
+}
+
+fn sine_rms(freq: f32, cutoff: f32) -> f32 {
+    let mut lowpass = gemini_sim::music::Lowpass::new();
+    let rate = 44_100.0;
+    let start = 2_205usize;
+    let n = 4_410usize;
+    let mut acc = 0.0;
+    for i in 0..n {
+        let t = i as f32 / rate;
+        let sample = (t * freq * std::f32::consts::TAU).sin();
+        let y = lowpass.process(sample, cutoff, rate);
+        if i >= start {
+            acc += y * y;
+        }
+    }
+    (acc / (n - start) as f32).sqrt()
 }
 
 #[test]

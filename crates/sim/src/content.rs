@@ -401,6 +401,24 @@ fn validate_away_hud(away: &AwayHud) -> Result<(), String> {
     if !(away.dim_floor > 0.0 && away.dim_floor <= 1.0) {
         return Err("presentation.toml hud.away dim_floor must be in (0, 1]".into());
     }
+    if !(away.away_desaturation >= 0.0 && away.away_desaturation <= 1.0) {
+        return Err("presentation.toml hud.away away_desaturation must be in [0, 1]".into());
+    }
+    if !(away.away_dim >= 0.0 && away.away_dim <= 1.0) {
+        return Err("presentation.toml hud.away away_dim must be in [0, 1]".into());
+    }
+    if !(away.music_duck_db <= 0.0 && away.music_duck_db >= -60.0) {
+        return Err("presentation.toml hud.away music_duck_db must be in [-60, 0]".into());
+    }
+    if !(away.count_shadow_px > 0.0) {
+        return Err("presentation.toml hud.away count_shadow_px must be positive".into());
+    }
+    if !(away.count_shadow_soft_px >= 0.0) {
+        return Err("presentation.toml hud.away count_shadow_soft_px must be non-negative".into());
+    }
+    if !(away.count_shadow_alpha > 0.0 && away.count_shadow_alpha <= 1.0) {
+        return Err("presentation.toml hud.away count_shadow_alpha must be in (0, 1]".into());
+    }
     Ok(())
 }
 
@@ -2181,6 +2199,10 @@ pub struct AwayHud {
     pub count: String,
     pub count_outline: String,
     pub count_outline_px: f32,
+    pub count_shadow: String,
+    pub count_shadow_px: f32,
+    pub count_shadow_soft_px: f32,
+    pub count_shadow_alpha: f32,
     pub panel_opacity: f32,
     pub panel_width: f32,
     pub panel_height: f32,
@@ -2193,8 +2215,12 @@ pub struct AwayHud {
     pub count_px: f32,
     pub count_scale_from: f32,
     pub count_scale_to: f32,
-    pub world_dim: f32,
-    pub world_saturation: f32,
+    /// 0 keeps full color. 1 is grayscale. The away look is partial so glows stay faintly colored.
+    pub away_desaturation: f32,
+    /// 0 is full brightness. 1 is black, clamped by `dim_floor` when the grade is applied.
+    pub away_dim: f32,
+    /// Music gain while the host is away, in dB. Restored across the resume countdown.
+    pub music_duck_db: f32,
     pub dim_floor: f32,
     pub coop: AwayHudCopy,
     pub solo: AwayHudCopy,
@@ -2439,6 +2465,7 @@ fn require_palette_keys(palette: &Palette, bugs: &crate::bugs::BugBook, away: &A
     check("hud.away bar", &away.bar)?;
     check("hud.away count", &away.count)?;
     check("hud.away count_outline", &away.count_outline)?;
+    check("hud.away count_shadow", &away.count_shadow)?;
     Ok(())
 }
 

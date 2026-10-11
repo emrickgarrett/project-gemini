@@ -10,7 +10,8 @@ pub struct AwayShot {
     pub timer_fill: f32,
     pub digit: Option<u8>,
     pub digit_u: f32,
-    pub frozen: bool,
+    /// 1 is the full away grade. 0 is the clear frame. Countdown stills use the eased weight.
+    pub look: f32,
 }
 
 pub fn paint_away(content: &Content, shot: &AwayShot, width: u32, height: u32) -> Vec<u8> {
@@ -19,12 +20,13 @@ pub fn paint_away(content: &Content, shot: &AwayShot, width: u32, height: u32) -
     let hud = &content.presentation.hud.away;
     let mut rgb = vec![0u8; (width * height * 3) as usize];
     paint_arena(&mut rgb, width, height, content);
-    if shot.frozen {
-        let dim = hud.world_dim;
-        let sat = hud.world_saturation;
+    let look = shot.look.clamp(0.0, 1.0);
+    if look > 0.0 {
+        let dim = hud.away_dim * look;
+        let desat = hud.away_desaturation * look;
         let floor = hud.dim_floor;
         for px in rgb.chunks_exact_mut(3) {
-            let graded = grade(px[0], px[1], px[2], dim, sat, floor);
+            let graded = grade(px[0], px[1], px[2], dim, desat, floor);
             px.copy_from_slice(&graded);
         }
     }
@@ -74,6 +76,33 @@ pub fn paint_away(content: &Content, shot: &AwayShot, width: u32, height: u32) -
         let x = (width as i32 - text_w) / 2;
         let y = (height as i32 - text_h) / 2;
         let alpha = 1.0 - u;
+        let shadow = bytes(content, &hud.count_shadow);
+        let drop = hud.count_shadow_px.round().max(1.0) as i32;
+        let soft = hud.count_shadow_soft_px.round().max(0.0) as i32;
+        let mut marks = vec![(drop, drop, 1.0_f32)];
+        if soft > 0 {
+            for oy in -1..=1 {
+                for ox in -1..=1 {
+                    if ox == 0 && oy == 0 {
+                        continue;
+                    }
+                    marks.push((drop + ox * soft / 2, drop + oy * soft / 2, 0.45));
+                }
+            }
+        }
+        for (dx, dy, weight) in marks {
+            draw_text(
+                &mut rgb,
+                width,
+                height,
+                &label,
+                x + dx,
+                y + dy,
+                cell,
+                shadow,
+                hud.count_shadow_alpha * weight * alpha,
+            );
+        }
         let px = hud.count_outline_px.round().max(1.0) as i32;
         for oy in -1..=1 {
             for ox in -1..=1 {
@@ -130,14 +159,14 @@ fn blit_bug(rgb: &mut [u8], width: u32, height: u32, id: &str, origin_x: u32, or
     }
 }
 
-fn grade(r: u8, g: u8, b: u8, dim: f32, sat: f32, floor: f32) -> [u8; 3] {
+fn grade(r: u8, g: u8, b: u8, dim: f32, desat: f32, floor: f32) -> [u8; 3] {
     let rf = r as f32;
     let gf = g as f32;
     let bf = b as f32;
     let luma = 0.2126 * rf + 0.7152 * gf + 0.0722 * bf;
-    let sat = sat.clamp(0.0, 1.0);
+    let sat = (1.0 - desat).clamp(0.0, 1.0);
     let keep = (1.0 - dim).clamp(floor, 1.0);
-    let mix = |channel: f32| ((luma + (channel - luma) * sat) * keep).clamp(0.0, 255.0) as u8;
+    let mix = |channel: f32| ((luma + (channel - luma) * sat) * keep).round().clamp(0.0, 255.0) as u8;
     [mix(rf), mix(gf), mix(bf)]
 }
 
@@ -242,7 +271,7 @@ mod tests {
             timer_fill: fill,
             digit: None,
             digit_u: 0.0,
-            frozen: true,
+            look: 1.0,
         };
         let rgb = paint_away(&content, &banner, 960, 540);
         assert!(!reveal_still_is_flat(&rgb), "host away banner");
@@ -253,9 +282,10 @@ mod tests {
             timer_fill: 0.0,
             digit: None,
             digit_u: 0.0,
-            frozen: true,
+            look: 1.0,
         };
         assert!(!reveal_still_is_flat(&paint_away(&content, &paused, 960, 540)));
+        let full = content.coop.host_away.resume_countdown_seconds.max(1.0);
         for digit in [3, 2, 1] {
             let shot = AwayShot {
                 banner: false,
@@ -264,9 +294,25 @@ mod tests {
                 timer_fill: 0.0,
                 digit: Some(digit),
                 digit_u: 0.0,
-                frozen: true,
+                look: (digit as f32 / full).clamp(0.0, 1.0),
             };
             assert!(!reveal_still_is_flat(&paint_away(&content, &shot, 960, 540)), "{digit}");
         }
+    }
+
+    #[test]
+    fn away_grade_keeps_a_faint_glow() {
+        let content = Content::embedded();
+        let hud = &content.presentation.hud.away;
+        assert!((hud.away_desaturation - 0.6).abs() < 1e-4);
+        assert!((hud.away_dim - 0.3).abs() < 1e-4);
+        assert!((hud.count_outline_px - 4.0).abs() < 1e-4);
+        assert!(hud.count_shadow_px > hud.count_outline_px);
+        let glow = grade(0x7C, 0xFF, 0x3A, hud.away_dim, hud.away_desaturation, hud.dim_floor);
+        assert!(glow[1] > glow[0] + 20, "green glow stays green {glow:?}");
+        let gray = grade(0x7C, 0xFF, 0x3A, hud.away_dim, 1.0, hud.dim_floor);
+        assert!(glow[1] > gray[1], "60% desat is greener than grayscale");
+        let clear = grade(0x7C, 0xFF, 0x3A, 0.0, 0.0, hud.dim_floor);
+        assert_eq!(clear, [0x7C, 0xFF, 0x3A]);
     }
 }

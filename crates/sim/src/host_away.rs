@@ -36,6 +36,9 @@ pub struct AwayFrame {
     pub stops: Vec<String>,
     pub frozen: bool,
     pub ended: bool,
+    /// 1 is the full away grade and music duck. 0 is full color and full volume.
+    /// Countdown eases this to 0 across `resume_countdown_seconds`.
+    pub look: f32,
 }
 
 /// Result of one page-visibility sample. Native occlusion and the browser
@@ -283,6 +286,24 @@ impl HostAwayClock {
             stops,
             frozen: self.frozen(),
             ended: self.phase == AwayPhase::Ended,
+            look: self.look_weight(),
+        }
+    }
+
+    /// Away holds the grade. The countdown eases it out over the resume length, which is
+    /// `countdown_full` (copied from `resume_countdown_seconds`). Live and ended are clear.
+    fn look_weight(&self) -> f32 {
+        match self.phase {
+            AwayPhase::Away => 1.0,
+            AwayPhase::Countdown => {
+                let full = self.countdown_full;
+                if !(full > 0.0) {
+                    0.0
+                } else {
+                    (self.countdown / full).clamp(0.0, 1.0)
+                }
+            }
+            AwayPhase::Live | AwayPhase::Ended => 0.0,
         }
     }
 
@@ -353,4 +374,5 @@ fn extend_frame(frame: &mut AwayFrame, extra: AwayFrame) {
     frame.digit_u = extra.digit_u;
     frame.frozen = extra.frozen;
     frame.ended = extra.ended;
+    frame.look = extra.look;
 }

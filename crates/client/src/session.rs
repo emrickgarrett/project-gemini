@@ -14,11 +14,9 @@ use bevy::window::WindowOccluded;
 use gemini_meshes::raster_bug;
 use gemini_sim::audio_mix::SoundEvent;
 use gemini_sim::content::Content;
-use gemini_sim::host_away::{on_host_visibility_changed, HostAwayClock};
-#[cfg(not(target_arch = "wasm32"))]
-use gemini_sim::host_away::AwayPhase;
+use gemini_sim::host_away::{on_host_visibility_changed, AwayPhase, HostAwayClock};
 use gemini_sim::math::Vec3 as SimVec3;
-use gemini_sim::sim::{HitPing, MusicMoment, Phase, PlayerInput, Sim, SoundStop, SIM_DT};
+use gemini_sim::sim::{countdown_aim, HitPing, MusicMoment, Phase, PlayerInput, Sim, SoundStop, SIM_DT};
 
 use crate::AppState;
 
@@ -388,14 +386,23 @@ pub fn gather_and_step(
         fx.stops.push(SoundStop { id, owner: 0 });
     }
     fx.moments.append(&mut game.sim.music);
+    let counting = away.clock.phase() == AwayPhase::Countdown;
+    game.sim.present_countdown = counting;
+    if counting {
+        input = countdown_aim(input);
+    }
     if away.clock.frozen() {
-        game.sim.host_away = true;
+        // The banner freezes the world. The countdown stays frozen too, and only aim moves.
+        game.sim.host_away = !counting;
+        if counting {
+            let Game { sim, content, .. } = &mut *game;
+            sim.step_peers(content, &[input]);
+        }
         match &mut *link {
             CoopLink::Solo => {}
             #[cfg(not(target_arch = "wasm32"))]
             CoopLink::Host(host) => {
-                let mode = if away.clock.phase() == AwayPhase::Countdown {
-                    game.sim.host_away = false;
+                let mode = if counting {
                     crate::net::HostStep::SignalBack
                 } else {
                     crate::net::HostStep::Hold { announce }
@@ -407,6 +414,7 @@ pub fn gather_and_step(
         }
     } else {
         game.sim.host_away = false;
+        game.sim.present_countdown = false;
         #[cfg(not(target_arch = "wasm32"))]
         if away.clock.phase() == AwayPhase::Live {
             if let CoopLink::Client(client) = &mut *link {

@@ -138,6 +138,11 @@ impl Host {
             }
             HostStep::SignalBack => {
                 game.sim.host_away = false;
+                game.sim.present_countdown = true;
+                {
+                    let crate::session::Game { sim, content, .. } = &mut *game;
+                    sim.step_peers(content, &inputs);
+                }
                 self.broadcast_snapshot(game);
             }
         }

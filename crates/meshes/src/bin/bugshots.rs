@@ -155,6 +155,7 @@ fn write_away(out: &str) -> bool {
     let content = Content::embedded();
     let hud = &content.presentation.hud.away;
     let fill = 1.0 - content.coop.host_away.detect_after_seconds / content.coop.host_away.end_after_seconds;
+    let countdown = content.coop.host_away.resume_countdown_seconds.max(1.0);
     let shots = [
         (
             "host_away_banner",
@@ -165,7 +166,7 @@ fn write_away(out: &str) -> bool {
                 timer_fill: fill,
                 digit: None,
                 digit_u: 0.0,
-                frozen: true,
+                look: 1.0,
             },
         ),
         (
@@ -177,7 +178,7 @@ fn write_away(out: &str) -> bool {
                 timer_fill: 0.0,
                 digit: None,
                 digit_u: 0.0,
-                frozen: true,
+                look: 1.0,
             },
         ),
         (
@@ -189,7 +190,7 @@ fn write_away(out: &str) -> bool {
                 timer_fill: 0.0,
                 digit: Some(3),
                 digit_u: 0.0,
-                frozen: true,
+                look: (3.0 / countdown).clamp(0.0, 1.0),
             },
         ),
         (
@@ -201,7 +202,7 @@ fn write_away(out: &str) -> bool {
                 timer_fill: 0.0,
                 digit: Some(2),
                 digit_u: 0.0,
-                frozen: true,
+                look: (2.0 / countdown).clamp(0.0, 1.0),
             },
         ),
         (
@@ -213,7 +214,7 @@ fn write_away(out: &str) -> bool {
                 timer_fill: 0.0,
                 digit: Some(1),
                 digit_u: 0.0,
-                frozen: true,
+                look: (1.0 / countdown).clamp(0.0, 1.0),
             },
         ),
     ];
@@ -224,7 +225,7 @@ fn write_away(out: &str) -> bool {
         write_png(&path, W, H, &rgb);
         println!("wrote {path}");
         let mut clear = shot;
-        clear.frozen = false;
+        clear.look = 0.0;
         let rgb = paint_away(&content, &clear, W, H);
         let clear_name = format!("{name}_clear");
         guard(&clear_name, &rgb);
