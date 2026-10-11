@@ -204,9 +204,20 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
                 .and_then(|v| v.as_str())
                 .filter(|path| !path.is_empty())
                 .ok_or_else(|| format!("sting {id} is missing path"))?;
+            let volume = match value.get("volume_db") {
+                Some(db) => {
+                    let db = db
+                        .as_float()
+                        .or_else(|| db.as_integer().map(|n| n as f64))
+                        .ok_or_else(|| format!("sting {id} volume_db is not a number"))? as f32;
+                    Some(db_to_linear(db))
+                }
+                None => None,
+            };
             sting.push(crate::content::StingDef {
                 id: id.clone(),
                 path: path.to_string(),
+                volume,
             });
         }
     }

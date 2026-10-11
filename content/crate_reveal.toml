@@ -4,6 +4,9 @@
 
 # Global switch. Turn off for any paid crate. The backend logs each pull's fake-out decision.
 fakeout_enabled = true
+fakeout_sfx = "sfx/crate_fakeout.ogg"
+burst_fade = 0.2                 # seconds the burst wash takes to fade
+freeze_dim = 0.62                # legendary freeze multiplies the frame by 1 - this
 
 [common]
 tease = "sfx/crate_tease.ogg"

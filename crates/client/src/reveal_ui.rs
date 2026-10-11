@@ -94,7 +94,7 @@ pub fn tick(
                 position_type: PositionType::Absolute,
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.62 * view.dim)),
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, view.dim)),
             RevealRoot,
         ));
     }
@@ -128,7 +128,7 @@ pub fn from_env(spec: &str) -> Option<RevealRun> {
 
 fn play_cue(commands: &mut Commands, assets: &AssetServer, content: &Content, id: &str) {
     let Some(path) = content.cue_path(id) else { return };
-    let volume = content.sfx(id).map(|row| row.volume).unwrap_or(1.0);
+    let Some(volume) = content.cue_volume(id) else { return };
     commands.spawn((
         AudioPlayer::new(assets.load::<AudioSource>(path.to_string())),
         PlaybackSettings::DESPAWN.with_volume(Volume::Linear(volume)),

@@ -21,14 +21,19 @@ brute_attack = "brute_grunt"
 tyrant_attack = "tyrant_scythe_swipe"
 weakpoint_hit = "weakpoint_hit"
 
+# A sting with no volume_db stays silent. Playback does not invent a gain.
 [sting.crate_common]
 path = "audio/stings/crate_common.ogg"
+volume_db = 0.0
 [sting.crate_rare]
 path = "audio/stings/crate_rare.ogg"
+volume_db = 0.0
 [sting.crate_epic]
 path = "audio/stings/crate_epic.ogg"
+volume_db = 0.0
 [sting.crate_legendary]
 path = "audio/stings/crate_legendary.ogg"
+volume_db = 0.0
 
 # Project Gemini SFX mix table. One [table] per file in audio/sfx/ (key = file name without .ogg).
 # volume_db            gain applied on playback, dB relative to the file (files are all peak-normalized to -2 dBFS).

@@ -280,6 +280,14 @@ impl Content {
         self.sfx(id).map(|row| row.path.as_str())
     }
 
+    /// Playback gain. `None` means the cue stays silent — a missing row is not full volume.
+    pub fn cue_volume(&self, id: &str) -> Option<f32> {
+        if let Some(sting) = self.audio.sting.iter().find(|row| row.id == id) {
+            return sting.volume.filter(|volume| *volume > 0.0);
+        }
+        self.sfx(id).map(|row| row.volume).filter(|volume| *volume > 0.0)
+    }
+
     pub fn pitch_range(&self, id: &str) -> Option<(f32, f32)> {
         let semi = self.sfx(id)?.pitch_semitones;
         if semi <= 0.0 {
@@ -2216,6 +2224,9 @@ impl Palette {
 #[derive(Clone, Debug, Deserialize)]
 pub struct CrateReveal {
     pub fakeout_enabled: bool,
+    pub fakeout_sfx: String,
+    pub burst_fade: f32,
+    pub freeze_dim: f32,
     pub common: CrateTier,
     pub rare: CrateTier,
     pub epic: CrateTier,
@@ -2320,6 +2331,9 @@ pub struct SfxDef {
 pub struct StingDef {
     pub id: String,
     pub path: String,
+    /// Linear gain from `volume_db`. Missing in the mix table means the sting stays silent.
+    #[serde(default)]
+    pub volume: Option<f32>,
 }
 
 #[derive(Clone, Debug, Deserialize)]

@@ -12,8 +12,11 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use gemini_meshes::{
-    catalog, missing_glow_keys, missing_glow_keys_open, painted_pixels, raster_bug, raster_top, still, still_open, still_top,
+    catalog, missing_glow_keys, missing_glow_keys_open, paint_reveal, painted_pixels, raster_bug, raster_top, still,
+    still_open, still_top,
 };
+use gemini_sim::content::Content;
+use gemini_sim::reveal::plan;
 
 fn main() {
     let mut out = "art/bugs".to_string();
@@ -73,9 +76,46 @@ fn main() {
         write_png(&open_path, ow, oh, &open);
         println!("wrote {open_path} ({open_painted} px)");
     }
+    write_reveals(&out);
     if failed {
         std::process::exit(1);
     }
+}
+
+fn write_reveals(out: &str) {
+    const W: u32 = 960;
+    const H: u32 = 540;
+    let content = Content::embedded();
+    let mid = |window: [f32; 2]| (window[0] + window[1]) * 0.5;
+    for rarity in ["common", "rare", "epic", "legendary"] {
+        let planned = plan(&content, rarity, None).expect(rarity);
+        let rgb = paint_reveal(&content, &planned, planned.card_at, W, H);
+        let path = format!("{out}/crate_card_{rarity}.png");
+        write_png(&path, W, H, &rgb);
+        println!("wrote {path}");
+    }
+    let legendary = plan(&content, "legendary", None).expect("legendary");
+    let tier = content.crate_reveal.tier("legendary").expect("legendary tier");
+    let frames = [
+        ("drop", mid(tier.drop)),
+        ("crack", mid(tier.crack)),
+        ("freeze", mid(tier.freeze.expect("legendary freeze"))),
+        ("burst", tier.burst),
+        ("rise", mid(tier.rise)),
+        ("card", tier.card),
+    ];
+    for (name, t) in frames {
+        let rgb = paint_reveal(&content, &legendary, t, W, H);
+        let path = format!("{out}/crate_legendary_{name}.png");
+        write_png(&path, W, H, &rgb);
+        println!("wrote {path} t={t:.2}");
+    }
+    let rare = content.crate_reveal.tier("rare").expect("rare tier");
+    let teased = plan(&content, "rare", Some("epic")).expect("rare fakeout");
+    let rgb = paint_reveal(&content, &teased, mid(rare.fakeout_window), W, H);
+    let path = format!("{out}/crate_rare_fakeout.png");
+    write_png(&path, W, H, &rgb);
+    println!("wrote {path}");
 }
 
 fn write_png(path: &str, w: u32, h: u32, rgb: &[u8]) {

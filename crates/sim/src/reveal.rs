@@ -18,6 +18,7 @@ pub struct RevealPlan {
     drop: [f32; 2],
     crack: [f32; 2],
     burst: f32,
+    rise: [f32; 2],
     freeze: Option<[f32; 2]>,
     fakeout_window: [f32; 2],
 }
@@ -32,9 +33,11 @@ pub struct RevealLook {
     pub drop: f32,
     /// 0 closed, 1 split open.
     pub crack: f32,
-    /// 1 on the burst frame, fading over the next fifth of a second.
+    /// 1 on the burst frame, fading across `burst_fade`.
     pub burst: f32,
-    /// 1 while a legendary freeze is holding.
+    /// 0 before the rise window, 1 at its end.
+    pub rise: f32,
+    /// `freeze_dim` while a legendary freeze is holding, otherwise 0.
     pub dim: f32,
 }
 
@@ -66,10 +69,13 @@ pub fn plan(content: &Content, rarity: &str, fakeout: Option<&str>) -> Result<Re
         id: file_stem(&tier.tease),
     }];
     if fakeout.is_some() {
-        cues.push(RevealCue {
-            at: tier.fakeout_window[0],
-            id: "crate_fakeout".into(),
-        });
+        let id = file_stem(&content.crate_reveal.fakeout_sfx);
+        if !id.is_empty() {
+            cues.push(RevealCue {
+                at: tier.fakeout_window[0],
+                id,
+            });
+        }
     }
     cues.push(RevealCue {
         at: tier.burst,
@@ -83,6 +89,7 @@ pub fn plan(content: &Content, rarity: &str, fakeout: Option<&str>) -> Result<Re
         drop: tier.drop,
         crack: tier.crack,
         burst: tier.burst,
+        rise: tier.rise,
         freeze: tier.freeze,
         fakeout_window: tier.fakeout_window,
     })
@@ -139,10 +146,11 @@ pub fn look(content: &Content, plan: &RevealPlan, t: f32) -> RevealLook {
     let dim = plan
         .freeze
         .filter(|window| t >= window[0] && t < window[1] && !card)
-        .map(|_| 1.0)
+        .map(|_| content.crate_reveal.freeze_dim.clamp(0.0, 1.0))
         .unwrap_or(0.0);
-    let burst = if t >= plan.burst && t < plan.burst + 0.2 && !card {
-        1.0 - (t - plan.burst) / 0.2
+    let fade = content.crate_reveal.burst_fade;
+    let burst = if fade > 0.0 && t >= plan.burst && t < plan.burst + fade && !card {
+        1.0 - (t - plan.burst) / fade
     } else {
         0.0
     };
@@ -153,6 +161,7 @@ pub fn look(content: &Content, plan: &RevealPlan, t: f32) -> RevealLook {
         drop: span(t, plan.drop),
         crack: span(t, plan.crack),
         burst,
+        rise: span(t, plan.rise),
         dim,
     }
 }
@@ -227,6 +236,11 @@ mod tests {
         let look_card = look(&content, &teased, teased.card_at);
         assert_eq!(look_card.shown, "epic");
         assert!(look_card.card);
+        let legendary = plan(&content, "legendary", None).unwrap();
+        let frozen = look(&content, &legendary, 4.0);
+        assert!((frozen.dim - content.crate_reveal.freeze_dim).abs() < 1e-4);
+        let rising = look(&content, &legendary, (legendary.rise[0] + legendary.rise[1]) * 0.5);
+        assert!(rising.rise > 0.4 && rising.rise < 0.6, "rise {}", rising.rise);
         let gold = content.palette.key("rarity_legendary");
         let epic = content.palette.key("rarity_epic");
         assert_eq!(look_mid.rgb, gold);

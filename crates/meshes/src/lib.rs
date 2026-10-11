@@ -4,7 +4,10 @@
 mod geom;
 mod pose;
 mod preview;
+mod reveal_still;
 mod visual;
+
+pub use reveal_still::paint_reveal;
 
 pub use pose::{pose, AnimInput, Pose, Xform};
 pub use preview::{
