@@ -14,6 +14,7 @@ webgpu = ["bevy/webgpu"]
 [dependencies]
 gemini-sim = { path = "../sim" }
 gemini-meshes = { path = "../meshes" }
+gemini-proto = { path = "../proto" }
 bevy = { version = "0.20", features = ["vorbis"] }
 
 [[bin]]

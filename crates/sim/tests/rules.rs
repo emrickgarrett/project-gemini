@@ -653,6 +653,7 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         audio: base.audio,
         bugs: base.bugs,
         crate_reveal: base.crate_reveal,
+        coop: base.coop,
     })
     .expect_err("missing hatch_fan_step");
     assert!(err.contains("hatch_fan_step"), "{err}");
@@ -678,6 +679,7 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         audio: base.audio,
         bugs: base.bugs,
         crate_reveal: base.crate_reveal,
+        coop: base.coop,
     })
     .expect_err("spawn_radius inside the body");
     assert!(err.contains("spawn_radius"), "{err}");
@@ -874,6 +876,7 @@ fn missing_weakpoint_anchor_fails_content_load() {
             audio: base.audio,
             bugs,
             crate_reveal: base.crate_reveal,
+            coop: base.coop,
         })
     };
 
@@ -1031,6 +1034,7 @@ fn leg_layout_comes_from_bugs() {
         audio: base.audio,
         bugs: &bugs,
         crate_reveal: base.crate_reveal,
+        coop: base.coop,
     })
     .expect_err("missing layout");
     assert!(err.contains("layout"), "{err}");
@@ -1089,6 +1093,7 @@ fn vex_overdrive_comes_from_characters() {
         audio: base.audio,
         bugs: base.bugs,
         crate_reveal: base.crate_reveal,
+        coop: base.coop,
     })
     .expect_err("missing overdrive duration");
     assert!(err.contains("duration"), "{err}");
@@ -1243,6 +1248,7 @@ fn arena_01_vents_perches_and_pickups() {
             audio: base.audio,
             bugs: base.bugs,
             crate_reveal: base.crate_reveal,
+            coop: base.coop,
         })
     };
     let missing = include_str!("../../../content/arena_01.toml").replacen("telegraph = 1.5\n", "", 1);
@@ -1340,4 +1346,251 @@ fn arena_01_vents_perches_and_pickups() {
         sim.pending_vents.iter().any(|vent| vent.kind == EnemyKind::Spitter),
         "perched budget should move a share onto spitters"
     );
+}
+
+#[test]
+fn coop_table_rejects_missing_keys() {
+    let content = Content::embedded();
+    let sim = Sim::new(&content, "normal", 1);
+    assert!(sim.lobby_ready(&content));
+    assert_eq!(content.coop.max_players, 8);
+    assert_eq!(content.coop.min_players, 1);
+    assert!((content.coop.slot_hold_seconds - 90.0).abs() < 1e-3);
+    assert!((content.coop.multi_reviver_speedup - 0.35).abs() < 1e-4);
+    assert_eq!(content.coop.catchup_pick_mode, "choose_from_3");
+    assert_eq!(content.coop.catchup_pick_count, 3);
+    assert_eq!(content.coop.max_extra_revivers, 2);
+    assert_eq!(content.coop.upgrade_catchup, "match_lowest");
+    assert_eq!(content.coop.join_allowed_during, "breather_only");
+    assert_eq!(content.coop.budget_rescale, "next_wave");
+    assert_eq!(content.coop.squad_wipe, "all_downed");
+    assert_eq!(content.coop.currency_credit, "per_round_present");
+    assert_eq!(content.coop.host_leave, "match_ends_rounds_kept");
+    assert!(!content.coop.friendly_fire);
+    assert!(!content.coop.downed_on_return);
+    assert!(content.coop.bleedout_pause_while_reviving);
+    assert!(content.coop.leave_keeps_earned);
+
+    let base = gemini_sim::content::embedded_sources();
+    let stripped = base
+        .coop
+        .lines()
+        .filter(|line| !line.contains("max_players"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let err = Content::parse(&sources_with(&base, &stripped)).expect_err("missing max_players");
+    assert!(err.contains("max_players"), "{err}");
+
+    let unknown = format!("{}\n[extra]\nnope = 1\n", base.coop);
+    let err = Content::parse(&sources_with(&base, &unknown)).expect_err("unknown table");
+    assert!(err.contains("unknown key"), "{err}");
+}
+
+fn sources_with<'a>(base: &'a gemini_sim::content::Sources<'a>, coop: &'a str) -> gemini_sim::content::Sources<'a> {
+    gemini_sim::content::Sources {
+        waves: base.waves,
+        difficulty: base.difficulty,
+        controller: base.controller,
+        run_upgrades: base.run_upgrades,
+        endless: base.endless,
+        currency: base.currency,
+        banners: base.banners,
+        duplicate_ranks: base.duplicate_ranks,
+        bosses: base.bosses,
+        weapons: base.weapons,
+        hero: base.hero,
+        arena: base.arena,
+        presentation: base.presentation,
+        combat: base.combat,
+        palette: base.palette,
+        music: base.music,
+        audio: base.audio,
+        bugs: base.bugs,
+        crate_reveal: base.crate_reveal,
+        coop,
+    }
+}
+
+fn quiet_breather(sim: &mut Sim) {
+    sim.enemies.clear();
+    sim.pending_vents.clear();
+    sim.director.pool = 0.0;
+    sim.director.parked = true;
+    sim.phase = Phase::Breather { left: 10_000.0 };
+}
+
+#[test]
+fn join_in_progress_waits_for_breather_and_matches_lowest() {
+    let content = Content::embedded();
+    let mut sim = Sim::new(&content, "normal", 5);
+    sim.players[0].upgrades.insert("rapid_cells".into(), 1);
+    sim.players[0].upgrades.insert("hollow_points".into(), 1);
+    let token = sim.request_join(&content).expect("queue");
+    assert!(sim.pending_joins.iter().any(|join| join.token == token));
+    assert!(sim.players.iter().all(|player| player.token != token));
+
+    sim.phase = Phase::Upgrade {
+        options: vec!["servo_legs".into(), "rapid_cells".into(), "hollow_points".into()],
+    };
+    sim.step(
+        &content,
+        PlayerInput {
+            upgrade_choice: Some(0),
+            ..PlayerInput::default()
+        },
+    );
+    assert!(matches!(sim.phase, Phase::Breather { .. }));
+    let joiner = sim.players.iter().find(|player| player.token == token).expect("spawned");
+    let lowest = sim.players[0].upgrades.values().sum::<u32>();
+    assert_eq!(joiner.catchup_left, lowest);
+    assert_eq!(joiner.catchup_options.len(), content.coop.catchup_pick_count as usize);
+    assert!(lowest >= 2, "host should still be the lowest stack count");
+
+    sim.choose_catchup(&content, token, 0).unwrap();
+    let joiner = sim.players.iter().find(|player| player.token == token).unwrap();
+    assert_eq!(joiner.catchup_left, lowest - 1);
+    assert_eq!(joiner.catchup_options.len(), content.coop.catchup_pick_count as usize);
+    assert_eq!(joiner.upgrades.values().sum::<u32>(), 1);
+
+    sim.phase = Phase::Breather { left: 0.01 };
+    sim.step(&content, PlayerInput::default());
+    assert_eq!(sim.player_count, sim.connected_count() as u32);
+    assert_eq!(sim.player_count, 2);
+}
+
+#[test]
+fn reconnect_holds_the_slot_then_expires() {
+    let content = Content::embedded();
+    let mut sim = Sim::new(&content, "normal", 9);
+    quiet_breather(&mut sim);
+    sim.players[0].pos = Vec3::new(4.0, 4.0, -6.0);
+    let token = sim.request_join(&content).unwrap();
+    {
+        let joiner = sim.players.iter_mut().find(|player| player.token == token).unwrap();
+        joiner.upgrades.insert("servo_legs".into(), 1);
+        joiner.hp = 1.0;
+        joiner.downed = true;
+    }
+    sim.disconnect_token(&content, token).unwrap();
+    {
+        let joiner = sim.players.iter().find(|player| player.token == token).unwrap();
+        assert!(!joiner.connected);
+        assert!((joiner.hold_left - content.coop.slot_hold_seconds).abs() < 1e-3);
+        assert_eq!(joiner.upgrades.get("servo_legs"), Some(&1));
+        assert!(joiner.downed);
+    }
+    sim.step(&content, PlayerInput::default());
+    let held = sim.players.iter().find(|player| player.token == token).unwrap().hold_left;
+    assert!(held < content.coop.slot_hold_seconds);
+
+    let seat = sim.reconnect_token(&content, token).unwrap();
+    let joiner = &sim.players[seat];
+    assert!(joiner.connected);
+    assert!(!joiner.downed);
+    assert!(joiner.alive);
+    assert!((joiner.hp - joiner.max_hp).abs() < 1e-2);
+    assert!((joiner.pos.x - 4.0).abs() < 1e-3);
+    assert!((joiner.pos.z + 6.0).abs() < 1e-3);
+    assert_eq!(joiner.upgrades.get("servo_legs"), Some(&1));
+
+    sim.credits.insert(token, vec![1]);
+    sim.disconnect_token(&content, token).unwrap();
+    let steps = (content.coop.slot_hold_seconds / gemini_sim::SIM_DT).ceil() as u32 + 1;
+    for _ in 0..steps {
+        sim.step(&content, PlayerInput::default());
+    }
+    assert!(sim.players.iter().all(|player| player.token != token));
+    assert_eq!(sim.credits.get(&token), Some(&vec![1]));
+    assert!(sim.players.iter().any(|player| player.is_host && player.connected));
+    assert!(matches!(sim.phase, Phase::Breather { .. }));
+}
+
+#[test]
+fn host_leave_ends_the_match_and_keeps_credits() {
+    let content = Content::embedded();
+    let mut sim = Sim::new(&content, "normal", 4);
+    let token = sim.players[0].token;
+    assert!(sim.credits.get(&token).unwrap().contains(&1));
+    sim.disconnect_token(&content, token).unwrap();
+    assert!(matches!(sim.phase, Phase::Defeat));
+    assert_eq!(sim.credits.get(&token).unwrap(), &vec![1]);
+}
+
+#[test]
+fn squad_wipe_and_reviver_speed_come_from_coop() {
+    let content = Content::embedded();
+    let mut sim = Sim::new(&content, "normal", 6);
+    quiet_breather(&mut sim);
+    let second = sim.request_join(&content).unwrap();
+    let third = sim.request_join(&content).unwrap();
+    let fourth = sim.request_join(&content).unwrap();
+    sim.phase = Phase::Combat;
+    sim.director.parked = true;
+    sim.director.pool = 50.0;
+    for player in &mut sim.players {
+        player.pos = Vec3::new(1.0, 4.0, 1.0);
+    }
+    let downed = sim.players.iter().position(|player| player.token == fourth).unwrap();
+    sim.players[downed].downed = true;
+    sim.players[downed].hp = 0.0;
+    let bleed = sim.players[downed].bleedout;
+    let mut inputs = vec![
+        PlayerInput {
+            interact_held: true,
+            ..PlayerInput::default()
+        };
+        sim.players.len()
+    ];
+    inputs[downed].interact_held = false;
+    sim.step_peers(&content, &inputs);
+    let revived = &sim.players[downed];
+    let revivers = 3u32;
+    let extra = revivers.saturating_sub(1).min(content.coop.max_extra_revivers);
+    let speed = 1.0 + content.coop.multi_reviver_speedup * extra as f32;
+    assert!((revived.revive_progress - gemini_sim::SIM_DT * speed).abs() < 1e-3, "{}", revived.revive_progress);
+    assert!((revived.bleedout - bleed).abs() < 1e-3, "bleedout should pause while a teammate revives");
+    assert!(revived.downed);
+    let _ = (second, third);
+
+    for player in &mut sim.players {
+        player.downed = true;
+        player.alive = true;
+    }
+    sim.step_peers(&content, &vec![PlayerInput::default(); sim.players.len()]);
+    assert!(matches!(sim.phase, Phase::Defeat), "all_downed ends a squad");
+}
+
+#[test]
+fn friendly_fire_off_does_not_damage_a_teammate() {
+    let content = Content::embedded();
+    assert!(!content.coop.friendly_fire);
+    let mut sim = Sim::new(&content, "normal", 2);
+    quiet_breather(&mut sim);
+    let token = sim.request_join(&content).unwrap();
+    sim.phase = Phase::Combat;
+    sim.director.parked = true;
+    sim.director.pool = 40.0;
+    let joiner = sim.players.iter().position(|player| player.token == token).unwrap();
+    let hp = sim.players[joiner].hp;
+    sim.players[joiner].pos = sim.players[0].pos + Vec3::new(0.0, 0.0, -2.0);
+    let owner = sim.players[0].id;
+    sim.projectiles.push(gemini_sim::sim::Projectile {
+        id: 50,
+        pos: sim.players[0].pos + Vec3::new(0.0, 1.0, 0.0),
+        vel: Vec3::new(0.0, 0.0, -80.0),
+        damage: 80.0,
+        radius: 0.3,
+        team: gemini_sim::sim::Team::Player,
+        ttl: 2.0,
+        pierce: 0,
+        bounces: 0,
+        hit: Vec::new(),
+        kind: gemini_sim::sim::ShotKind::Coil,
+        acid_ward: false,
+        owner,
+        crit_mult: 1.0,
+    });
+    sim.step(&content, PlayerInput::default());
+    let joiner = sim.players.iter().find(|player| player.token == token).unwrap();
+    assert!((joiner.hp - hp).abs() < 1e-3, "hp {}", joiner.hp);
 }

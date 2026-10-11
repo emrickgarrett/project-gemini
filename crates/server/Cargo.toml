@@ -12,3 +12,4 @@ path = "src/main.rs"
 
 [dependencies]
 gemini-sim = { path = "../sim" }
+gemini-proto = { path = "../proto" }

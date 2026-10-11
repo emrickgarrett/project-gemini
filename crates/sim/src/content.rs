@@ -29,6 +29,7 @@ pub struct Content {
     pub audio: AudioTable,
     pub bugs: crate::bugs::BugBook,
     pub crate_reveal: CrateReveal,
+    pub coop: CoopRules,
 }
 
 pub struct Sources<'a> {
@@ -51,6 +52,7 @@ pub struct Sources<'a> {
     pub audio: &'a str,
     pub bugs: &'a str,
     pub crate_reveal: &'a str,
+    pub coop: &'a str,
 }
 
 pub fn embedded_sources() -> Sources<'static> {
@@ -74,6 +76,7 @@ pub fn embedded_sources() -> Sources<'static> {
         audio: include_str!("../../../content/audio_mix.toml"),
         bugs: include_str!("../../../content/bugs.toml"),
         crate_reveal: include_str!("../../../content/crate_reveal.toml"),
+        coop: include_str!("../../../content/coop.toml"),
     }
 }
 
@@ -103,6 +106,7 @@ impl Content {
             src.audio,
             src.bugs,
             src.crate_reveal,
+            src.coop,
         ]);
         let mut bugs: crate::bugs::BugBook = parse("bugs.toml", src.bugs)?;
         crate::bugs::bind_weak_anchors(&mut bugs).map_err(|err| format!("bugs.toml: {err}"))?;
@@ -147,6 +151,7 @@ impl Content {
             audio: crate::audio_mix::load_mix(src.audio).map_err(|err| format!("audio_mix.toml: {err}"))?,
             bugs,
             crate_reveal: parse("crate_reveal.toml", src.crate_reveal)?,
+            coop: load_coop(src.coop).map_err(|err| format!("coop.toml: {err}"))?,
         })
     }
 
@@ -1632,6 +1637,189 @@ fn load_rows<T>(
             load(table)
         })
         .collect()
+}
+
+#[derive(Clone, Debug)]
+pub struct CoopRules {
+    pub max_players: u32,
+    pub min_players: u32,
+    pub join_allowed_during: String,
+    pub upgrade_catchup: String,
+    pub catchup_pick_mode: String,
+    pub catchup_pick_count: u32,
+    pub budget_rescale: String,
+    pub slot_hold_seconds: f32,
+    pub downed_on_return: bool,
+    pub multi_reviver_speedup: f32,
+    pub bleedout_pause_while_reviving: bool,
+    pub squad_wipe: String,
+    /// Authored only as `max N extra` on the revive speedup comment. Not a table key.
+    pub max_extra_revivers: u32,
+    pub currency_credit: String,
+    pub leave_keeps_earned: bool,
+    pub host_leave: String,
+    pub friendly_fire: bool,
+}
+
+fn load_coop(text: &str) -> Result<CoopRules, String> {
+    let value: toml::Value = toml::from_str(text).map_err(|err: toml::de::Error| err.to_string())?;
+    let root = value.as_table().ok_or("root must be a table")?;
+    expect_keys(
+        root,
+        &[
+            "lobby",
+            "join_in_progress",
+            "reconnect",
+            "revive",
+            "currency_share",
+            "friendly_fire",
+        ],
+        "coop.toml",
+    )?;
+    let lobby = req_table(root, "lobby", "coop.toml")?;
+    expect_keys(lobby, &["max_players", "min_players"], "coop.toml lobby")?;
+    let join = req_table(root, "join_in_progress", "coop.toml")?;
+    expect_keys(
+        join,
+        &[
+            "allowed_during",
+            "upgrade_catchup",
+            "catchup_pick_mode",
+            "budget_rescale",
+        ],
+        "coop.toml join_in_progress",
+    )?;
+    let reconnect = req_table(root, "reconnect", "coop.toml")?;
+    expect_keys(
+        reconnect,
+        &["slot_hold_seconds", "downed_on_return"],
+        "coop.toml reconnect",
+    )?;
+    let revive = req_table(root, "revive", "coop.toml")?;
+    expect_keys(
+        revive,
+        &[
+            "multi_reviver_speedup",
+            "bleedout_pause_while_reviving",
+            "squad_wipe",
+        ],
+        "coop.toml revive",
+    )?;
+    let currency = req_table(root, "currency_share", "coop.toml")?;
+    expect_keys(
+        currency,
+        &["credit", "leave_keeps_earned", "host_leave"],
+        "coop.toml currency_share",
+    )?;
+    let fire = req_table(root, "friendly_fire", "coop.toml")?;
+    expect_keys(fire, &["enabled"], "coop.toml friendly_fire")?;
+
+    let join_allowed_during = req_string(join, "allowed_during", "coop.toml join_in_progress")?;
+    let upgrade_catchup = req_string(join, "upgrade_catchup", "coop.toml join_in_progress")?;
+    let catchup_pick_mode = req_string(join, "catchup_pick_mode", "coop.toml join_in_progress")?;
+    let budget_rescale = req_string(join, "budget_rescale", "coop.toml join_in_progress")?;
+    let squad_wipe = req_string(revive, "squad_wipe", "coop.toml revive")?;
+    let currency_credit = req_string(currency, "credit", "coop.toml currency_share")?;
+    let host_leave = req_string(currency, "host_leave", "coop.toml currency_share")?;
+    expect_tag(&join_allowed_during, "breather_only", "coop.toml allowed_during")?;
+    expect_tag(&upgrade_catchup, "match_lowest", "coop.toml upgrade_catchup")?;
+    expect_tag(&budget_rescale, "next_wave", "coop.toml budget_rescale")?;
+    expect_tag(&squad_wipe, "all_downed", "coop.toml squad_wipe")?;
+    expect_tag(&currency_credit, "per_round_present", "coop.toml credit")?;
+    expect_tag(&host_leave, "match_ends_rounds_kept", "coop.toml host_leave")?;
+    let catchup_pick_count = parse_choose_from(&catchup_pick_mode)?;
+
+    let max_players = req_u32(lobby, "max_players", "coop.toml lobby")?;
+    let min_players = req_u32(lobby, "min_players", "coop.toml lobby")?;
+    if min_players == 0 || min_players > max_players {
+        return Err("coop.toml lobby min_players must be in 1..=max_players".into());
+    }
+    Ok(CoopRules {
+        max_players,
+        min_players,
+        join_allowed_during,
+        upgrade_catchup,
+        catchup_pick_mode,
+        catchup_pick_count,
+        budget_rescale,
+        slot_hold_seconds: req_f32(reconnect, "slot_hold_seconds", "coop.toml reconnect")?,
+        downed_on_return: req_bool(reconnect, "downed_on_return", "coop.toml reconnect")?,
+        multi_reviver_speedup: req_f32(revive, "multi_reviver_speedup", "coop.toml revive")?,
+        bleedout_pause_while_reviving: req_bool(revive, "bleedout_pause_while_reviving", "coop.toml revive")?,
+        squad_wipe,
+        max_extra_revivers: max_extra_revivers(text)?,
+        currency_credit,
+        leave_keeps_earned: req_bool(currency, "leave_keeps_earned", "coop.toml currency_share")?,
+        host_leave,
+        friendly_fire: req_bool(fire, "enabled", "coop.toml friendly_fire")?,
+    })
+}
+
+fn req_table<'a>(
+    table: &'a toml::map::Map<String, toml::Value>,
+    key: &str,
+    what: &str,
+) -> Result<&'a toml::map::Map<String, toml::Value>, String> {
+    table
+        .get(key)
+        .and_then(|value| value.as_table())
+        .ok_or_else(|| format!("{what} is missing {key}"))
+}
+
+fn req_string(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<String, String> {
+    table
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(|text| text.to_string())
+        .ok_or_else(|| format!("{what} is missing {key}"))
+}
+
+fn req_bool(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<bool, String> {
+    table
+        .get(key)
+        .and_then(|value| value.as_bool())
+        .ok_or_else(|| format!("{what} {key} must be a bool"))
+}
+
+fn expect_tag(value: &str, allowed: &str, what: &str) -> Result<(), String> {
+    if value == allowed {
+        Ok(())
+    } else {
+        Err(format!("{what} must be {allowed}"))
+    }
+}
+
+fn parse_choose_from(mode: &str) -> Result<u32, String> {
+    let Some(rest) = mode.strip_prefix("choose_from_") else {
+        return Err(format!("catchup_pick_mode {mode} must be choose_from_N"));
+    };
+    let count: u32 = rest
+        .parse()
+        .map_err(|_| format!("catchup_pick_mode {mode} must be choose_from_N"))?;
+    if count == 0 {
+        return Err(format!("catchup_pick_mode {mode} needs at least one offer"));
+    }
+    Ok(count)
+}
+
+/// The extra-reviver cap is a comment on the speedup line (`max N extra`), not its own key.
+fn max_extra_revivers(text: &str) -> Result<u32, String> {
+    for line in text.lines() {
+        let Some(at) = line.find("max ") else {
+            continue;
+        };
+        let after = &line[at + 4..];
+        let digits: String = after.chars().take_while(|ch| ch.is_ascii_digit()).collect();
+        if digits.is_empty() {
+            continue;
+        }
+        if after[digits.len()..].trim_start().starts_with("extra") {
+            return digits
+                .parse()
+                .map_err(|_| "coop.toml revive max extra revivers is not a number".into());
+        }
+    }
+    Err("coop.toml revive comment is missing max N extra".into())
 }
 
 fn expect_keys(table: &toml::map::Map<String, toml::Value>, allowed: &[&str], what: &str) -> Result<(), String> {
