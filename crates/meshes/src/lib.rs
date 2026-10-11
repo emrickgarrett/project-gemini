@@ -84,11 +84,55 @@ pub fn muzzle_local() -> [f32; 3] {
     [0.03, -0.005, -1.28]
 }
 
-/// Round muzzle glow, centered on the origin. `radius` comes from characters.toml.
+/// Round muzzle glow, centered on the origin. Scale it by the radius from characters.toml.
 pub fn muzzle_glow(radius: f32) -> MeshData {
     let mut mesh = MeshData::new();
+    let radius = if radius > 0.0 { radius } else { 1.0 };
     geom::gem(&mut mesh, [0.0, 0.0, 0.0], [radius, radius, radius], 16, 10, [1.0, 1.0, 1.0, 1.0]);
     mesh
+}
+
+/// Move `tip` back along +Z until it sits `tip_px` screen pixels onto the barrel.
+pub fn muzzle_on_barrel(tip: [f32; 3], fov_deg: f32, width: f32, height: f32, tip_px: f32) -> [f32; 3] {
+    if !(tip_px > 0.0) || !(width > 1.0) || !(height > 1.0) {
+        return tip;
+    }
+    let step = 0.05;
+    let back = [tip[0], tip[1], tip[2] + step];
+    let Some(a) = project_view(tip, fov_deg, width, height) else {
+        return tip;
+    };
+    let Some(b) = project_view(back, fov_deg, width, height) else {
+        return tip;
+    };
+    let dx = b[0] - a[0];
+    let dy = b[1] - a[1];
+    let dist = (dx * dx + dy * dy).sqrt();
+    if !(dist > 1e-4) {
+        return tip;
+    }
+    let scale = tip_px / dist;
+    [tip[0], tip[1], tip[2] + step * scale]
+}
+
+/// Screen radius of a viewmodel-space sphere at `depth` (camera forward distance).
+pub fn radius_px(radius: f32, depth: f32, fov_deg: f32, height: f32) -> f32 {
+    let focal = 1.0 / (fov_deg.to_radians() * 0.5).tan();
+    let z = if depth > 0.05 { depth } else { 0.05 };
+    radius / z * focal * 0.5 * height
+}
+
+/// Camera at the origin, looking down -Z. Matches the first-person still.
+pub fn project_view(p: [f32; 3], fov_deg: f32, width: f32, height: f32) -> Option<[f32; 3]> {
+    let z = -p[2];
+    if z < 0.05 {
+        return None;
+    }
+    let focal = 1.0 / (fov_deg.to_radians() * 0.5).tan();
+    let aspect = width / height;
+    let x = p[0] / z * focal / aspect;
+    let y = p[1] / z * focal;
+    Some([(x * 0.5 + 0.5) * width, (1.0 - (y * 0.5 + 0.5)) * height, z])
 }
 
 pub fn viewmodel() -> Viewmodel {
@@ -596,6 +640,52 @@ mod tests {
             .map(|p| (p[0] * p[0] + p[2] * p[2]).sqrt())
             .fold(0.0_f32, f32::max);
         assert!(thick < 0.06, "leg spike thickness {thick}");
+    }
+
+    #[test]
+    fn muzzle_flash_sits_about_five_pixels_onto_the_barrel() {
+        let content = gemini_sim::content::Content::embedded();
+        let hero = &content.hero;
+        let local = muzzle_local();
+        let tip = [
+            hero.viewmodel_offset[0] + local[0],
+            hero.viewmodel_offset[1] + local[1],
+            hero.viewmodel_offset[2] + local[2],
+        ];
+        let moved = muzzle_on_barrel(tip, hero.viewmodel_fov, 1280.0, 720.0, hero.muzzle_flash_tip_px);
+        assert!(moved[2] > tip[2], "the glow moves back onto the barrel");
+        let a = project_view(tip, hero.viewmodel_fov, 1280.0, 720.0).unwrap();
+        let b = project_view(moved, hero.viewmodel_fov, 1280.0, 720.0).unwrap();
+        let dist = ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt();
+        assert!((dist - hero.muzzle_flash_tip_px).abs() < 0.35, "screen shift {dist}");
+        let frame = ViewmodelFrame {
+            accent: [1.0, 0.45, 0.1, 1.0],
+            offset: hero.viewmodel_offset,
+            fov: hero.viewmodel_fov,
+            overdrive: true,
+            glow_radius: hero.muzzle_flash_radius,
+            glow_core: hero.muzzle_flash_core,
+            glow_falloff: hero.muzzle_flash_falloff,
+            glow_tip_px: hero.muzzle_flash_tip_px,
+            glow_color: [
+                hero.muzzle_flash_color[0],
+                hero.muzzle_flash_color[1],
+                hero.muzzle_flash_color[2],
+                1.0,
+            ],
+        };
+        let rgb = raster_viewmodel(1280, 720, &frame);
+        let cx = b[0].round() as i32;
+        let cy = b[1].round() as i32;
+        let at = |x: i32, y: i32| {
+            let i = ((y as u32 * 1280) + x as u32) as usize * 3;
+            [rgb[i], rgb[i + 1], rgb[i + 2]]
+        };
+        let core = at(cx, cy);
+        assert!(core[0] > 240 && core[1] > 220, "bright core {core:?} at {cx},{cy}");
+        let halo = at(cx + 28, cy);
+        assert!(halo[0] > 160 && halo[2] < 160, "soft halo {halo:?}");
+        assert!(core[0] as i32 + core[1] as i32 > halo[0] as i32 + halo[1] as i32);
     }
 
     #[test]

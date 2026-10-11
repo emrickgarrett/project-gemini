@@ -77,19 +77,15 @@ pub fn paint_away(content: &Content, shot: &AwayShot, width: u32, height: u32) -
         let y = (height as i32 - text_h) / 2;
         let alpha = 1.0 - u;
         let shadow = bytes(content, &hud.count_shadow);
-        let drop = hud.count_shadow_px.round().max(1.0) as i32;
-        let soft = hud.count_shadow_soft_px.round().max(0.0) as i32;
-        let mut marks = vec![(drop, drop, 1.0_f32)];
-        if soft > 0 {
-            for oy in -1..=1 {
-                for ox in -1..=1 {
-                    if ox == 0 && oy == 0 {
-                        continue;
-                    }
-                    marks.push((drop + ox * soft / 2, drop + oy * soft / 2, 0.45));
-                }
-            }
-        }
+        let marks: Vec<(i32, i32, f32)> = hud
+            .count_shadow_samples
+            .iter()
+            .map(|sample| {
+                let dx = (hud.count_shadow_px + sample.ox * hud.count_shadow_soft_px).round() as i32;
+                let dy = (hud.count_shadow_px + sample.oy * hud.count_shadow_soft_px).round() as i32;
+                (dx, dy, sample.weight)
+            })
+            .collect();
         for (dx, dy, weight) in marks {
             draw_text(
                 &mut rgb,

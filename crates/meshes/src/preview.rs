@@ -83,8 +83,11 @@ pub struct ViewmodelFrame {
     pub offset: [f32; 3],
     pub fov: f32,
     pub overdrive: bool,
-    /// Muzzle glow radius from characters.toml. Drawn only while Overdrive is firing in the still.
     pub glow_radius: f32,
+    pub glow_core: f32,
+    pub glow_falloff: f32,
+    pub glow_tip_px: f32,
+    pub glow_color: [f32; 4],
 }
 
 /// First-person still. The camera sits at the origin looking down -Z, matching the overlay camera.
@@ -103,21 +106,67 @@ pub fn raster_viewmodel(width: u32, height: u32, frame: &ViewmodelFrame) -> Vec<
     parts.push((shifted(&vm.barrel, shift), barrel_color, frame.overdrive));
     parts.push((shifted(&vm.accent, shift), orange, true));
     parts.push((shifted(&vm.core, shift), palette("hero_teal"), true));
+    let w = width.max(8);
+    let h = height.max(8);
+    let mut rgb = draw_parts(&parts, [0.0, 0.0, 0.0], [0.0, 0.0, -1.0], frame.fov, w, h);
     if frame.overdrive {
-        let tip = [
-            shift[0] + crate::muzzle_local()[0],
-            shift[1] + crate::muzzle_local()[1],
-            shift[2] + crate::muzzle_local()[2],
-        ];
-        let mut glow = crate::muzzle_glow(frame.glow_radius);
-        crate::geom::translate(&mut glow, tip);
-        parts.push((glow, [1.0, 0.72, 0.28, 1.0], true));
-    }
-    let mut rgb = draw_parts(&parts, [0.0, 0.0, 0.0], [0.0, 0.0, -1.0], frame.fov, width, height);
-    if frame.overdrive {
-        edge_tint(&mut rgb, width.max(8), height.max(8), orange);
+        edge_tint(&mut rgb, w, h, orange);
+        let local = crate::muzzle_local();
+        let tip = [shift[0] + local[0], shift[1] + local[1], shift[2] + local[2]];
+        let moved = crate::muzzle_on_barrel(tip, frame.fov, w as f32, h as f32, frame.glow_tip_px);
+        if let Some(screen) = crate::project_view(moved, frame.fov, w as f32, h as f32) {
+            let radius = crate::radius_px(frame.glow_radius, screen[2], frame.fov, h as f32);
+            paint_muzzle_bloom(&mut rgb, w, h, screen[0], screen[1], radius, frame.glow_core, frame.glow_falloff, frame.glow_color);
+        }
     }
     rgb
+}
+
+fn paint_muzzle_bloom(
+    color: &mut [u8],
+    w: u32,
+    h: u32,
+    cx: f32,
+    cy: f32,
+    radius_px: f32,
+    core_frac: f32,
+    falloff: f32,
+    glow: [f32; 4],
+) {
+    let radius = radius_px.max(1.0);
+    let core = (radius * core_frac.clamp(0.0, 1.0)).min(radius);
+    let falloff = if falloff > 0.0 { falloff } else { 1.0 };
+    let x0 = (cx - radius).floor().max(0.0) as i32;
+    let y0 = (cy - radius).floor().max(0.0) as i32;
+    let x1 = (cx + radius).ceil().min(w as f32 - 1.0) as i32;
+    let y1 = (cy + radius).ceil().min(h as f32 - 1.0) as i32;
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let dx = x as f32 + 0.5 - cx;
+            let dy = y as f32 + 0.5 - cy;
+            let d = (dx * dx + dy * dy).sqrt();
+            if d > radius {
+                continue;
+            }
+            let t = if d <= core {
+                1.0
+            } else {
+                let u = (d - core) / (radius - core).max(1e-3);
+                (1.0 - u).clamp(0.0, 1.0).powf(falloff)
+            };
+            let hot = if core > 0.5 {
+                (1.0 - d / core).clamp(0.0, 1.0).powf(1.4)
+            } else {
+                0.0
+            };
+            let src_i = ((y as u32 * w) + x as u32) as usize * 3;
+            for c in 0..3 {
+                let channel = glow[c] + (1.0 - glow[c]) * hot;
+                let src = color[src_i + c] as f32;
+                color[src_i + c] = (src * (1.0 - t) + channel * 255.0 * t).round().clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
 }
 
 fn edge_tint(color: &mut [u8], w: u32, h: u32, orange: [f32; 4]) {

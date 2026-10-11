@@ -46,12 +46,14 @@ pub fn tick(
         commands.entity(entity).despawn();
     }
     let view = look(&content, &run.plan, run.time);
+    let layout = &content.crate_reveal.layout;
     let rgb = Color::srgb(view.rgb[0], view.rgb[1], view.rgb[2]);
-    let ink = if view.rgb[0] * 0.3 + view.rgb[1] * 0.59 + view.rgb[2] * 0.11 > 0.62 {
-        Color::srgb(0.12, 0.1, 0.14)
-    } else {
-        Color::srgb(0.95, 0.95, 0.95)
-    };
+    let luma = view.rgb[0] * 0.3 + view.rgb[1] * 0.59 + view.rgb[2] * 0.11;
+    let ink_name = if luma > layout.ink_luma { &layout.ink_dark } else { &layout.ink_light };
+    let ink_rgb = content.palette.key(ink_name);
+    let ink = Color::srgb(ink_rgb[0], ink_rgb[1], ink_rgb[2]);
+    let paper = content.palette.key(&layout.ink_light);
+    let stage = content.palette.key(&layout.stage);
     let title = view.shown.to_uppercase();
     let hint = if view.card { "ENTER" } else { "SKIP" };
     let hint_style = &content.crate_reveal.hint;
@@ -64,16 +66,16 @@ pub fn tick(
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
             flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(16.0),
+            row_gap: Val::Px(layout.row_gap),
             ..default()
         },
-        BackgroundColor(Color::srgb(0.07, 0.055, 0.09)),
+        BackgroundColor(Color::srgb(stage[0], stage[1], stage[2])),
         RevealRoot,
         children![
             (
                 Node {
-                    width: Val::Px(420.0),
-                    height: Val::Px(240.0),
+                    width: Val::Px(layout.panel_width),
+                    height: Val::Px(layout.panel_height),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     padding: UiRect::all(Val::Px(content.crate_reveal.card.title_pad)),
@@ -92,7 +94,7 @@ pub fn tick(
                 children![(
                     Text::new(hint),
                     TextFont::from_font_size(hint_style.text_px),
-                    TextColor(Color::srgba(0.95, 0.95, 0.95, hint_style.opacity)),
+                    TextColor(Color::srgba(paper[0], paper[1], paper[2], hint_style.opacity)),
                 )],
             ),
         ],

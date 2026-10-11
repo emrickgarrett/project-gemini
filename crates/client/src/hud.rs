@@ -607,12 +607,11 @@ fn paint_away(commands: &mut Commands, root: Entity, game: &Game, away: &Away) {
         };
         let drop = hud.count_shadow_px;
         let soft = hud.count_shadow_soft_px;
-        let mut shadow_marks = vec![(drop, drop, 1.0)];
-        if soft > 0.0 {
-            for (ox, oy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
-                shadow_marks.push((drop + ox * soft * 0.5, drop + oy * soft * 0.5, 0.45));
-            }
-        }
+        let shadow_marks: Vec<(f32, f32, f32)> = hud
+            .count_shadow_samples
+            .iter()
+            .map(|sample| (drop + sample.ox * soft, drop + sample.oy * soft, sample.weight))
+            .collect();
         for (dx, dy, weight) in shadow_marks {
             commands.spawn((
                 Text::new(label.clone()),

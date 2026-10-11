@@ -16,7 +16,7 @@ use gemini_sim::content::Content;
 use gemini_sim::math::Vec3 as SimVec;
 use gemini_sim::music::{
     away_mix, bpm_sanity, combat_intensity, plan_switch, switch_clock, FileClock, Lowpass, MusicDirectorCfg,
-    PlannedSwitch, StemMixer, SwitchClock, TrackDef, TransitionKind, MUSIC_OPEN_HZ,
+    PlannedSwitch, StemMixer, SwitchClock, TrackDef, TransitionKind,
 };
 use gemini_sim::ogg::vorbis_seconds;
 use gemini_sim::sim::MusicMoment;
@@ -40,7 +40,7 @@ struct FilterParams {
 impl FilterParams {
     fn open() -> Self {
         Self {
-            cutoff_bits: AtomicU32::new(MUSIC_OPEN_HZ.to_bits()),
+            cutoff_bits: AtomicU32::new(f32::INFINITY.to_bits()),
         }
     }
 
@@ -202,7 +202,8 @@ pub fn play(
     shots: Query<(Entity, &OneShot), Without<MusicStem>>,
     time: Res<Time>,
 ) {
-    let mix = away_mix(away.view.look, game.content.presentation.hud.away.music_duck_db);
+    let hud = &game.content.presentation.hud.away;
+    let mix = away_mix(away.view.look, hud.music_duck_db, hud.music_duck_lowpass_hz);
     music.duck_gain = mix.gain;
     music.filter.0.set_hz(mix.lowpass_hz);
     let listener = listener_of(&game);

@@ -43,14 +43,15 @@ pub fn paint_reveal(content: &Content, plan: &RevealPlan, t: f32, width: u32, he
     let height = height.max(8);
     let view = look(content, plan, t);
     let mut rgb = vec![0u8; (width * height * 3) as usize];
-    paint_stage(&mut rgb, width, height);
+    let layout = &content.crate_reveal.layout;
+    paint_stage(&mut rgb, width, height, layout);
     let color = bytes(view.rgb);
-    let ink = if luminance(view.rgb) > 0.62 {
-        [28u8, 24, 32]
+    let ink = if luminance(view.rgb) > layout.ink_luma {
+        palette_bytes(content, &layout.ink_dark)
     } else {
-        [242u8, 242, 242]
+        palette_bytes(content, &layout.ink_light)
     };
-    let light = [242u8, 242, 242];
+    let light = palette_bytes(content, &layout.ink_light);
     if view.card {
         paint_card(&mut rgb, width, height, color, ink, light, &view.shown, &content.crate_reveal.card);
     } else {
@@ -72,10 +73,13 @@ pub fn paint_reveal(content: &Content, plan: &RevealPlan, t: f32, width: u32, he
     rgb
 }
 
-fn paint_stage(rgb: &mut [u8], width: u32, height: u32) {
+fn paint_stage(rgb: &mut [u8], width: u32, height: u32, layout: &gemini_sim::content::RevealLayout) {
     let cx = (width as f32 - 1.0) * 0.5;
     let cy = (height as f32 - 1.0) * 0.42;
     let max_d = (cx * cx + (height as f32) * (height as f32)).sqrt().max(1.0);
+    let base = layout.stage_base;
+    let lift_c = layout.stage_lift;
+    let vig = layout.stage_vignette;
     for y in 0..height {
         for x in 0..width {
             let dx = x as f32 - cx;
@@ -84,9 +88,9 @@ fn paint_stage(rgb: &mut [u8], width: u32, height: u32) {
             let lift = (1.0 - d).clamp(0.0, 1.0).powf(1.35);
             let vignette = d.clamp(0.0, 1.0).powf(1.6);
             // Center lifts toward a cool slate; the corners fall to near-black.
-            let r = (16.0 + lift * 28.0 - vignette * 10.0).clamp(0.0, 255.0) as u8;
-            let g = (12.0 + lift * 22.0 - vignette * 8.0).clamp(0.0, 255.0) as u8;
-            let b = (22.0 + lift * 36.0 - vignette * 12.0).clamp(0.0, 255.0) as u8;
+            let r = (base[0] + lift * lift_c[0] - vignette * vig[0]).clamp(0.0, 255.0) as u8;
+            let g = (base[1] + lift * lift_c[1] - vignette * vig[1]).clamp(0.0, 255.0) as u8;
+            let b = (base[2] + lift * lift_c[2] - vignette * vig[2]).clamp(0.0, 255.0) as u8;
             put(rgb, width, x, y, [r, g, b]);
         }
     }
@@ -399,6 +403,10 @@ fn put(rgb: &mut [u8], width: u32, x: u32, y: u32, color: [u8; 3]) {
     if i + 2 < rgb.len() {
         rgb[i..i + 3].copy_from_slice(&color);
     }
+}
+
+fn palette_bytes(content: &Content, name: &str) -> [u8; 3] {
+    bytes(content.palette.key(name))
 }
 
 fn bytes(rgb: [f32; 4]) -> [u8; 3] {
