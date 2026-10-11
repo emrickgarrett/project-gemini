@@ -64,7 +64,8 @@ pub fn draw(
     let Some(player) = game.sim.players.first() else { return };
     let teal = color(&game, "hero_teal");
     let white = color(&game, "hero_white");
-    let accent = color(&game, "hero_accent");
+    let accent_rgb = gemini_sim::content::hex_srgb(&game.content.hero.accent);
+    let accent = Color::srgb(accent_rgb[0], accent_rgb[1], accent_rgb[2]);
     let amber = color(&game, "brute_amber");
     let magenta = color(&game, "spitter_glow");
     let boss = game.sim.enemies.iter().find(|e| {
@@ -102,7 +103,7 @@ pub fn draw(
     let fuel_max = game.content.controller.boost.fuel_max;
     let fuel = if fuel_max > 0.0 { player.fuel / fuel_max } else { 0.0 };
     let cd = player.ability_cd;
-    let max_cd = game.content.controller.ability.default_cooldown.max(0.1);
+    let max_cd = game.content.hero.ability_cooldown.max(0.1);
     let ready = cd <= 0.0;
     let boss_id = boss.map(|enemy| enemy.kind.name()).unwrap_or("");
     let upgrade_sig: String = player.upgrades.keys().cloned().collect();

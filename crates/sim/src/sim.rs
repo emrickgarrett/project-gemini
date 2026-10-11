@@ -140,6 +140,8 @@ pub struct Player {
     pub upgrades: BTreeMap<String, u32>,
     pub last_stand_wave: u32,
     pub ability_cd: f32,
+    /// Seconds left on the starter overdrive. Zero means the buff is off.
+    pub overdrive_left: f32,
     pub kills_since_nova: u32,
     pub drone_angle: f32,
     pub alive: bool,
@@ -437,6 +439,7 @@ impl Sim {
             upgrades: BTreeMap::new(),
             last_stand_wave: 0,
             ability_cd: 0.0,
+            overdrive_left: 0.0,
             kills_since_nova: 0,
             drone_angle: 0.0,
             alive: true,
@@ -576,7 +579,7 @@ impl Sim {
             max_speed = ctl.movement.sprint_speed;
             player.sprinting = true;
         }
-        max_speed *= speed_mult;
+        max_speed *= speed_mult * content.hero.move_speed_mult;
         if player.sprinting {
             player.was_sprinting = true;
         } else if player.was_sprinting {
@@ -699,6 +702,16 @@ impl Sim {
             player.shield =
                 (player.shield + content.combat.shield_regen_per_s * dt).min(player.max_shield);
         }
+        let overdrive_end_pos = if player.overdrive_left > 0.0 {
+            player.overdrive_left = (player.overdrive_left - dt).max(0.0);
+            if player.overdrive_left == 0.0 {
+                Some(player.pos)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         if just_landed {
             self.landed_pulse = 1.0;
             let radius = mods.landing_knockback_radius_m;
@@ -707,6 +720,10 @@ impl Sim {
             }
         }
         let _ = was_grounded;
+        if let Some(pos) = overdrive_end_pos {
+            let id = format!("{}_ability_end", content.hero.id);
+            self.sound_at(&id, pos);
+        }
     }
 
     fn shockwave(&mut self, content: &Content, radius: f32) {
@@ -893,14 +910,19 @@ impl Sim {
             self.arm_reload(content, &mods, downed);
             return;
         }
+        let overdrive = self.players[0].overdrive_left > 0.0;
+        let infinite = overdrive && content.hero.infinite_magazine;
+        let rate = if overdrive { content.hero.overdrive_fire_rate } else { 0.0 };
         {
             let gun = if downed {
                 &mut self.players[0].sidearm
             } else {
                 &mut self.players[0].primary
             };
-            gun.ammo -= 1;
-            gun.cooldown = spec.fire_interval / (1.0 + mods.fire_rate_pct).max(0.05);
+            if !infinite {
+                gun.ammo -= 1;
+            }
+            gun.cooldown = spec.fire_interval / (1.0 + mods.fire_rate_pct + rate).max(0.05);
         }
         let kind = if downed { ShotKind::Sidearm } else { ShotKind::Coil };
         self.spawn_player_shot(content, &spec, &mods, kind);
@@ -939,7 +961,8 @@ impl Sim {
             1.0
         };
         let id = self.alloc_id();
-        self.sound_at("shot", origin);
+        let fire_id = format!("{}_fire", content.hero.id);
+        self.sound_at(&fire_id, origin);
         self.projectiles.push(Projectile {
             id,
             pos: origin,
@@ -960,20 +983,12 @@ impl Sim {
 
     fn cast_ability(&mut self, content: &Content, mods: &Modifiers) {
         let cdr = mods.ability_cooldown_reduction.clamp(0.0, 0.95);
-        self.players[0].ability_cd = content.controller.ability.default_cooldown * (1.0 - cdr);
+        let hero = &content.hero;
+        self.players[0].ability_cd = hero.ability_cooldown * (1.0 - cdr);
+        self.players[0].overdrive_left = hero.overdrive_duration;
         let origin = self.players[0].pos;
-        let radius = content.combat.ability_radius;
-        let dmg = content.combat.ability_damage * (1.0 + mods.damage_pct);
-        self.sound_at("ability", origin);
-        for enemy in &mut self.enemies {
-            if !enemy.alive {
-                continue;
-            }
-            let d = Vec3::new(enemy.pos.x - origin.x, 0.0, enemy.pos.z - origin.z).length();
-            if d <= radius {
-                enemy.hp -= dmg;
-            }
-        }
+        let id = format!("{}_ability", hero.id);
+        self.sound_at(&id, origin);
     }
 
     fn tick_projectiles(&mut self, content: &Content, dt: f32) {
@@ -1777,6 +1792,9 @@ impl Sim {
             self.boss_kills += 1;
         }
         let mods = upgrade::collect(content, &self.players[0].upgrades);
+        if self.players[0].overdrive_left > 0.0 {
+            self.players[0].ability_cd = (self.players[0].ability_cd - content.hero.kill_cd_refund).max(0.0);
+        }
         if mods.heal_per_kill_flat > 0.0 {
             self.players[0].hp = (self.players[0].hp + mods.heal_per_kill_flat).min(self.players[0].max_hp);
         }
@@ -1948,7 +1966,7 @@ fn mag_size(base: u32, pct: f32) -> u32 {
 
 fn max_hp(content: &Content, mods: &Modifiers, rank: u32) -> f32 {
     let (hp_pct, _) = rank_bonus(&content.duplicate, rank);
-    let mut max = (content.controller.health.max_hp + mods.max_hp_flat) * (1.0 + hp_pct);
+    let mut max = (content.hero.max_hp + mods.max_hp_flat) * (1.0 + hp_pct);
     if mods.glass_cannon {
         max *= 1.0 + content.combat.glass_cannon_max_hp_pct;
     }
@@ -2455,7 +2473,8 @@ impl Sim {
         }
         gun.reload = time;
         let _ = gun;
-        self.sound_at("reload", pos);
+        let reload_id = format!("{}_reload", content.hero.id);
+        self.sound_at(&reload_id, pos);
     }
 }
 
