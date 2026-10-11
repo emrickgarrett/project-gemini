@@ -100,5 +100,6 @@ climb_target_radius = 2.0          # meters. Ledge center inside this supplies t
 flow_field_targets = "nearest_grounded_player"
 all_perched_grace = 8.0          # seconds before anti-camp kicks in
 climb_speed_mult = 0.5           # swarmers climb resin streaks
+climb_clearance = 0.5             # meters kept inside the play edge while a swarmer climbs
 budget_shift_to_spitters = 0.3   # extra share of wave budget to spitters while all perched
 fuel_regen_on_perch = false      # boosting is still allowed; only regen pauses

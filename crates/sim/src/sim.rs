@@ -1069,7 +1069,13 @@ impl Sim {
         player.pos += player.vel * dt;
         let radius = content.combat.hit_radius.player;
         content.arena.resolve_player(&mut player.pos, old, radius);
-        let support = content.arena.support_y(player.pos.x, player.pos.y, player.pos.z, player.vel.y);
+        let support = content.arena.support_y(
+            player.pos.x,
+            player.pos.y,
+            player.pos.z,
+            player.vel.y,
+            &content.controller.ledge_catch,
+        );
         let mut just_landed = false;
         if player.pos.y <= support + 0.02 && player.vel.y <= 0.05 {
             if !was_grounded && fall <= 0.0 {
@@ -2962,7 +2968,7 @@ fn step_enemy(
             enemy.pos.y = (enemy.pos.y + speed * mult.max(0.0) * dt).min(top);
             enemy.pos.x += dx * dt * slide;
             enemy.pos.z += dz * dt * slide;
-            content.arena.clamp_play(&mut enemy.pos, 0.5);
+            content.arena.clamp_play(&mut enemy.pos, rules.climb_clearance);
             return started;
         }
     }

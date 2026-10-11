@@ -53,7 +53,17 @@ pub fn paint_reveal(content: &Content, plan: &RevealPlan, t: f32, width: u32, he
     };
     let light = palette_bytes(content, &layout.ink_light);
     if view.card {
-        paint_card(&mut rgb, width, height, color, ink, light, &view.shown, &content.crate_reveal.card);
+        paint_card(
+            &mut rgb,
+            width,
+            height,
+            color,
+            ink,
+            light,
+            &view.shown,
+            &content.crate_reveal.card,
+            layout,
+        );
     } else {
         paint_crate(&mut rgb, width, height, &view, color, light);
         if view.burst > 0.02 {
@@ -105,8 +115,9 @@ fn paint_card(
     light: [u8; 3],
     shown: &str,
     card: &gemini_sim::content::CardTitle,
+    layout: &gemini_sim::content::RevealLayout,
 ) {
-    let (x, y, panel_w, panel_h) = card_panel(width, height);
+    let (x, y, panel_w, panel_h) = card_panel(width, height, layout);
     let cx = x + panel_w / 2;
     let cy = y + panel_h / 2;
     add_glow(rgb, width, height, cx, cy, panel_w.max(panel_h), color, 0.72);
@@ -334,11 +345,11 @@ fn paint_burst(rgb: &mut [u8], width: u32, height: u32, color: [u8; 3], burst: f
     }
 }
 
-fn card_panel(width: u32, height: u32) -> (u32, u32, u32, u32) {
-    let panel_w = (width * 46 / 100).max(32);
-    let panel_h = (height * 64 / 100).max(32);
-    let x = (width - panel_w) / 2;
-    let y = (height - panel_h) / 2;
+fn card_panel(width: u32, height: u32, layout: &gemini_sim::content::RevealLayout) -> (u32, u32, u32, u32) {
+    let panel_w = (layout.panel_width.round() as u32).clamp(1, width.max(1));
+    let panel_h = (layout.panel_height.round() as u32).clamp(1, height.max(1));
+    let x = width.saturating_sub(panel_w) / 2;
+    let y = height.saturating_sub(panel_h) / 2;
     (x, y, panel_w, panel_h)
 }
 
@@ -562,5 +573,19 @@ mod tests {
         let drop = paint_reveal(&content, &planned, landed, 320, 180);
         let crack = paint_reveal(&content, &planned, crack_mid, 320, 180);
         assert_ne!(drop, crack, "cracks must change the landed pod");
+    }
+
+    #[test]
+    fn card_panel_size_follows_the_layout_keys() {
+        let content = Content::embedded();
+        let mut layout = content.crate_reveal.layout.clone();
+        let (_, _, width, height) = card_panel(960, 540, &layout);
+        assert_eq!(width, layout.panel_width.round() as u32);
+        assert_eq!(height, layout.panel_height.round() as u32);
+        layout.panel_width += 80.0;
+        layout.panel_height += 40.0;
+        let (_, _, wider, taller) = card_panel(960, 540, &layout);
+        assert_eq!(wider, width + 80);
+        assert_eq!(taller, height + 40);
     }
 }

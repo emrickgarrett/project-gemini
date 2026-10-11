@@ -46,6 +46,43 @@ fn tables_drive_the_controller_and_clocks() {
 }
 
 #[test]
+fn ledge_catch_fails_when_missing_or_not_positive() {
+    let base = gemini_sim::content::embedded_sources();
+    let load = |controller: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            controller,
+            ..sources_with(&base, base.coop)
+        })
+    };
+    let missing = base
+        .controller
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            !(trimmed.starts_with("[ledge_catch]")
+                || trimmed.starts_with("snap ")
+                || trimmed.starts_with("fall_speed ")
+                || trimmed.starts_with("above ")
+                || trimmed.starts_with("below "))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let err = load(&missing).expect_err("missing ledge_catch");
+    assert!(err.contains("ledge_catch"), "{err}");
+    for (from, to, key) in [
+        ("snap = 0.4", "snap = 0", "snap"),
+        ("snap = 0.4", "snap = nan", "snap"),
+        ("fall_speed = 0.15", "fall_speed = -1", "fall_speed"),
+        ("above = 0.25", "above = 0", "above"),
+        ("below = 1.3", "below = nan", "below"),
+    ] {
+        let text = base.controller.replace(from, to);
+        let err = load(&text).expect_err(key);
+        assert!(err.contains(key), "{key}: {err}");
+    }
+}
+
+#[test]
 fn jump_reads_controller() {
     let mut content = Content::embedded();
     content.controller.jump.jump_velocity = 30.0;
@@ -1399,12 +1436,18 @@ fn arena_01_vents_perches_and_pickups() {
     assert!((content.arena.perch_rules.climb_trigger_distance - 1.8).abs() < 1e-4);
     assert!((content.arena.perch_rules.climb_slide_rate - 0.4).abs() < 1e-4);
     assert!((content.arena.perch_rules.climb_target_radius - 2.0).abs() < 1e-4);
+    assert!((content.arena.perch_rules.climb_clearance - 0.5).abs() < 1e-4);
+    let catch = &content.controller.ledge_catch;
+    assert!((catch.snap - 0.4).abs() < 1e-4);
+    assert!((catch.fall_speed - 0.15).abs() < 1e-4);
+    assert!((catch.above - 0.25).abs() < 1e-4);
+    assert!((catch.below - 1.3).abs() < 1e-4);
     let tower = content.arena.ledges.iter().find(|ledge| ledge.id == "tower").unwrap().pos;
     assert!(content.arena.on_perch(Vec3::new(tower.x + 1.4, tower.y, tower.z)));
     assert!(content.arena.on_perch(Vec3::new(tower.x, tower.y + 0.4, tower.z)));
     assert!(!content.arena.on_perch(Vec3::new(tower.x, tower.y + 0.5, tower.z)));
-    assert!((content.arena.support_y(tower.x + 1.3, tower.y, tower.z, 0.0) - tower.y).abs() < 1e-3);
-    assert!(content.arena.support_y(tower.x + 1.6, tower.y, tower.z, 0.0).abs() < 1e-3);
+    assert!((content.arena.support_y(tower.x + 1.3, tower.y, tower.z, 0.0, catch) - tower.y).abs() < 1e-3);
+    assert!(content.arena.support_y(tower.x + 1.6, tower.y, tower.z, 0.0, catch).abs() < 1e-3);
     assert!((content.controller.camera.eye_height - 1.62).abs() < 1e-4);
     assert!((content.controller.camera.crouch_eye - 1.02).abs() < 1e-4);
 
@@ -1440,6 +1483,7 @@ fn arena_01_vents_perches_and_pickups() {
         "climb_trigger_distance",
         "climb_slide_rate",
         "climb_target_radius",
+        "climb_clearance",
     ] {
         let missing_key = include_str!("../../../content/arena_01.toml")
             .lines()
@@ -1448,6 +1492,11 @@ fn arena_01_vents_perches_and_pickups() {
             .join("\n");
         let err = parse(&missing_key).expect_err(key);
         assert!(err.contains(key), "{err}");
+    }
+    for bad in ["climb_clearance = 0", "climb_clearance = nan", "climb_clearance = -1"] {
+        let text = include_str!("../../../content/arena_01.toml").replacen("climb_clearance = 0.5", bad, 1);
+        let err = parse(&text).expect_err(bad);
+        assert!(err.contains("climb_clearance"), "{err}");
     }
     for bad in ["climb_target_radius = 0.0", "climb_target_radius = -2.0"] {
         let text = include_str!("../../../content/arena_01.toml").replacen("climb_target_radius = 2.0", bad, 1);

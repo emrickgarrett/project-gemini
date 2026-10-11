@@ -143,6 +143,7 @@ impl Content {
                 if controller.sim.max_sim_steps_per_frame == 0 {
                     return Err("controller.toml: max_sim_steps_per_frame must be at least 1".into());
                 }
+                validate_ledge_catch(&controller.ledge_catch)?;
                 controller
             },
             upgrades: parse::<UpgradeFile>("run_upgrades.toml", src.run_upgrades)?.upgrade,
@@ -576,6 +577,7 @@ pub struct Controller {
     pub movement: MoveCfg,
     pub jump: JumpCfg,
     pub boost: BoostCfg,
+    pub ledge_catch: LedgeCatch,
     pub camera: CameraCfg,
     pub aim: AimCfg,
     pub health: HealthCfg,
@@ -616,6 +618,18 @@ pub struct BoostCfg {
     pub thrust_up: f32,
     pub dash_impulse: f32,
     pub dash_cost: f32,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct LedgeCatch {
+    /// `|y - lip|` within this catches a jetpack ledge.
+    pub snap: f32,
+    /// `vel_y` at or below this can still catch while dropping onto the lip.
+    pub fall_speed: f32,
+    /// Meters above the lip included in that falling catch.
+    pub above: f32,
+    /// Meters below the lip included in that falling catch.
+    pub below: f32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1466,6 +1480,8 @@ pub struct PerchRules {
     pub flow_field_targets: String,
     pub all_perched_grace: f32,
     pub climb_speed_mult: f32,
+    /// Meters kept inside the play edge while a swarmer climbs.
+    pub climb_clearance: f32,
     pub budget_shift_to_spitters: f32,
     pub fuel_regen_on_perch: bool,
 }
@@ -1513,8 +1529,8 @@ impl Arena {
     }
 
     /// Surface the body should stand on. Jetpack ledges only catch you from just above.
-    pub fn support_y(&self, x: f32, y: f32, z: f32, vel_y: f32) -> f32 {
-        if let Some(top) = self.ledge_top(x, y, z, vel_y) {
+    pub fn support_y(&self, x: f32, y: f32, z: f32, vel_y: f32, catch: &LedgeCatch) -> f32 {
+        if let Some(top) = self.ledge_top(x, y, z, vel_y, catch) {
             return top;
         }
         let floor = self.floor_y(x, z);
@@ -1631,7 +1647,7 @@ impl Arena {
         pos.z = self.platform.center.z + dz / d * rim;
     }
 
-    fn ledge_top(&self, x: f32, y: f32, z: f32, vel_y: f32) -> Option<f32> {
+    fn ledge_top(&self, x: f32, y: f32, z: f32, vel_y: f32, catch: &LedgeCatch) -> Option<f32> {
         for ledge in &self.ledges {
             let dx = x - ledge.pos.x;
             let dz = z - ledge.pos.z;
@@ -1646,7 +1662,8 @@ impl Arena {
                 }
                 continue;
             }
-            let near = (y - top).abs() <= 0.4 || (vel_y <= 0.15 && y <= top + 0.25 && y >= top - 1.3);
+            let near = (y - top).abs() <= catch.snap
+                || (vel_y <= catch.fall_speed && y <= top + catch.above && y >= top - catch.below);
             if near {
                 return Some(top);
             }
@@ -1891,6 +1908,20 @@ fn load_pickup(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaPicku
     })
 }
 
+fn validate_ledge_catch(catch: &LedgeCatch) -> Result<(), String> {
+    for (key, value) in [
+        ("snap", catch.snap),
+        ("fall_speed", catch.fall_speed),
+        ("above", catch.above),
+        ("below", catch.below),
+    ] {
+        if !(value > 0.0) {
+            return Err(format!("controller.toml [ledge_catch] {key} must be > 0"));
+        }
+    }
+    Ok(())
+}
+
 fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
     let table = value.as_table().ok_or_else(|| "perch_rules is not a table".to_string())?;
     expect_keys(
@@ -1904,6 +1935,7 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
             "flow_field_targets",
             "all_perched_grace",
             "climb_speed_mult",
+            "climb_clearance",
             "budget_shift_to_spitters",
             "fuel_regen_on_perch",
         ],
@@ -1924,11 +1956,15 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
     let climb_target_radius = num(table.get("climb_target_radius").unwrap(), "climb_target_radius")?;
     let all_perched_grace = num(table.get("all_perched_grace").unwrap(), "all_perched_grace")?;
     let climb_speed_mult = num(table.get("climb_speed_mult").unwrap(), "climb_speed_mult")?;
+    let climb_clearance = num(table.get("climb_clearance").unwrap(), "climb_clearance")?;
     let budget_shift_to_spitters = num(table.get("budget_shift_to_spitters").unwrap(), "budget_shift_to_spitters")?;
     let fuel_regen_on_perch = table
         .get("fuel_regen_on_perch")
         .and_then(|v| v.as_bool())
         .ok_or_else(|| "fuel_regen_on_perch must be a bool".to_string())?;
+    if !(climb_clearance > 0.0) {
+        return Err("climb_clearance must be > 0".into());
+    }
     if !(perch_radius > 0.0)
         || perch_height_slack < 0.0
         || !(climb_trigger_distance > 0.0)
@@ -1949,6 +1985,7 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
         flow_field_targets,
         all_perched_grace,
         climb_speed_mult,
+        climb_clearance,
         budget_shift_to_spitters,
         fuel_regen_on_perch,
     })
