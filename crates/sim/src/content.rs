@@ -601,6 +601,8 @@ pub struct BossDef {
     pub acid_sfx: String,
     pub scythe_sfx: String,
     pub reinforce_kind: String,
+    pub fan_step: f32,
+    pub spawn_radius: f32,
 }
 
 impl BossDef {
@@ -639,6 +641,8 @@ fn load_bosses(text: &str) -> Result<Vec<BossDef>, String> {
         fizzle_sfx: String,
         charge_sfx: String,
         hatch_sfx: String,
+        hatch_fan_step: f32,
+        spawn_radius: f32,
     }
     #[derive(Deserialize)]
     struct HiveSrc {
@@ -653,6 +657,8 @@ fn load_bosses(text: &str) -> Result<Vec<BossDef>, String> {
         acid_sfx: String,
         scythe_sfx: String,
         reinforce_kind: String,
+        hatch_fan_step: f32,
+        spawn_radius: f32,
         phase1: PhaseSrc,
         phase2: PhaseSrc,
         phase3: PhaseSrc,
@@ -701,6 +707,18 @@ fn load_bosses(text: &str) -> Result<Vec<BossDef>, String> {
     }
     if EnemyKind::from_name(&hive.reinforce_kind).is_none() {
         return Err(format!("hive_tyrant reinforce_kind \"{}\" is unknown", hive.reinforce_kind));
+    }
+    if brood.hatch_fan_step <= 0.0 {
+        return Err("brood_mother hatch_fan_step must be > 0".into());
+    }
+    if brood.spawn_radius <= 0.0 {
+        return Err("brood_mother spawn_radius must be > 0".into());
+    }
+    if hive.hatch_fan_step <= 0.0 {
+        return Err("hive_tyrant hatch_fan_step must be > 0".into());
+    }
+    if hive.spawn_radius <= 0.0 {
+        return Err("hive_tyrant spawn_radius must be > 0".into());
     }
     let phase = |src: PhaseSrc| BossPhase {
         move_speed: src.move_speed,
@@ -761,6 +779,8 @@ fn load_bosses(text: &str) -> Result<Vec<BossDef>, String> {
             acid_sfx: String::new(),
             scythe_sfx: String::new(),
             reinforce_kind: String::new(),
+            fan_step: brood.hatch_fan_step,
+            spawn_radius: brood.spawn_radius,
         },
         BossDef {
             id: "hive_tyrant".into(),
@@ -793,6 +813,8 @@ fn load_bosses(text: &str) -> Result<Vec<BossDef>, String> {
             acid_sfx: hive.acid_sfx,
             scythe_sfx: hive.scythe_sfx,
             reinforce_kind: hive.reinforce_kind,
+            fan_step: hive.hatch_fan_step,
+            spawn_radius: hive.spawn_radius,
         },
     ])
 }

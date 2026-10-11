@@ -366,7 +366,7 @@ fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cat
                 let rad = size[0].max(0.02);
                 let sides = dens.sides.max(5);
                 let mesh = match point.as_str() {
-                    "up" => cone_up(len, rad, sides),
+                    "up" => tyrant_head(len, rad, sides),
                     "forward" => spitter_head(len, rad, sides),
                     other => return Err(format!("{id} {} point \"{other}\" is unknown", spec.name)),
                 };
@@ -385,9 +385,13 @@ fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cat
                 let pitch = req(id, &spec.name, "pitch", spec.pitch)?;
                 euler[1] = side * yaw;
                 euler[0] = pitch;
-                (cone_z(size[1].max(0.08), size[0].max(0.02), dens.sides.max(4)), Joint::Mandible { side })
+                let rad = size[0].max(0.02);
+                (
+                    point_z(size[1].max(0.08), rad, rad * 0.42, dens.sides.max(4)),
+                    Joint::Mandible { side },
+                )
             }
-            "armor" => (armor_frame(&size), Joint::Static),
+            "armor" => (armor_wrap(&size, dens), Joint::Static),
             "forelimb" | "scythe" => {
                 let limb = limb.as_ref().expect("limb");
                 if size[1] <= 0.0 {
@@ -439,7 +443,11 @@ fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cat
             let upper = len * limb.seg;
             let blade_len = len * limb.blade;
             let blade_euler = [limb.blade_euler[0], side * limb.blade_euler[1], side * limb.blade_euler[2]];
-            let blade = segment_mesh(blade_len, rad * limb.blade_r[0], rad * limb.blade_r[1], dens.sides.max(4));
+            let blade = if spec.part == "scythe" {
+                curved_blade(blade_len, rad * limb.blade_r[0], (rad * limb.blade_r[1]).max(rad * 0.18))
+            } else {
+                segment_mesh(blade_len, rad * limb.blade_r[0], rad * limb.blade_r[1].max(rad * 0.22), dens.sides.max(4))
+            };
             let joint = if spec.part == "scythe" {
                 Joint::Scythe { side }
             } else {
@@ -526,8 +534,8 @@ fn add_legs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, body_hei
         let row = i / 2;
         let t = if rows <= 1 { 0.5 } else { row as f32 / (rows as f32 - 1.0) };
         let along = 0.42 - t;
-        let hip = [side * ring * 0.50, hip_y, along * ring * 0.75];
-        let plant = [side * ring * 1.95, 0.0, along * ring * 1.6];
+        let hip = [side * ring * 0.78, hip_y, along * ring * 0.72];
+        let plant = [side * ring * 1.42, 0.0, along * ring * 1.15];
         let drop = plant[1] - hip[1];
         let femur_dir = normalize([
             plant[0] - hip[0],
@@ -699,7 +707,7 @@ fn add_cannon(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalo
     let tip_gap = tail.tip_gap;
     let mut mesh = gem_mesh([rad, rad, rad * 0.92], dens);
     // Barrel continues along the tail (-Y) and sits clear of the last segment's cap.
-    let mut nozzle = cone_z(rad * 1.15, rad * 0.48, dens.sides.max(5));
+    let mut nozzle = point_z(rad * 1.05, rad * 0.55, rad * 0.32, dens.sides.max(5));
     geom::rotate_x(&mut nozzle, std::f32::consts::FRAC_PI_2);
     geom::translate(&mut nozzle, [0.0, -(rad + tip_gap), 0.0]);
     geom::append(&mut mesh, &nozzle);
@@ -825,7 +833,7 @@ fn add_crown(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) -> Resu
         .ok_or_else(|| format!("{id} {} is missing its radius", spec.name))?;
     let spread = req3(id, &spec.name, "spread", spec.spread.as_deref())?;
     let pitch = req(id, &spec.name, "crown_pitch", spec.crown_pitch)?;
-    let mesh = Arc::new(cone_up(len, rad, dens.sides.max(4).min(5)));
+    let mesh = Arc::new(point_up(len, rad, rad * 0.36, dens.sides.max(4).min(5)));
     for i in 0..count {
         let a = i as f32 / count as f32 * std::f32::consts::TAU;
         let pos = [
@@ -861,28 +869,22 @@ fn add_crown(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) -> Resu
 }
 
 fn add_decal(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, shell: [f32; 3], shell_size: [f32; 3]) {
-    // Raised fissures sit in the gaps between dorsal plates, clear of the shell.
+    // 5 jagged, branching fissures per side, running along the seams between plates.
     let radii = shell_radii(&shell_size, false);
-    let bands = dorsal_bands(&radii, dens.plates.max(4), false);
-    let mut mesh = MeshData::new();
-    let gap = plate_gap(radii[1]);
-    let arch = plate_arch(radii[1]);
+    let bands = dorsal_bands(&radii, dens.plates.max(6), false);
+    let mut seams = Vec::new();
     for i in 0..bands.len().saturating_sub(1) {
-        let z = (bands[i].0 + bands[i + 1].0) * 0.5;
-        let spacing = bands[i].2;
-        let len = (spacing * 0.28).max(0.04);
-        let thick = (radii[1] * 0.12).max(0.04);
-        // Three scars across the gap, separated in X so they never share a face.
-        for (k, x) in [-0.40_f32, 0.0, 0.40].into_iter().enumerate() {
-            let x = radii[0] * x;
-            let y = ellipse_y(&radii, x, z);
-            let width = radii[0] * if k == 1 { 0.22 } else { 0.28 };
-            geom::box_mesh(
-                &mut mesh,
-                [x, y + gap + arch + thick * 0.5 + 0.015, z],
-                [width, thick, len],
-                WHITE,
-            );
+        seams.push((bands[i].0 + bands[i + 1].0) * 0.5);
+    }
+    if seams.is_empty() {
+        seams.push(0.0);
+    }
+    let mut mesh = MeshData::new();
+    let per_side = 5usize;
+    for side in [-1.0_f32, 1.0] {
+        for n in 0..per_side {
+            let seam = seams[(n * seams.len()) / per_side];
+            jagged_crack(&mut mesh, &radii, side, seam, n);
         }
     }
     parts.push(Part {
@@ -922,9 +924,7 @@ fn add_veins(parts: &mut Vec<Part>, id: &str, spec: &VPart) -> Result<(), String
     if legs.is_empty() {
         return Err(format!("{id} {} has no legs to attach to", spec.name));
     }
-    let mut mesh = MeshData::new();
-    geom::box_mesh(&mut mesh, [0.0, -0.55, 0.0], [0.16, 1.05, 0.1], WHITE);
-    let mesh = Arc::new(mesh);
+    let mesh = Arc::new(segment_mesh(1.05, 0.11, 0.04, 4));
     for (n, idx) in legs.iter().enumerate() {
         let parent_r = parts[*idx]
             .mesh
@@ -935,7 +935,7 @@ fn add_veins(parts: &mut Vec<Part>, id: &str, spec: &VPart) -> Result<(), String
         parts.push(Part {
             name: format!("vein{n}"),
             parent: Some(*idx),
-            rest_pos: [0.0, -0.12, parent_r + 0.08],
+            rest_pos: [0.0, -0.2, parent_r + 0.06],
             rest_euler: [0.0, 0.0, 0.0],
             mesh: mesh.clone(),
             palette: spec.color.clone(),
@@ -1078,49 +1078,95 @@ fn torso_mesh(size: &[f32; 3], dens: &Dens) -> MeshData {
     mesh
 }
 
-/// Hollow chest frame. Bars are separated so they don't share faces, and the
-/// whole frame sits in front of the core instead of covering it.
-fn armor_frame(size: &[f32; 3]) -> MeshData {
+/// Curved plates that sit on the chest and leave a front window for the core.
+fn armor_wrap(size: &[f32; 3], dens: &Dens) -> MeshData {
     let mut mesh = MeshData::new();
-    let hx = size[0] * 0.5;
-    let hy = size[1] * 0.5;
-    let t = (size[0].min(size[1]) * 0.16).max(0.08);
-    let gap = 0.04;
-    let depth = (size[2] * 0.28).max(0.06);
-    let z = size[2] * 0.95;
-    geom::box_mesh(&mut mesh, [0.0, hy - t * 0.5, z], [size[0], t, depth], WHITE);
-    geom::box_mesh(&mut mesh, [0.0, -hy + t * 0.5, z], [size[0], t, depth], WHITE);
-    let side_h = (size[1] - t * 2.0 - gap * 2.0).max(t);
-    geom::box_mesh(&mut mesh, [-hx + t * 0.5, 0.0, z], [t, side_h, depth], WHITE);
-    geom::box_mesh(&mut mesh, [hx - t * 0.5, 0.0, z], [t, side_h, depth], WHITE);
+    let rx = size[0] * 0.36;
+    let ry = size[1] * 0.40;
+    let rz = (size[2] * 0.9).max(0.5);
+    let bands = if dens.plates == 0 { 2 } else { 3 };
+    let around = if dens.plates == 0 { 4 } else { 6 };
+    for b in 0..bands {
+        let v = (b as f32 + 0.5) / bands as f32;
+        let y = (v - 0.5) * ry * 1.65;
+        for k in 0..around {
+            let u = (k as f32 + 0.5) / around as f32;
+            let ang = (u - 0.5) * std::f32::consts::PI * 1.2;
+            // The forward gap is the core window. Side and lower plates wrap the chest.
+            if ang.abs() < 0.42 {
+                continue;
+            }
+            let x = ang.sin() * rx;
+            let z = ang.cos() * rz;
+            let mut plate = MeshData::new();
+            geom::plate(
+                &mut plate,
+                [0.0, 0.0, 0.0],
+                ry * 0.52,
+                rx * 0.48,
+                rz * 0.14,
+                dens.nu.max(1).min(2),
+                dens.nv.max(1).min(2),
+                WHITE,
+            );
+            // Plate arch (+Y) swings out to the shell normal.
+            geom::rotate_x(&mut plate, std::f32::consts::FRAC_PI_2);
+            geom::rotate_y(&mut plate, ang);
+            geom::translate(&mut plate, [x, y, z]);
+            geom::append(&mut mesh, &plate);
+        }
+    }
     mesh
 }
 
 fn spitter_head(length: f32, radius: f32, sides: u32) -> MeshData {
-    let mut mesh = cone_z(length, radius, sides);
+    let mut mesh = MeshData::new();
+    geom::gem(
+        &mut mesh,
+        [0.0, 0.0, length * 0.18],
+        [radius * 1.25, radius * 0.85, length * 0.52],
+        sides.max(6).min(8),
+        3,
+        WHITE,
+    );
     for side in [-1.0_f32, 1.0] {
-        let mut fang = cone_z(length * 0.42, radius * 0.22, 4);
-        geom::rotate_x(&mut fang, 0.6);
-        geom::translate(&mut fang, [side * radius * 0.42, -radius * 0.2, length * 0.62]);
-        geom::append(&mut mesh, &fang);
+        let mut jaw = segment_mesh(length * 0.78, radius * 0.36, radius * 0.14, 4);
+        geom::rotate_x(&mut jaw, -1.05);
+        geom::rotate_z(&mut jaw, side * 0.5);
+        geom::translate(&mut jaw, [side * radius * 0.42, -radius * 0.08, length * 0.42]);
+        geom::append(&mut mesh, &jaw);
+    }
+    mesh
+}
+
+fn tyrant_head(length: f32, radius: f32, sides: u32) -> MeshData {
+    let mut mesh = MeshData::new();
+    geom::gem(
+        &mut mesh,
+        [0.0, length * 0.22, 0.04],
+        [radius * 1.05, length * 0.38, radius * 0.82],
+        sides.max(6).min(8),
+        3,
+        WHITE,
+    );
+    for side in [-1.0_f32, 1.0] {
+        let mut jaw = segment_mesh(length * 0.46, radius * 0.26, radius * 0.1, 4);
+        geom::rotate_x(&mut jaw, -1.2);
+        geom::rotate_z(&mut jaw, side * 0.42);
+        geom::translate(&mut jaw, [side * radius * 0.5, length * 0.02, radius * 0.28]);
+        geom::append(&mut mesh, &jaw);
     }
     mesh
 }
 
 fn horn_mesh(length: f32, radius: f32, sides: u32) -> MeshData {
-    let mut mesh = cone_z(length, radius, sides);
-    for side in [-1.0_f32, 1.0] {
-        let mut tusk = cone_z(length * 0.42, radius * 0.42, sides.min(5).max(4));
-        geom::translate(&mut tusk, [side * radius * 1.35, -radius * 0.15, length * 0.12]);
-        geom::append(&mut mesh, &tusk);
-    }
-    mesh
+    point_z(length, radius * 0.85, radius * 0.28, sides.max(5))
 }
 
 fn shell_radii(size: &[f32; 3], rear_open: bool) -> [f32; 3] {
     let mut radii = [size[0] * 0.47, size[1] * 0.47, size[2] * 0.47];
     if rear_open {
-        radii[2] *= 0.70;
+        radii[2] *= 0.84;
     }
     radii
 }
@@ -1130,7 +1176,7 @@ fn plate_gap(radius: f32) -> f32 {
 }
 
 fn plate_arch(radius: f32) -> f32 {
-    (radius * 0.06).max(0.01)
+    (radius * 0.12).max(0.016)
 }
 
 /// (z, surface y, slot spacing) along the dorsal ridge. Slots do not overlap.
@@ -1176,18 +1222,118 @@ fn gem_mesh(radii: [f32; 3], dens: &Dens) -> MeshData {
     mesh
 }
 
-fn cone_z(length: f32, radius: f32, sides: u32) -> MeshData {
-    let mut mesh = MeshData::new();
-    geom::cone(&mut mesh, length.max(0.04), radius.max(0.01), sides.max(3), WHITE);
+/// Faceted frustum along +Z. The tip stays blunt so it is not a cone.
+fn point_z(length: f32, r0: f32, r1: f32, sides: u32) -> MeshData {
+    let mut mesh = segment_mesh(length, r0, r1.max(r0 * 0.22), sides);
     geom::rotate_x(&mut mesh, -std::f32::consts::FRAC_PI_2);
     mesh
 }
 
-fn cone_up(length: f32, radius: f32, sides: u32) -> MeshData {
-    let mut mesh = MeshData::new();
-    geom::cone(&mut mesh, length.max(0.04), radius.max(0.01), sides.max(3), WHITE);
+/// Faceted frustum along +Y. The tip stays blunt so it is not a cone.
+fn point_up(length: f32, r0: f32, r1: f32, sides: u32) -> MeshData {
+    let mut mesh = segment_mesh(length, r0, r1.max(r0 * 0.22), sides);
     geom::rotate_x(&mut mesh, std::f32::consts::PI);
     mesh
+}
+
+/// Wide crescent. Local -Y is the reach; +Z is the curve. Cross-section is a
+/// tapering diamond, not a box or a stick.
+fn curved_blade(length: f32, width: f32, thick: f32) -> MeshData {
+    let steps = 5u32;
+    let mut mesh = MeshData::new();
+    let mut rings = Vec::with_capacity(steps as usize + 1);
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let ang = 0.2 + t * 1.35;
+        let y = -length * ang.sin() / 1.35;
+        let z = length * (ang - 0.2).sin() * 0.62;
+        let w = width * (1.0 - t * 0.7).max(0.28);
+        let th = thick * (1.0 - t * 0.25).max(thick * 0.45);
+        rings.push([
+            [0.0, y, z + th],
+            [w, y, z + th * 0.12],
+            [0.0, y, z - th * 0.55],
+            [-w, y, z + th * 0.12],
+        ]);
+    }
+    for i in 0..steps as usize {
+        let a = rings[i];
+        let b = rings[i + 1];
+        for k in 0..4 {
+            let n = (k + 1) % 4;
+            geom::add_quad(&mut mesh, a[k], a[n], b[n], b[k], WHITE);
+        }
+    }
+    let last = rings.len() - 1;
+    geom::add_quad(&mut mesh, rings[0][0], rings[0][1], rings[0][2], rings[0][3], WHITE);
+    geom::add_quad(&mut mesh, rings[last][0], rings[last][3], rings[last][2], rings[last][1], WHITE);
+    mesh
+}
+
+/// One fissure: a zigzag of thin ribbons along a plate seam, plus a short branch.
+fn jagged_crack(mesh: &mut MeshData, radii: &[f32; 3], side: f32, seam_z: f32, n: usize) {
+    let steps = 5;
+    let mut pts = Vec::with_capacity(steps + 1);
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let x = side * radii[0] * (0.06 + t * 0.7);
+        let zig = if i % 2 == 0 { -1.0 } else { 1.0 };
+        let z = seam_z + zig * radii[2] * 0.045 + side * (n as f32 - 2.0) * radii[2] * 0.012;
+        let y = shell_surface_y(radii, x, z) + plate_gap(radii[1]) + plate_arch(radii[1]) + 0.02;
+        pts.push([x, y, z]);
+    }
+    let half = (radii[1] * 0.07).max(0.03);
+    for w in pts.windows(2) {
+        ribbon(mesh, w[0], w[1], half);
+    }
+    let mid = pts[3];
+    let branch = [
+        mid[0] + side * radii[0] * 0.16,
+        mid[1] + 0.01,
+        mid[2] + radii[2] * 0.1 * if n % 2 == 0 { 1.0 } else { -1.0 },
+    ];
+    let branch_y = shell_surface_y(radii, branch[0], branch[2]) + plate_gap(radii[1]) + 0.02;
+    ribbon(mesh, mid, [branch[0], branch_y, branch[2]], half * 0.8);
+}
+
+fn ribbon(mesh: &mut MeshData, a: [f32; 3], b: [f32; 3], half_w: f32) {
+    let dx = b[0] - a[0];
+    let dz = b[2] - a[2];
+    let len = (dx * dx + dz * dz).sqrt().max(1e-4);
+    let px = -dz / len * half_w;
+    let pz = dx / len * half_w;
+    let lift = half_w * 0.55;
+    geom::add_quad(
+        mesh,
+        [a[0] - px, a[1] + lift, a[2] - pz],
+        [a[0] + px, a[1] + lift, a[2] + pz],
+        [b[0] + px, b[1] + lift, b[2] + pz],
+        [b[0] - px, b[1] + lift, b[2] - pz],
+        WHITE,
+    );
+    // A low fin so the fissure reads from the three-quarter camera, not only from above.
+    let fin = half_w * 2.4;
+    geom::add_quad(
+        mesh,
+        [a[0], a[1], a[2]],
+        [a[0], a[1] + fin, a[2]],
+        [b[0], b[1] + fin, b[2]],
+        [b[0], b[1], b[2]],
+        WHITE,
+    );
+}
+
+fn shell_surface_y(radii: &[f32; 3], x: f32, z: f32) -> f32 {
+    let nx = x / radii[0];
+    let nz = z / radii[2];
+    let r2 = nx * nx + nz * nz;
+    let (x, z) = if r2 > 0.8 {
+        let s = (0.8_f32).sqrt() / r2.sqrt();
+        (x * s, z * s)
+    } else {
+        (x, z)
+    };
+    ellipse_y(radii, x, z)
 }
 
 fn segment_mesh(length: f32, r0: f32, r1: f32, sides: u32) -> MeshData {

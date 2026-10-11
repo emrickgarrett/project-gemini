@@ -31,6 +31,8 @@ death_sfx = "brood_death"
 fizzle_sfx = "brood_pod_fizzle"
 charge_sfx = "brood_pod_charge"
 hatch_sfx = "brood_pod_hatch"
+hatch_fan_step = 1.7         # radians between each hatched add
+spawn_radius = 2.2           # meters from the boss
 
 [hive_tyrant]
 wave = 10
@@ -46,6 +48,8 @@ fizzle_sfx = "brood_pod_fizzle"
 acid_sfx = "tyrant_tail_charge"
 scythe_sfx = "tyrant_scythe_swipe"
 reinforce_kind = "swarmer"
+hatch_fan_step = 1.7         # reinforcements use the same fan as a hatch
+spawn_radius = 2.2           # meters from the boss
 
 [hive_tyrant.phase1]         # Armored: ends when tail breaks OR hp <= 66%
 core_damage_mult = 0.25      # core only hittable through cracks

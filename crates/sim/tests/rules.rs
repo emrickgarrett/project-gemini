@@ -571,6 +571,45 @@ fn spitter_sac_pop_cancels_charge_same_tick() {
 }
 
 #[test]
+fn hatch_fan_and_spawn_radius_come_from_bosses() {
+    let content = Content::embedded();
+    for id in ["brood_mother", "hive_tyrant"] {
+        let boss = content.boss(id).unwrap();
+        assert!((boss.fan_step - 1.7).abs() < 1e-4, "{id} fan {}", boss.fan_step);
+        assert!((boss.spawn_radius - 2.2).abs() < 1e-4, "{id} radius {}", boss.spawn_radius);
+    }
+    let base = gemini_sim::content::embedded_sources();
+    let bosses = include_str!("../../../content/bosses.toml")
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("hatch_fan_step"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let err = Content::parse(&gemini_sim::content::Sources {
+        waves: base.waves,
+        difficulty: base.difficulty,
+        controller: base.controller,
+        run_upgrades: base.run_upgrades,
+        endless: base.endless,
+        currency: base.currency,
+        banners: base.banners,
+        duplicate_ranks: base.duplicate_ranks,
+        bosses: &bosses,
+        weapons: base.weapons,
+        hero: base.hero,
+        arena: base.arena,
+        presentation: base.presentation,
+        combat: base.combat,
+        palette: base.palette,
+        music: base.music,
+        audio: base.audio,
+        bugs: base.bugs,
+        crate_reveal: base.crate_reveal,
+    })
+    .expect_err("missing hatch_fan_step");
+    assert!(err.contains("hatch_fan_step"), "{err}");
+}
+
+#[test]
 fn brute_shell_and_hive_tail_follow_the_table() {
     use gemini_sim::content::EnemyKind;
     use gemini_sim::sim::AiState;

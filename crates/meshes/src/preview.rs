@@ -45,11 +45,23 @@ pub fn raster(visual: &EnemyVisual, palette: &dyn Fn(&str) -> [f32; 4], width: u
 
 /// Color panel on the left, untextured silhouette on the right. Each panel is square.
 pub fn still(id: &str, panel: u32) -> (u32, u32, Vec<u8>) {
+    compose(id, panel, None)
+}
+
+/// Same paired still as `still`, using `camera_open` when the bug authors one.
+/// The brute's open-shell sheet is a three-quarter view with the silhouette.
+pub fn still_open(id: &str, panel: u32) -> (u32, u32, Vec<u8>) {
+    let visual = bug(id);
+    let cam = visual.camera_open.map(|c| (c.eye, c.target, c.fov));
+    compose(id, panel, cam)
+}
+
+fn compose(id: &str, panel: u32, camera: Option<([f32; 3], [f32; 3], f32)>) -> (u32, u32, Vec<u8>) {
     let panel = panel.max(8);
-    let color = raster_bug(id, panel, panel);
     let visual = bug(id);
     let palette = palette_of();
-    let sil = draw(visual, &palette, panel, panel, true, None);
+    let color = draw(visual, &palette, panel, panel, false, camera);
+    let sil = draw(visual, &palette, panel, panel, true, camera);
     let w = panel * 2;
     let mut out = vec![0u8; (w * panel * 3) as usize];
     for y in 0..panel {

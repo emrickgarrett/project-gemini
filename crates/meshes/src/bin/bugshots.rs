@@ -11,7 +11,7 @@ use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use gemini_meshes::{catalog, missing_glow_keys, painted_pixels, raster_bug, raster_crown, still};
+use gemini_meshes::{catalog, missing_glow_keys, painted_pixels, raster_bug, still, still_open};
 
 fn main() {
     let mut out = "art/bugs".to_string();
@@ -44,14 +44,18 @@ fn main() {
         if visual.camera_open.is_none() {
             continue;
         }
-        let open = raster_crown(&visual.id, panel, panel);
+        let (ow, oh, open) = still_open(&visual.id, panel);
         let open_painted = painted_pixels(&open);
-        if open_painted < 800 {
-            eprintln!("{}_open still failed ({open_painted} px)", visual.id);
+        let open_missing = missing_glow_keys(&visual.id, &open);
+        if open_painted < 800 || !open_missing.is_empty() {
+            eprintln!(
+                "{}_open still failed ({open_painted} px, missing glow {open_missing:?})",
+                visual.id
+            );
             failed = true;
         }
         let open_path = format!("{out}/{}_open.png", visual.id);
-        write_png(&open_path, panel, panel, &open);
+        write_png(&open_path, ow, oh, &open);
         println!("wrote {open_path} ({open_painted} px)");
     }
     if failed {

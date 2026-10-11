@@ -1044,8 +1044,8 @@ impl Sim {
                     let mult = content
                         .boss("hive_tyrant")
                         .and_then(|def| def.phase(0))
-                        .map(|p| p.tail_weakpoint_mult)
-                        .unwrap_or(0.0);
+                        .expect("hive_tyrant phase 1 tail_weakpoint_mult")
+                        .tail_weakpoint_mult;
                     dmg *= mult * (1.0 + mods.weakpoint_damage_pct);
                     self.enemies[enemy_index].tail_hp = (self.enemies[enemy_index].tail_hp - dmg).max(0.0);
                     if self.enemies[enemy_index].tail_hp <= 0.0 {
@@ -1057,11 +1057,12 @@ impl Sim {
                 HitSpot::Weak => {
                     weak_ok = true;
                     let mut mult = if self.enemies[enemy_index].kind == EnemyKind::HiveTyrant {
+                        let phase = self.enemies[enemy_index].phase;
                         content
                             .boss("hive_tyrant")
-                            .and_then(|def| def.phase(self.enemies[enemy_index].phase))
-                            .map(|row| row.core_damage_mult)
-                            .unwrap_or(0.0)
+                            .and_then(|def| def.phase(phase))
+                            .expect("hive_tyrant phase core_damage_mult")
+                            .core_damage_mult
                     } else {
                         self.enemies[enemy_index].weak_mult
                     };
@@ -1301,7 +1302,7 @@ impl Sim {
     fn tick_boss_logic(&mut self, content: &Content, dt: f32) {
         let cap = content.waves.budget.live_enemy_cap as usize;
         let players = self.player_count.max(1) as f32;
-        let mut spawned: Vec<(EnemyKind, Vec3, u32)> = Vec::new();
+        let mut spawned: Vec<(EnemyKind, Vec3, u32, f32, f32)> = Vec::new();
         let mut notes: Vec<(String, Vec3, bool, bool)> = Vec::new();
         for i in 0..self.enemies.len() {
             if !self.enemies[i].alive {
@@ -1343,10 +1344,10 @@ impl Sim {
                 self.sound_at(&sfx, pos);
             }
         }
-        for (kind, pos, count) in spawned {
+        for (kind, pos, count, fan_step, radius) in spawned {
             for n in 0..count.max(1) {
-                let ang = n as f32 * 1.7;
-                let at = pos + Vec3::new(ang.cos() * 2.2, 0.0, ang.sin() * 2.2);
+                let ang = n as f32 * fan_step;
+                let at = pos + Vec3::new(ang.cos() * radius, 0.0, ang.sin() * radius);
                 self.spawn_trash(content, kind, at);
             }
         }
@@ -1360,7 +1361,7 @@ impl Sim {
         dt: f32,
         cap: usize,
         players: f32,
-        spawned: &mut Vec<(EnemyKind, Vec3, u32)>,
+        spawned: &mut Vec<(EnemyKind, Vec3, u32, f32, f32)>,
     ) {
         let mut cue: Option<(String, Vec3)> = None;
         let enemy = &mut self.enemies[index];
@@ -1411,7 +1412,7 @@ impl Sim {
             if let Some((id, pos)) = cue {
                 self.sound_at(&id, pos);
             }
-            spawned.push((kind, origin, count));
+            spawned.push((kind, origin, count, def.fan_step, def.spawn_radius));
         } else {
             enemy.cycle_left -= dt;
             if enemy.cycle_left > 0.0 {
@@ -1457,7 +1458,7 @@ impl Sim {
         def: &crate::content::BossDef,
         dt: f32,
         cap: usize,
-        spawned: &mut Vec<(EnemyKind, Vec3, u32)>,
+        spawned: &mut Vec<(EnemyKind, Vec3, u32, f32, f32)>,
     ) {
         let phase = self.enemies[index].phase;
         let Some(row) = def.phase(phase).cloned() else { return };
@@ -1512,7 +1513,7 @@ impl Sim {
                     if alive >= cap {
                         break;
                     }
-                    spawned.push((kind, origin, 1));
+                    spawned.push((kind, origin, 1, def.fan_step, def.spawn_radius));
                     left -= cost;
                 }
             }
