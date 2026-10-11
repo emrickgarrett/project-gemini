@@ -262,3 +262,69 @@ fn write_png(path: &str, w: u32, h: u32, rgb: &[u8]) {
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod vex_reference {
+    use std::process::Command;
+
+    use gemini_meshes::{raster_viewmodel, ViewmodelFrame};
+    use gemini_sim::content::{hex_srgb, Content};
+
+    const W: u32 = 1280;
+    const H: u32 = 720;
+    /// Per-channel delta that still counts as the same pixel.
+    const CHANNEL_TOL: u8 = 12;
+    /// Idle is the #12 still. A missing glove or stripe moves tens of thousands of pixels.
+    const IDLE_MAX: usize = 400;
+    /// Overdrive keeps that body. The #15 bloom is wider than #12's sphere, so the tip may differ.
+    const OVERDRIVE_MAX: usize = 16_000;
+
+    fn decode_png(path: &str) -> Vec<u8> {
+        let out = Command::new("ffmpeg")
+            .args(["-v", "error", "-i", path, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"])
+            .output()
+            .unwrap_or_else(|err| panic!("ffmpeg: {err}"));
+        assert!(out.status.success(), "ffmpeg failed on {path}");
+        out.stdout
+    }
+
+    fn drifted(fresh: &[u8], reference: &[u8]) -> usize {
+        assert_eq!(fresh.len(), reference.len(), "rgb size");
+        fresh
+            .chunks(3)
+            .zip(reference.chunks(3))
+            .filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > CHANNEL_TOL))
+            .count()
+    }
+
+    fn frame(overdrive: bool) -> ViewmodelFrame {
+        let hero = &Content::embedded().hero;
+        let color = hero.muzzle_flash_color;
+        ViewmodelFrame {
+            accent: hex_srgb(&hero.accent),
+            offset: hero.viewmodel_offset,
+            fov: hero.viewmodel_fov,
+            overdrive,
+            glow_radius: hero.muzzle_flash_radius,
+            glow_core: hero.muzzle_flash_core,
+            glow_falloff: hero.muzzle_flash_falloff,
+            glow_tip_px: hero.muzzle_flash_tip_px,
+            glow_color: [color[0], color[1], color[2], 1.0],
+        }
+    }
+
+    #[test]
+    fn vex_fp_stills_stay_near_the_polished_reference() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../art/heroes/reference");
+        let idle_ref = decode_png(&format!("{root}/vex_fp_idle.png"));
+        let drive_ref = decode_png(&format!("{root}/vex_fp_overdrive.png"));
+        assert_eq!(idle_ref.len(), (W * H * 3) as usize);
+        let idle = drifted(&raster_viewmodel(W, H, &frame(false)), &idle_ref);
+        let drive = drifted(&raster_viewmodel(W, H, &frame(true)), &drive_ref);
+        assert!(idle <= IDLE_MAX, "vex_fp_idle drifted {idle} px from the #12 reference");
+        assert!(
+            drive <= OVERDRIVE_MAX,
+            "vex_fp_overdrive drifted {drive} px from the #12 reference"
+        );
+    }
+}
