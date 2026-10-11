@@ -122,6 +122,9 @@ impl Content {
         let (hero, guns, roster) = load_characters(src.hero)?;
         let mut weapons = parse::<WeaponFile>("weapons.toml", src.weapons)?;
         weapons.weapon = guns;
+        let audio = crate::audio_mix::load_mix(src.audio).map_err(|err| format!("audio_mix.toml: {err}"))?;
+        let crate_reveal: CrateReveal = parse("crate_reveal.toml", src.crate_reveal)?;
+        validate_reveal_cues(&crate_reveal, &audio)?;
         Ok(Self {
             fingerprint,
             waves: parse("waves.toml", src.waves)?,
@@ -155,9 +158,9 @@ impl Content {
                     rotation: loaded.rotation,
                 }
             },
-            audio: crate::audio_mix::load_mix(src.audio).map_err(|err| format!("audio_mix.toml: {err}"))?,
+            audio,
             bugs,
-            crate_reveal: parse("crate_reveal.toml", src.crate_reveal)?,
+            crate_reveal,
             coop: load_coop(src.coop).map_err(|err| format!("coop.toml: {err}"))?,
             cosmetics: load_cosmetics(src.cosmetics).map_err(|err| format!("cosmetics.toml: {err}"))?,
         })
@@ -280,12 +283,13 @@ impl Content {
         self.sfx(id).map(|row| row.path.as_str())
     }
 
-    /// Playback gain. `None` means the cue stays silent — a missing row is not full volume.
+    /// Playback gain for a mix row. `None` means the id is not in the mix.
+    /// A sting row with no `volume_db` never reaches playback: content load rejects it.
     pub fn cue_volume(&self, id: &str) -> Option<f32> {
         if let Some(sting) = self.audio.sting.iter().find(|row| row.id == id) {
-            return sting.volume.filter(|volume| *volume > 0.0);
+            return Some(sting.volume);
         }
-        self.sfx(id).map(|row| row.volume).filter(|volume| *volume > 0.0)
+        self.sfx(id).map(|row| row.volume)
     }
 
     pub fn pitch_range(&self, id: &str) -> Option<(f32, f32)> {
@@ -315,6 +319,45 @@ fn fnv_cat(parts: &[&str]) -> u64 {
         }
     }
     hash
+}
+
+/// Every tease, fakeout, and rarity sting must name a mix row that has `volume_db`
+/// and a file under `assets/`. Playback does not skip a missing cue.
+fn validate_reveal_cues(reveal: &CrateReveal, audio: &AudioTable) -> Result<(), String> {
+    let mut ids = Vec::new();
+    for name in ["common", "rare", "epic", "legendary"] {
+        let tier = reveal.tier(name).ok_or_else(|| format!("crate_reveal.toml: missing tier {name}"))?;
+        ids.push(cue_stem(&tier.tease));
+        ids.push(cue_stem(&tier.sting));
+    }
+    let fakeout = cue_stem(&reveal.fakeout_sfx);
+    if !fakeout.is_empty() {
+        ids.push(fakeout);
+    }
+    let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+    let check_files = assets.is_dir();
+    for id in ids {
+        let path = reveal_cue_file(audio, &id)?;
+        if check_files && !assets.join(path).is_file() {
+            return Err(format!("reveal cue {id} file {path} is missing"));
+        }
+    }
+    Ok(())
+}
+
+fn reveal_cue_file<'a>(audio: &'a AudioTable, id: &str) -> Result<&'a str, String> {
+    if let Some(sting) = audio.sting.iter().find(|row| row.id == id) {
+        return Ok(sting.path.as_str());
+    }
+    if let Some(sfx) = audio.sfx.iter().find(|row| row.id == id) {
+        return Ok(sfx.path.as_str());
+    }
+    Err(format!("reveal cue {id} does not resolve to a mix row with volume_db"))
+}
+
+fn cue_stem(path: &str) -> String {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    name.trim_end_matches(".ogg").to_string()
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -2331,9 +2374,8 @@ pub struct SfxDef {
 pub struct StingDef {
     pub id: String,
     pub path: String,
-    /// Linear gain from `volume_db`. Missing in the mix table means the sting stays silent.
-    #[serde(default)]
-    pub volume: Option<f32>,
+    /// Linear gain from a required `volume_db`.
+    pub volume: f32,
 }
 
 #[derive(Clone, Debug, Deserialize)]

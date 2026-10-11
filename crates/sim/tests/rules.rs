@@ -993,12 +993,91 @@ fn every_emitted_sound_resolves_to_a_mix_file() {
             }
         }
     }
+    let stem = |path: &str| {
+        let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+        name.trim_end_matches(".ogg").to_string()
+    };
+    let reveal = &content.crate_reveal;
+    let mut reveal_ids = Vec::new();
+    for tier in [&reveal.common, &reveal.rare, &reveal.epic, &reveal.legendary] {
+        reveal_ids.push(stem(&tier.tease));
+        reveal_ids.push(stem(&tier.sting));
+    }
+    let fakeout = stem(&reveal.fakeout_sfx);
+    assert_eq!(fakeout, "crate_fakeout");
+    reveal_ids.push(fakeout);
+
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
     for id in ids {
         let sfx = content.sfx(&id).unwrap_or_else(|| panic!("{id} does not resolve in audio_mix.toml"));
         let path = root.join(&sfx.path);
         assert!(path.is_file(), "{id} resolved to {} but that file is missing", path.display());
     }
+    for id in &reveal_ids {
+        let path = content
+            .cue_path(id)
+            .unwrap_or_else(|| panic!("{id} does not resolve in audio_mix.toml"));
+        assert!(
+            root.join(path).is_file(),
+            "{id} resolved to {} but that file is missing",
+            path
+        );
+        let volume = content.cue_volume(id).unwrap_or_else(|| panic!("{id} mix row is missing volume_db"));
+        assert!(volume.is_finite() && volume > 0.0, "{id} volume {volume}");
+    }
+    let gain = |db: f32| gemini_sim::audio_mix::db_to_linear(db);
+    for id in ["crate_common", "crate_rare", "crate_epic"] {
+        let volume = content.cue_volume(id).unwrap();
+        assert!((volume - gain(-4.0)).abs() < 1e-4, "{id} volume {volume}");
+    }
+    let legendary = content.cue_volume("crate_legendary").unwrap();
+    assert!((legendary - gain(-2.0)).abs() < 1e-4, "crate_legendary volume {legendary}");
+
+    let base = gemini_sim::content::embedded_sources();
+    let load = |audio: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            waves: base.waves,
+            difficulty: base.difficulty,
+            controller: base.controller,
+            run_upgrades: base.run_upgrades,
+            endless: base.endless,
+            currency: base.currency,
+            banners: base.banners,
+            duplicate_ranks: base.duplicate_ranks,
+            bosses: base.bosses,
+            weapons: base.weapons,
+            hero: base.hero,
+            arena: base.arena,
+            presentation: base.presentation,
+            combat: base.combat,
+            palette: base.palette,
+            music: base.music,
+            audio,
+            bugs: base.bugs,
+            crate_reveal: base.crate_reveal,
+            coop: base.coop,
+            cosmetics: base.cosmetics,
+        })
+    };
+    let without_gain = base.audio.replacen(
+        "[sting.crate_common]\npath = \"audio/stings/crate_common.ogg\"\nvolume_db = -4.0\n",
+        "[sting.crate_common]\npath = \"audio/stings/crate_common.ogg\"\n",
+        1,
+    );
+    assert_ne!(without_gain, base.audio, "removing volume_db must change the mix");
+    let err = load(&without_gain).expect_err("a sting with no volume_db must fail load");
+    assert!(err.contains("crate_common"), "{err}");
+    assert!(err.contains("volume_db"), "{err}");
+
+    let without_file = base.audio.replacen(
+        "path = \"audio/stings/crate_legendary.ogg\"",
+        "path = \"audio/stings/crate_legendary_missing.ogg\"",
+        1,
+    );
+    assert_ne!(without_file, base.audio, "retargeting the sting path must change the mix");
+    let err = load(&without_file).expect_err("a reveal cue with no file must fail load");
+    assert!(err.contains("crate_legendary"), "{err}");
+    assert!(err.contains("missing"), "{err}");
 }
 
 #[test]
