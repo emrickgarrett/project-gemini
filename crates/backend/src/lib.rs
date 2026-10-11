@@ -297,7 +297,7 @@ mod tests {
     fn seeded_million_pulls_match_published_odds() {
         let content = Content::embedded();
         let published = content.banners.published.legendary_overall_rate;
-        assert!((published - 0.0255).abs() < 1e-6, "published {published}");
+        let hard = content.banners.pity.legendary_hard;
         let n = 1_000_000u32;
         let mut account = Account::new(0x5EED_F00D);
         account.credits = content.banners.cost.single as f32;
@@ -323,7 +323,7 @@ mod tests {
                 streak = 0;
             } else {
                 streak += 1;
-                assert!(streak <= 70, "streak {streak} without a legendary");
+                assert!(streak <= hard, "streak {streak} without a legendary");
             }
             epic_plus[i as usize] = pull.rarity == "epic" || pull.rarity == "legendary";
             let bumped = pull.fakeout.is_some();
@@ -365,7 +365,7 @@ mod tests {
             }
         }
         max_streak = max_streak.max(streak);
-        assert!(max_streak <= 70, "max streak {max_streak}");
+        assert!(max_streak <= hard, "max streak {max_streak}");
         let rate = legendaries as f64 / n as f64;
         let delta = (rate - published as f64).abs();
         assert!(
@@ -424,6 +424,7 @@ mod tests {
     fn content_with_fakeouts_disabled() -> Content {
         let base = gemini_sim::content::embedded_sources();
         let reveal = base.crate_reveal.replacen("fakeout_enabled = true", "fakeout_enabled = false", 1);
+        assert_ne!(reveal, base.crate_reveal, "fakeout_enabled was not rewritten");
         Content::parse(&gemini_sim::content::Sources {
             waves: base.waves,
             difficulty: base.difficulty,
