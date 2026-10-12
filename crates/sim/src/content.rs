@@ -133,6 +133,9 @@ impl Content {
         validate_away_hud(&presentation.hud.away)?;
         require_palette_keys(&palette, &bugs, &presentation.hud.away, &crate_reveal.layout)
             .map_err(|err| format!("palette.toml: {err}"))?;
+        let arena = load_arena(src.arena).map_err(|err| format!("arena_01.toml: {err}"))?;
+        require_arena_colors(&palette, &arena).map_err(|err| format!("arena_01.toml: {err}"))?;
+        validate_stage_offset(&palette, &crate_reveal.layout)?;
         Ok(Self {
             fingerprint,
             waves: parse("waves.toml", src.waves)?,
@@ -154,7 +157,7 @@ impl Content {
             weapons,
             hero,
             roster,
-            arena: load_arena(src.arena).map_err(|err| format!("arena_01.toml: {err}"))?,
+            arena,
             presentation,
             combat: parse("combat.toml", src.combat)?,
             palette,
@@ -1145,6 +1148,8 @@ pub struct Hero {
     pub move_speed_mult: f32,
     pub ability_id: String,
     pub ability_cooldown: f32,
+    /// HUD cooldown bar never divides by less than this.
+    pub cooldown_floor: f32,
     pub overdrive_duration: f32,
     pub overdrive_fire_rate: f32,
     pub infinite_magazine: bool,
@@ -1223,6 +1228,7 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>), St
         move_speed_mult: req_f32(row, "move_speed_mult", starter)?,
         ability_id: ability_id.to_string(),
         ability_cooldown: req_f32(ability, "cooldown", "overdrive")?,
+        cooldown_floor: req_f32(ability, "cooldown_floor", "overdrive")?,
         overdrive_duration: req_f32(ability, "duration", "overdrive")?,
         overdrive_fire_rate: req_f32(ability, "fire_rate", "overdrive")?,
         infinite_magazine: ability
@@ -1241,6 +1247,9 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>), St
     };
     if !(hero.ability_cooldown > 0.0) || !(hero.overdrive_duration > 0.0) {
         return Err("overdrive cooldown and duration must be > 0".into());
+    }
+    if !(hero.cooldown_floor > 0.0) {
+        return Err("characters.toml overdrive cooldown_floor must be > 0".into());
     }
     if !(hero.max_hp > 0.0) {
         return Err(format!("{starter} max_hp must be > 0"));
@@ -1417,6 +1426,8 @@ pub struct Arena {
     pub pickups: Vec<ArenaPickup>,
     pub player_spawn: Vec3,
     pub perch_rules: PerchRules,
+    pub paint: ArenaPaint,
+    pub edge_wash: ArenaEdgeWash,
 }
 
 #[derive(Clone, Debug)]
@@ -1469,14 +1480,37 @@ pub struct PerchRules {
     pub perch_height_slack: f32,
     pub climb_trigger_distance: f32,
     pub climb_slide_rate: f32,
-    pub climb_target_radius: f32,
     pub flow_field_targets: String,
     pub all_perched_grace: f32,
     pub climb_speed_mult: f32,
     /// Meters kept inside the play edge while a swarmer climbs.
     pub climb_clearance: f32,
+    /// Meters kept inside the play edge while a swarmer chases on the ground.
+    pub ground_chase_pad: f32,
     pub budget_shift_to_spitters: f32,
     pub fuel_regen_on_perch: bool,
+}
+
+/// Floor pattern of the host-away still. Color names are palette keys.
+#[derive(Clone, Debug)]
+pub struct ArenaPaint {
+    pub floor_light: String,
+    pub floor_dark: String,
+    pub band_x: u32,
+    pub band_y: u32,
+    pub shade: f32,
+}
+
+/// Sky wash above the arena horizon in the host-away still.
+/// `color` is a palette key. Each channel is `source * num / den`.
+#[derive(Clone, Debug)]
+pub struct ArenaEdgeWash {
+    pub color: String,
+    pub num: [u32; 3],
+    pub den: [u32; 3],
+    pub horizon: f32,
+    pub mix: f32,
+    pub span: f32,
 }
 
 impl Vent {
@@ -1740,6 +1774,8 @@ fn load_arena(text: &str) -> Result<Arena, String> {
             "pickup",
             "player_spawn",
             "perch_rules",
+            "paint",
+            "edge_wash",
         ],
         "arena_01",
     )?;
@@ -1787,6 +1823,8 @@ fn load_arena(text: &str) -> Result<Arena, String> {
     }
     let spawn = nums3(table.get("player_spawn").unwrap(), "player_spawn")?;
     let perch_rules = load_perch_rules(table.get("perch_rules").unwrap())?;
+    let paint = load_arena_paint(table.get("paint").unwrap())?;
+    let edge_wash = load_edge_wash(table.get("edge_wash").unwrap())?;
     Ok(Arena {
         half_extent: size[0].max(size[1]) * 0.5,
         size,
@@ -1799,6 +1837,8 @@ fn load_arena(text: &str) -> Result<Arena, String> {
         pickups,
         player_spawn: Vec3::new(spawn[0], spawn[1], spawn[2]),
         perch_rules,
+        paint,
+        edge_wash,
     })
 }
 
@@ -1932,11 +1972,11 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
             "perch_height_slack",
             "climb_trigger_distance",
             "climb_slide_rate",
-            "climb_target_radius",
             "flow_field_targets",
             "all_perched_grace",
             "climb_speed_mult",
             "climb_clearance",
+            "ground_chase_pad",
             "budget_shift_to_spitters",
             "fuel_regen_on_perch",
         ],
@@ -1954,10 +1994,10 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
     let perch_height_slack = num(table.get("perch_height_slack").unwrap(), "perch_height_slack")?;
     let climb_trigger_distance = num(table.get("climb_trigger_distance").unwrap(), "climb_trigger_distance")?;
     let climb_slide_rate = num(table.get("climb_slide_rate").unwrap(), "climb_slide_rate")?;
-    let climb_target_radius = num(table.get("climb_target_radius").unwrap(), "climb_target_radius")?;
     let all_perched_grace = num(table.get("all_perched_grace").unwrap(), "all_perched_grace")?;
     let climb_speed_mult = num(table.get("climb_speed_mult").unwrap(), "climb_speed_mult")?;
     let climb_clearance = num(table.get("climb_clearance").unwrap(), "climb_clearance")?;
+    let ground_chase_pad = num(table.get("ground_chase_pad").unwrap(), "ground_chase_pad")?;
     let budget_shift_to_spitters = num(table.get("budget_shift_to_spitters").unwrap(), "budget_shift_to_spitters")?;
     let fuel_regen_on_perch = table
         .get("fuel_regen_on_perch")
@@ -1966,13 +2006,15 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
     if !(climb_clearance > 0.0) {
         return Err("climb_clearance must be > 0".into());
     }
+    if !(ground_chase_pad > 0.0) {
+        return Err("ground_chase_pad must be > 0".into());
+    }
     if !(perch_height_slack > 0.0) {
         return Err("perch_height_slack must be > 0".into());
     }
     if !(perch_radius > 0.0)
         || !(climb_trigger_distance > 0.0)
         || climb_slide_rate < 0.0
-        || !(climb_target_radius > 0.0)
         || all_perched_grace < 0.0
         || climb_speed_mult < 0.0
         || !(0.0..=1.0).contains(&budget_shift_to_spitters)
@@ -1984,14 +2026,108 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
         perch_height_slack,
         climb_trigger_distance,
         climb_slide_rate,
-        climb_target_radius,
         flow_field_targets,
         all_perched_grace,
         climb_speed_mult,
         climb_clearance,
+        ground_chase_pad,
         budget_shift_to_spitters,
         fuel_regen_on_perch,
     })
+}
+
+fn load_arena_paint(value: &toml::Value) -> Result<ArenaPaint, String> {
+    let table = value.as_table().ok_or_else(|| "paint is not a table".to_string())?;
+    expect_keys(
+        table,
+        &["floor_light", "floor_dark", "band_x", "band_y", "shade"],
+        "paint",
+    )?;
+    let floor_light = req_string(table, "floor_light", "arena_01.toml paint")?;
+    let floor_dark = req_string(table, "floor_dark", "arena_01.toml paint")?;
+    let band_x = req_u32_key(table, "band_x", "paint")?;
+    let band_y = req_u32_key(table, "band_y", "paint")?;
+    let shade = num(table.get("shade").unwrap(), "shade")?;
+    if floor_light.is_empty() || floor_dark.is_empty() {
+        return Err("paint floor colors must be palette keys".into());
+    }
+    if band_x == 0 || band_y == 0 {
+        return Err("paint band_x and band_y must be > 0".into());
+    }
+    if !(shade > 0.0 && shade <= 1.0) {
+        return Err("paint shade must be in (0, 1]".into());
+    }
+    Ok(ArenaPaint {
+        floor_light,
+        floor_dark,
+        band_x,
+        band_y,
+        shade,
+    })
+}
+
+fn load_edge_wash(value: &toml::Value) -> Result<ArenaEdgeWash, String> {
+    let table = value.as_table().ok_or_else(|| "edge_wash is not a table".to_string())?;
+    expect_keys(
+        table,
+        &["color", "num", "den", "horizon", "mix", "span"],
+        "edge_wash",
+    )?;
+    let color = req_string(table, "color", "arena_01.toml edge_wash")?;
+    let num = u32s3(table.get("num").unwrap(), "edge_wash.num")?;
+    let den = u32s3(table.get("den").unwrap(), "edge_wash.den")?;
+    let horizon = num_at(table, "horizon", "edge_wash.horizon")?;
+    let mix = num_at(table, "mix", "edge_wash.mix")?;
+    let span = num_at(table, "span", "edge_wash.span")?;
+    if color.is_empty() {
+        return Err("edge_wash color must be a palette key".into());
+    }
+    if den.iter().any(|d| *d == 0) {
+        return Err("edge_wash.den must be > 0".into());
+    }
+    if !(horizon > 0.0 && horizon < 1.0) {
+        return Err("edge_wash.horizon must be in (0, 1)".into());
+    }
+    if !(mix >= 0.0 && mix <= 1.0) || !(span >= 0.0) {
+        return Err("edge_wash mix and span are out of range".into());
+    }
+    Ok(ArenaEdgeWash {
+        color,
+        num,
+        den,
+        horizon,
+        mix,
+        span,
+    })
+}
+
+fn num_at(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<f32, String> {
+    num(table.get(key).unwrap(), what)
+}
+
+fn req_u32_key(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<u32, String> {
+    let value = table.get(key).unwrap();
+    let n = match value {
+        toml::Value::Integer(n) if *n >= 0 && *n <= u32::MAX as i64 => *n as u32,
+        toml::Value::Float(n) if n.is_finite() && *n >= 0.0 && n.fract() == 0.0 && *n <= u32::MAX as f64 => *n as u32,
+        _ => return Err(format!("{what} {key} must be a non-negative integer")),
+    };
+    Ok(n)
+}
+
+fn u32s3(value: &toml::Value, what: &str) -> Result<[u32; 3], String> {
+    let arr = value.as_array().ok_or_else(|| format!("{what} must be an array"))?;
+    if arr.len() != 3 {
+        return Err(format!("{what} must have 3 numbers"));
+    }
+    let mut out = [0u32; 3];
+    for (i, item) in arr.iter().enumerate() {
+        out[i] = match item {
+            toml::Value::Integer(n) if *n >= 0 && *n <= u32::MAX as i64 => *n as u32,
+            _ => return Err(format!("{what} must be three non-negative integers")),
+        };
+    }
+    Ok(out)
 }
 
 fn load_rows<T>(
@@ -2615,6 +2751,7 @@ pub struct RevealLayout {
     pub panel_height: f32,
     pub title_px: f32,
     pub hint_px: f32,
+    pub glyph_rows: u32,
     pub row_gap: f32,
     pub ink_luma: f32,
     pub title_pad_px: u32,
@@ -2641,6 +2778,9 @@ fn validate_reveal_panel(layout: &RevealLayout) -> Result<(), String> {
     }
     if !(layout.title_px > 0.0) || !(layout.hint_px > 0.0) {
         return Err("crate_reveal.toml layout title_px and hint_px must be positive".into());
+    }
+    if layout.glyph_rows == 0 {
+        return Err("crate_reveal.toml layout glyph_rows must be > 0".into());
     }
     if !(layout.row_gap >= 0.0) {
         return Err("crate_reveal.toml layout row_gap must be non-negative".into());
@@ -2679,17 +2819,50 @@ fn validate_reveal_panel(layout: &RevealLayout) -> Result<(), String> {
     if !(face_w > pad && (face_w - pad) / legend >= layout.title_scale_min as f32) {
         return Err("crate_reveal.toml layout title scale must fit LEGENDARY inside the padded face".into());
     }
-    for (name, rgb) in [
-        ("stage_base", layout.stage_base),
-        ("stage_lift", layout.stage_lift),
-        ("stage_vignette", layout.stage_vignette),
-    ] {
+    for channel in layout.stage_base {
+        if !channel.is_finite() || !(-255.0..=255.0).contains(&channel) {
+            return Err("crate_reveal.toml layout stage_base channels must be in [-255, 255]".into());
+        }
+    }
+    for (name, rgb) in [("stage_lift", layout.stage_lift), ("stage_vignette", layout.stage_vignette)] {
         for channel in rgb {
             if !(channel >= 0.0 && channel <= 255.0) {
                 return Err(format!("crate_reveal.toml layout {name} channels must be in [0, 255]"));
             }
         }
     }
+    Ok(())
+}
+
+fn validate_stage_offset(palette: &Palette, layout: &RevealLayout) -> Result<(), String> {
+    let rgb = palette
+        .hex(&layout.stage)
+        .ok_or_else(|| format!("crate_reveal.toml layout stage color \"{}\" does not resolve", layout.stage))?;
+    let bytes = palette_bytes(rgb);
+    for (i, channel) in layout.stage_base.iter().enumerate() {
+        let painted = bytes[i] as f32 + channel;
+        if !(painted >= 0.0 && painted <= 255.0) {
+            return Err("crate_reveal.toml layout stage_base pushes the stage color out of byte range".into());
+        }
+    }
+    Ok(())
+}
+
+fn palette_bytes(hex: &str) -> [u8; 3] {
+    let rgb = hex_srgb(hex);
+    [(rgb[0] * 255.0) as u8, (rgb[1] * 255.0) as u8, (rgb[2] * 255.0) as u8]
+}
+
+fn require_arena_colors(palette: &Palette, arena: &Arena) -> Result<(), String> {
+    let check = |owner: &str, name: &str| -> Result<(), String> {
+        if palette.hex(name).is_some() {
+            return Ok(());
+        }
+        Err(format!("{owner} color \"{name}\" does not resolve"))
+    };
+    check("paint floor_light", &arena.paint.floor_light)?;
+    check("paint floor_dark", &arena.paint.floor_dark)?;
+    check("edge_wash color", &arena.edge_wash.color)?;
     Ok(())
 }
 

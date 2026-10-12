@@ -115,17 +115,21 @@ pub fn paint_away(content: &Content, shot: &AwayShot, width: u32, height: u32) -
 
 /// Arena floor plus swarmer, spitter, and brute. The bug raster's grey field is transparent.
 fn paint_arena(rgb: &mut [u8], width: u32, height: u32, content: &Content) {
-    let dark = bytes(content, "arena_dark");
-    let light = bytes(content, "arena_light");
+    let paint = &content.arena.paint;
+    let wash = &content.arena.edge_wash;
+    let dark = bytes(content, &paint.floor_dark);
+    let light = bytes(content, &paint.floor_light);
+    let sky = scaled_palette(content, &wash.color, wash.num, wash.den);
+    let horizon = wash.horizon;
     for y in 0..height {
-        let floor = y as f32 > height as f32 * 0.42;
+        let floor = y as f32 > height as f32 * horizon;
         for x in 0..width {
             let px = if floor {
-                let band = ((x / 48) + (y / 36)) % 2 == 0;
-                if band { light } else { blend(light, dark, 0.45) }
+                let band = ((x / paint.band_x) + (y / paint.band_y)) % 2 == 0;
+                if band { light } else { blend(light, dark, paint.shade) }
             } else {
-                let t = y as f32 / (height as f32 * 0.42);
-                blend(dark, [8, 10, 16], 0.25 + (1.0 - t) * 0.45)
+                let t = y as f32 / (height as f32 * horizon);
+                blend(dark, sky, wash.mix + (1.0 - t) * wash.span)
             };
             put(rgb, width, x, y, px);
         }
@@ -179,6 +183,15 @@ fn bytes(content: &Content, name: &str) -> [u8; 3] {
     let hex = content.palette.hex(name).unwrap_or_else(|| panic!("unknown palette key {name}"));
     let c = hex_srgb(hex);
     [(c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8]
+}
+
+fn scaled_palette(content: &Content, name: &str, num: [u32; 3], den: [u32; 3]) -> [u8; 3] {
+    let src = bytes(content, name);
+    [
+        (src[0] as u32 * num[0] / den[0].max(1)) as u8,
+        (src[1] as u32 * num[1] / den[1].max(1)) as u8,
+        (src[2] as u32 * num[2] / den[2].max(1)) as u8,
+    ]
 }
 
 fn fill_rect(rgb: &mut [u8], width: u32, height: u32, x: i32, y: i32, w: i32, h: i32, color: [u8; 3], alpha: f32) {
@@ -310,5 +323,19 @@ mod tests {
         assert!(glow[1] > gray[1], "60% desat is greener than grayscale");
         let clear = grade(0x7C, 0xFF, 0x3A, 0.0, 0.0, hud.dim_floor);
         assert_eq!(clear, [0x7C, 0xFF, 0x3A]);
+    }
+
+    #[test]
+    fn arena_edge_wash_keeps_the_current_sky() {
+        let content = Content::embedded();
+        let wash = &content.arena.edge_wash;
+        let sky = scaled_palette(&content, &wash.color, wash.num, wash.den);
+        assert_eq!(sky, [8, 10, 16]);
+        let mut rgb = vec![0u8; 32 * 32 * 3];
+        paint_arena(&mut rgb, 32, 32, &content);
+        let dark = bytes(&content, &content.arena.paint.floor_dark);
+        let t = 0.0 / (32.0 * wash.horizon);
+        let expect = blend(dark, sky, wash.mix + (1.0 - t) * wash.span);
+        assert_eq!(&rgb[0..3], &expect);
     }
 }

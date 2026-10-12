@@ -96,10 +96,28 @@ perch_radius = 1.5                   # meters, horizontal. Detection, landing, f
 perch_height_slack = 0.45           # meters of vertical slack for "standing on a perch". The 0.4 lip snap is [ledge_catch] snap, not this.
 climb_trigger_distance = 1.8        # meters. A swarmer this close in XZ to the flow goal starts the anti-camp climb, and only inside perch_radius.
 climb_slide_rate = 0.4              # fraction of the remaining XZ gap closed per second while climbing
-climb_target_radius = 2.0          # meters. Kept so older tables still load; the climb trigger uses perch_radius squared.
 flow_field_targets = "nearest_grounded_player"
 all_perched_grace = 8.0          # seconds before anti-camp kicks in
 climb_speed_mult = 0.5           # swarmers climb resin streaks
 climb_clearance = 0.5             # meters kept inside the play edge while a swarmer climbs
+ground_chase_pad = 0.5           # meters kept inside the play edge while a swarmer chases on the ground
 budget_shift_to_spitters = 0.3   # extra share of wave budget to spitters while all perched
 fuel_regen_on_perch = false      # boosting is still allowed; only regen pauses
+
+# Host-away still floor. Colors are palette.toml keys.
+[paint]
+floor_light = "arena_light"
+floor_dark = "arena_dark"
+band_x = 48
+band_y = 36
+shade = 0.45
+
+# Host-away still sky, above the horizon. `color` is a palette.toml key.
+# Each channel is source * num / den, which keeps the current sky bytes.
+[edge_wash]
+color = "reveal_ink"
+num = [2, 5, 1]
+den = [7, 12, 2]
+horizon = 0.42
+mix = 0.25
+span = 0.45

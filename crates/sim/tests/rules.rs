@@ -1266,6 +1266,7 @@ fn vex_overdrive_comes_from_characters() {
     assert!((content.hero.max_hp - 100.0).abs() < 1e-4);
     assert!((content.hero.move_speed_mult - 1.0).abs() < 1e-4);
     assert!((content.hero.ability_cooldown - 20.0).abs() < 1e-4);
+    assert!((content.hero.cooldown_floor - 0.1).abs() < 1e-4);
     assert!((content.hero.overdrive_duration - 6.0).abs() < 1e-4);
     assert!((content.hero.overdrive_fire_rate - 0.35).abs() < 1e-4);
     assert!(content.hero.infinite_magazine);
@@ -1340,6 +1341,14 @@ fn vex_overdrive_comes_from_characters() {
         })
     };
     let text = include_str!("../../../content/characters.toml");
+    let missing_floor = text.replacen("cooldown_floor = 0.1, ", "", 1);
+    let err = load_hero(&missing_floor).expect_err("missing cooldown_floor");
+    assert!(err.contains("cooldown_floor"), "{err}");
+    for bad in ["cooldown_floor = 0", "cooldown_floor = nan", "cooldown_floor = -0.1"] {
+        let hero = text.replacen("cooldown_floor = 0.1", bad, 1);
+        let err = load_hero(&hero).expect_err(bad);
+        assert!(err.contains("cooldown_floor"), "{err}");
+    }
     for key in ["viewmodel_offset", "viewmodel_fov", "muzzle_flash_secs", "muzzle_flash_radius"] {
         let stripped = text.lines().filter(|line| !line.contains(key)).collect::<Vec<_>>().join("\n");
         let err = load_hero(&stripped).expect_err(key);
@@ -1446,8 +1455,19 @@ fn arena_01_vents_perches_and_pickups() {
     assert!((content.arena.perch_rules.perch_height_slack - 0.45).abs() < 1e-4);
     assert!((content.arena.perch_rules.climb_trigger_distance - 1.8).abs() < 1e-4);
     assert!((content.arena.perch_rules.climb_slide_rate - 0.4).abs() < 1e-4);
-    assert!((content.arena.perch_rules.climb_target_radius - 2.0).abs() < 1e-4);
     assert!((content.arena.perch_rules.climb_clearance - 0.5).abs() < 1e-4);
+    assert!((content.arena.perch_rules.ground_chase_pad - 0.5).abs() < 1e-4);
+    assert_eq!(content.arena.paint.floor_light, "arena_light");
+    assert_eq!(content.arena.paint.floor_dark, "arena_dark");
+    assert_eq!(content.arena.paint.band_x, 48);
+    assert_eq!(content.arena.paint.band_y, 36);
+    assert!((content.arena.paint.shade - 0.45).abs() < 1e-4);
+    assert_eq!(content.arena.edge_wash.color, "reveal_ink");
+    assert_eq!(content.arena.edge_wash.num, [2, 5, 1]);
+    assert_eq!(content.arena.edge_wash.den, [7, 12, 2]);
+    assert!((content.arena.edge_wash.horizon - 0.42).abs() < 1e-4);
+    assert!((content.arena.edge_wash.mix - 0.25).abs() < 1e-4);
+    assert!((content.arena.edge_wash.span - 0.45).abs() < 1e-4);
     let catch = &content.controller.ledge_catch;
     assert!((catch.snap - 0.4).abs() < 1e-4);
     assert!((catch.fall_speed - 0.15).abs() < 1e-4);
@@ -1493,8 +1513,19 @@ fn arena_01_vents_perches_and_pickups() {
         "perch_height_slack",
         "climb_trigger_distance",
         "climb_slide_rate",
-        "climb_target_radius",
         "climb_clearance",
+        "ground_chase_pad",
+        "floor_light",
+        "floor_dark",
+        "band_x",
+        "band_y",
+        "shade",
+        "horizon",
+        "span",
+        "color",
+        "num",
+        "den",
+        "mix",
     ] {
         let missing_key = include_str!("../../../content/arena_01.toml")
             .lines()
@@ -1509,16 +1540,29 @@ fn arena_01_vents_perches_and_pickups() {
         let err = parse(&text).expect_err(bad);
         assert!(err.contains("climb_clearance"), "{err}");
     }
+    for bad in ["ground_chase_pad = 0", "ground_chase_pad = nan", "ground_chase_pad = -1"] {
+        let text = include_str!("../../../content/arena_01.toml").replacen("ground_chase_pad = 0.5", bad, 1);
+        let err = parse(&text).expect_err(bad);
+        assert!(err.contains("ground_chase_pad"), "{err}");
+    }
     for bad in ["perch_height_slack = 0", "perch_height_slack = nan", "perch_height_slack = -0.1"] {
         let text = include_str!("../../../content/arena_01.toml").replacen("perch_height_slack = 0.45", bad, 1);
         let err = parse(&text).expect_err(bad);
         assert!(err.contains("perch_height_slack"), "{err}");
     }
-    for bad in ["climb_target_radius = 0.0", "climb_target_radius = -2.0"] {
-        let text = include_str!("../../../content/arena_01.toml").replacen("climb_target_radius = 2.0", bad, 1);
-        let err = parse(&text).expect_err(bad);
-        assert!(err.contains("out of range"), "{err}");
-    }
+    let revived = include_str!("../../../content/arena_01.toml").replacen(
+        "climb_clearance = 0.5",
+        "climb_target_radius = 2.0\nclimb_clearance = 0.5",
+        1,
+    );
+    let err = parse(&revived).expect_err("climb_target_radius");
+    assert!(err.contains("climb_target_radius"), "{err}");
+    let bad_color = include_str!("../../../content/arena_01.toml").replacen("floor_light = \"arena_light\"", "floor_light = \"not_a_color\"", 1);
+    let err = parse(&bad_color).expect_err("unknown floor color");
+    assert!(err.contains("does not resolve"), "{err}");
+    let bad_den = include_str!("../../../content/arena_01.toml").replacen("den = [7, 12, 2]", "den = [7, 0, 2]", 1);
+    let err = parse(&bad_den).expect_err("zero edge wash denominator");
+    assert!(err.contains("edge_wash.den"), "{err}");
     let missing = include_str!("../../../content/arena_01.toml").replacen("telegraph = 1.5\n", "", 1);
     let err = parse(&missing).expect_err("missing telegraph");
     assert!(err.contains("telegraph"), "{err}");
@@ -1908,12 +1952,27 @@ fn reveal_layout_fails_when_missing_or_invalid() {
     };
     let err = Content::parse(&sources).expect_err("nan panel");
     assert!(err.contains("panel_width"), "{err}");
-    let layout = &Content::embedded().crate_reveal.layout;
+    let content = Content::embedded();
+    let layout = &content.crate_reveal.layout;
     assert!((layout.panel_width - 420.0).abs() < 1e-3);
     assert!((layout.panel_height - 240.0).abs() < 1e-3);
     assert!((layout.ink_luma - 0.62).abs() < 1e-4);
     assert_eq!(layout.title_pad_px, 8);
+    assert_eq!(layout.glyph_rows, 7);
     assert_eq!(layout.title_glyph_px, 6);
+    let stage = content.palette.key(&layout.stage);
+    let painted = [
+        (stage[0] * 255.0) as u8 as f32 + layout.stage_base[0],
+        (stage[1] * 255.0) as u8 as f32 + layout.stage_base[1],
+        (stage[2] * 255.0) as u8 as f32 + layout.stage_base[2],
+    ];
+    assert_eq!(painted, [16.0, 12.0, 22.0]);
+    let missing_rows = base.crate_reveal.replacen("glyph_rows = 7\n", "", 1);
+    let err = Content::parse(&sources_reveal(&base, &missing_rows)).expect_err("missing glyph_rows");
+    assert!(err.contains("glyph_rows"), "{err}");
+    let zero_rows = base.crate_reveal.replacen("glyph_rows = 7", "glyph_rows = 0", 1);
+    let err = Content::parse(&sources_reveal(&base, &zero_rows)).expect_err("zero glyph_rows");
+    assert!(err.contains("glyph_rows"), "{err}");
     assert_eq!(layout.title_height_div, 16);
     assert_eq!(layout.title_scale_min, 2);
     assert_eq!(layout.title_scale_max, 14);

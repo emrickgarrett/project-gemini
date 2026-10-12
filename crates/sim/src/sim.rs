@@ -2979,7 +2979,7 @@ fn step_enemy(
     let step = move_dir.normalized() * speed * dt + enemy.vel * dt;
     enemy.pos.x += step.x;
     enemy.pos.z += step.z;
-    content.arena.clamp_play(&mut enemy.pos, 0.5);
+    content.arena.clamp_play(&mut enemy.pos, content.arena.perch_rules.ground_chase_pad);
     content.arena.shove_bug(&mut enemy.pos);
     enemy.pos.y = 0.0;
     false
