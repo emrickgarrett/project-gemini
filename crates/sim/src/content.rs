@@ -165,6 +165,7 @@ impl Content {
         if controller.sim.max_sim_steps_per_frame == 0 {
             return Err("controller.toml: max_sim_steps_per_frame must be at least 1".into());
         }
+        validate_downed(&controller.downed)?;
         validate_ledge_catch(&controller.ledge_catch)?;
         let difficulty = parse::<DifficultyFile>("difficulty.toml", src.difficulty)?.tier;
         require_palette_keys(&palette, &bugs, &presentation.hud.away, &crate_reveal.layout, &ui, &heroes)
@@ -3980,11 +3981,19 @@ pub struct UiLayout {
     pub locked_body_desaturation: f32,
     pub card_pad: f32,
     pub pause_keep: f32,
+    /// Upgrade-card fill alpha. The RGB comes from `colors.panel`.
+    pub panel_alpha: f32,
     pub pause_panel_width: f32,
     pub pause_panel_height: f32,
     pub slider_width: f32,
     pub slider_height: f32,
     pub settings_row_height: f32,
+    /// Smallest settings −/+ button, in screen pixels after the row is scaled.
+    pub stepper_min_px: f32,
+    /// Button side is at most the row width divided by this.
+    pub stepper_width_divisor: u32,
+    /// Border thickness is the button side divided by this.
+    pub stepper_border_divisor: u32,
     pub stat_decimals: u32,
     pub mult_decimals: u32,
     pub currency_decimals: u32,
@@ -4089,6 +4098,16 @@ fn load_ui(text: &str) -> Result<Ui, String> {
     parse("ui.toml", text)
 }
 
+fn validate_downed(downed: &DownedCfg) -> Result<(), String> {
+    if !(downed.revive_time.is_finite() && downed.revive_time > 0.0) {
+        return Err("controller.toml downed.revive_time must be > 0".into());
+    }
+    if !(downed.solo_self_revive_time.is_finite() && downed.solo_self_revive_time > 0.0) {
+        return Err("controller.toml downed.solo_self_revive_time must be > 0".into());
+    }
+    Ok(())
+}
+
 fn validate_ui(
     ui: &Ui,
     ui_text: &str,
@@ -4130,6 +4149,18 @@ fn validate_ui(
     }
     if !(layout.pause_keep > 0.0 && layout.pause_keep <= 1.0) {
         return Err("ui.toml layout.pause_keep must be in (0, 1]".into());
+    }
+    if !(layout.panel_alpha > 0.0 && layout.panel_alpha <= 1.0) {
+        return Err("ui.toml layout.panel_alpha must be in (0, 1]".into());
+    }
+    if !(layout.stepper_min_px.is_finite() && layout.stepper_min_px >= 1.0) {
+        return Err("ui.toml layout.stepper_min_px must be >= 1".into());
+    }
+    if layout.stepper_width_divisor < 2 {
+        return Err("ui.toml layout.stepper_width_divisor must be >= 2".into());
+    }
+    if layout.stepper_border_divisor < 2 {
+        return Err("ui.toml layout.stepper_border_divisor must be >= 2".into());
     }
     if !(layout.focus_lift > 0.0 && layout.focus_lift < 1.0) {
         return Err("ui.toml layout.focus_lift must be in (0, 1)".into());

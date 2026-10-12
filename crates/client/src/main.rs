@@ -78,6 +78,7 @@ fn install_match(app: &mut App) {
                     world::camera,
                     world::grade,
                     hud::draw,
+                    hud::resume_prompt,
                 )
                     .chain(),
                 (flow::rebuild, flow::end_of_match, flow::click_prompt, act_now::dispatch, audio::flush_ui_cues).chain(),
@@ -109,6 +110,7 @@ mod tests {
     use bevy::pbr::StandardMaterial;
     use bevy::prelude::*;
     use bevy::time::TimeUpdateStrategy;
+    use bevy::window::{CursorGrabMode, CursorOptions};
 
     use super::*;
 
@@ -328,6 +330,318 @@ mod tests {
         assert!(flow::freeze_solo(true, 1));
         assert!(!flow::freeze_solo(true, 2), "co-op pause must not stop the shared match");
         assert!(!flow::freeze_solo(false, 1));
+    }
+
+    #[test]
+    fn menu_camera_draws_ui_on_boot_and_after_a_match() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        app.update();
+        assert_menu_shown(&mut app);
+
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Playing);
+        app.update();
+        assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Playing));
+        assert_eq!(menu_cameras(&mut app).len(), 0, "the menu camera must leave with the menu");
+        assert!(camera_count(&mut app) > 0, "the match should spawn a world camera");
+
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Menu);
+        app.update();
+        assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Menu));
+        assert_eq!(camera_count(&mut app), 0, "returning to the menu must despawn the match cameras");
+        assert_menu_shown(&mut app);
+    }
+
+    #[test]
+    fn holding_e_while_downed_self_revives_and_the_prompt_tracks_it() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        app.update();
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Playing);
+        app.update();
+        {
+            let mut game = app.world_mut().resource_mut::<session::Game>();
+            game.sim.enemies.clear();
+            game.sim.director.pool = 50.0;
+            game.sim.director.parked = true;
+            let player = &mut game.sim.players[0];
+            player.hp = 0.0;
+            player.downed = true;
+            player.self_revives_used = 0;
+            player.self_revive_held = 0.0;
+            player.invuln = 0.0;
+        }
+        app.update();
+        let idle = prompt_line(&mut app);
+        assert!(idle.contains("HOLD E TO REVIVE"), "{idle}");
+        assert!(idle.contains("0%"), "a fresh down should start at 0%: {idle}");
+
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::KeyE);
+        app.world_mut().resource_mut::<session::SimClock>().set_accumulated(1.0);
+        app.update();
+        let held = app.world().resource::<session::Game>().sim.players[0].self_revive_held;
+        assert!(held > 0.1, "holding E did not drive the self-revive ({held})");
+        let moving = prompt_line(&mut app);
+        assert!(moving.contains("HOLD E TO REVIVE"), "{moving}");
+        assert!(!moving.contains("  0%"), "prompt stuck at 0% while held {held}: {moving}");
+
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(0.2)));
+        for _ in 0..40 {
+            app.update();
+        }
+        let player = &app.world().resource::<session::Game>().sim.players[0];
+        assert!(!player.downed, "holding E should self-revive");
+        assert!(player.alive);
+        assert!(player.hp > 1.0, "self-revive should restore hp, got {}", player.hp);
+    }
+
+    #[test]
+    fn upgrade_keys_latch_until_the_sim_ticks_and_the_cursor_comes_back() {
+        let _guard = settings_lock();
+        let mut keys = ButtonInput::<KeyCode>::default();
+        keys.press(KeyCode::Digit1);
+        assert_eq!(session::upgrade_index(&keys, 3), Some(0));
+        keys = ButtonInput::default();
+        keys.press(KeyCode::Numpad2);
+        assert_eq!(session::upgrade_index(&keys, 3), Some(1));
+        keys = ButtonInput::default();
+        keys.press(KeyCode::Digit4);
+        assert_eq!(session::upgrade_index(&keys, 3), None);
+        keys.press(KeyCode::Numpad4);
+        assert_eq!(session::upgrade_index(&keys, 4), Some(3));
+
+        let mut app = menu_app();
+        app.world_mut().spawn(locked_cursor());
+        app.update();
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Playing);
+        app.update();
+        let (grab, visible) = cursor_state(&mut app);
+        assert_eq!(grab, CursorGrabMode::Locked);
+        assert!(!visible);
+
+        offer_upgrades(&mut app);
+        app.world_mut().resource_mut::<session::SimClock>().set_accumulated(0.0);
+        app.update();
+        let (grab, visible) = cursor_state(&mut app);
+        assert_eq!(grab, CursorGrabMode::None, "the picker must release the cursor");
+        assert!(visible, "the picker must show the cursor");
+        assert!(hud_text(&mut app).iter().any(|line| line.contains("PRESS 1")), "cards should show the key hint");
+
+        // A 60 Hz frame does not reach the 30 Hz sim tick. The press has to survive that frame.
+        app.world_mut().resource_mut::<session::SimClock>().set_accumulated(0.0);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Digit1);
+        app.update();
+        assert!(matches!(app.world().resource::<session::Game>().sim.phase, gemini_sim::sim::Phase::Upgrade { .. }));
+        assert_eq!(app.world().resource::<session::Game>().pending_pick, Some(0));
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::Digit1);
+        app.update();
+        {
+            let game = app.world().resource::<session::Game>();
+            assert!(game.sim.players[0].upgrades.contains_key("rapid_cells"), "{:?}", game.sim.players[0].upgrades);
+            assert!(matches!(game.sim.phase, gemini_sim::sim::Phase::Breather { .. }));
+        }
+        let (grab, visible) = cursor_state(&mut app);
+        assert_eq!(grab, CursorGrabMode::Locked, "play should grab the cursor again");
+        assert!(!visible);
+
+        offer_upgrades(&mut app);
+        app.world_mut().resource_mut::<session::SimClock>().set_accumulated(0.0);
+        app.update();
+        app.world_mut().resource_mut::<session::SimClock>().set_accumulated(0.0);
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(KeyCode::Numpad2);
+        app.update();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().clear();
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().release(KeyCode::Numpad2);
+        app.update();
+        let game = app.world().resource::<session::Game>();
+        assert!(game.sim.players[0].upgrades.contains_key("hollow_points"), "{:?}", game.sim.players[0].upgrades);
+    }
+
+    #[test]
+    fn clicking_an_upgrade_card_picks_it() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        app.world_mut().spawn(locked_cursor());
+        app.update();
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Playing);
+        app.update();
+        offer_upgrades(&mut app);
+        app.update();
+        let content = gemini_sim::content::Content::embedded();
+        let rgb = content.palette.key(&content.ui.colors.panel);
+        let alpha = content.ui.layout.panel_alpha;
+        let card = {
+            let mut query = app.world_mut().query::<(Entity, &hud::UpgradeCard, &BackgroundColor)>();
+            let found: Vec<_> = query.iter(app.world()).map(|(entity, card, fill)| (entity, card.0, *fill)).collect();
+            assert!(found.iter().any(|(_, index, _)| *index == 2), "card 3 should exist: {found:?}");
+            for (_, _, BackgroundColor(fill)) in &found {
+                let fill = fill.to_srgba();
+                assert!((fill.red - rgb[0]).abs() < 1e-4 && (fill.green - rgb[1]).abs() < 1e-4 && (fill.blue - rgb[2]).abs() < 1e-4, "card fill should be the panel palette");
+                assert!((fill.alpha - alpha).abs() < 1e-4, "card alpha should be ui layout.panel_alpha");
+            }
+            found.into_iter().find(|(_, index, _)| *index == 2).unwrap().0
+        };
+        app.world_mut().trigger(bevy::ui_widgets::Activate { entity: card });
+        app.world_mut().resource_mut::<session::SimClock>().set_accumulated(1.0);
+        app.update();
+        let game = app.world().resource::<session::Game>();
+        assert!(game.sim.players[0].upgrades.contains_key("servo_legs"), "{:?}", game.sim.players[0].upgrades);
+        assert!(matches!(game.sim.phase, gemini_sim::sim::Phase::Breather { .. }));
+    }
+
+    #[test]
+    fn relock_click_does_not_fire_until_the_next_frame() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        app.world_mut().spawn(locked_cursor());
+        app.update();
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Playing);
+        app.update();
+        {
+            let mut query = app.world_mut().query::<&mut CursorOptions>();
+            let mut cursor = query.single_mut(app.world_mut()).expect("cursor");
+            cursor.grab_mode = CursorGrabMode::None;
+            cursor.visible = true;
+        }
+        let before = app.world().resource::<session::Game>().sim.players[0].primary.ammo;
+        assert!(before > 0, "the starter gun should be loaded");
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut().resource_mut::<session::SimClock>().set_accumulated(1.0);
+        app.update();
+        let (grab, visible) = cursor_state(&mut app);
+        assert_eq!(grab, CursorGrabMode::Locked);
+        assert!(!visible);
+        let grabbed = app.world().resource::<session::Game>().sim.players[0].primary.ammo;
+        assert_eq!(grabbed, before, "the click that locks the pointer must not fire");
+
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear_just_pressed(MouseButton::Left);
+        app.world_mut().resource_mut::<session::SimClock>().set_accumulated(1.0);
+        app.update();
+        let held = app.world().resource::<session::Game>().sim.players[0].primary.ammo;
+        assert!(held < before, "a hold after the grab should fire, ammo {before} -> {held}");
+    }
+
+    #[test]
+    fn settings_decrease_with_keys_and_the_minus_button() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        app.update();
+        choose(&mut app, "settings");
+        assert!(matches!(*app.world().resource::<flow::Page>(), flow::Page::Settings));
+        let start = app.world().resource::<settings::Prefs>().sensitivity;
+        tap(&mut app, KeyCode::ArrowLeft);
+        let left = app.world().resource::<settings::Prefs>().sensitivity;
+        assert!(left < start, "left arrow should decrease {start} -> {left}");
+        tap(&mut app, KeyCode::KeyA);
+        let nudged = app.world().resource::<settings::Prefs>().sensitivity;
+        assert!(nudged < left, "A should decrease {left} -> {nudged}");
+        choose(&mut app, "slider:sensitivity:-");
+        let minus = app.world().resource::<settings::Prefs>().sensitivity;
+        assert!(minus < nudged, "minus button should decrease {nudged} -> {minus}");
+        tap(&mut app, KeyCode::ArrowRight);
+        let right = app.world().resource::<settings::Prefs>().sensitivity;
+        assert!(right > minus, "right arrow should increase");
+        tap(&mut app, KeyCode::KeyD);
+        let keyed = app.world().resource::<settings::Prefs>().sensitivity;
+        assert!(keyed > right, "D should increase");
+
+        let content = gemini_sim::content::Content::embedded();
+        {
+            let mut prefs = app.world_mut().resource_mut::<settings::Prefs>();
+            prefs.sensitivity = content.ui.settings.sensitivity_min;
+        }
+        tap(&mut app, KeyCode::ArrowLeft);
+        tap(&mut app, KeyCode::KeyA);
+        let stuck = app.world().resource::<settings::Prefs>().sensitivity;
+        assert!((stuck - content.ui.settings.sensitivity_min).abs() < 1e-4, "min clamp {stuck}");
+        {
+            let mut prefs = app.world_mut().resource_mut::<settings::Prefs>();
+            prefs.sensitivity = content.ui.settings.sensitivity_max;
+        }
+        tap(&mut app, KeyCode::ArrowRight);
+        tap(&mut app, KeyCode::KeyD);
+        choose(&mut app, "slider:sensitivity:+");
+        let capped = app.world().resource::<settings::Prefs>().sensitivity;
+        assert!((capped - content.ui.settings.sensitivity_max).abs() < 1e-4, "max clamp {capped}");
+        choose(&mut app, "slider:sensitivity:-");
+        let dropped = app.world().resource::<settings::Prefs>().sensitivity;
+        assert!(dropped < content.ui.settings.sensitivity_max);
+    }
+
+    fn assert_menu_shown(app: &mut App) {
+        let cams = menu_cameras(app);
+        assert_eq!(cams.len(), 1, "the menu needs its own camera");
+        let (cam, clears) = cams[0];
+        assert!(clears, "the menu camera must clear, or the last match frame stays frozen");
+        let mut nodes = app
+            .world_mut()
+            .query_filtered::<(&Node, &UiTargetCamera, &Visibility, Option<&ImageNode>), With<flow::MenuRoot>>();
+        let mut image = false;
+        let mut count = 0;
+        for (node, target, visibility, pictured) in nodes.iter(app.world()) {
+            count += 1;
+            assert_eq!(target.0, cam, "menu UI must target the menu camera");
+            assert_ne!(*visibility, Visibility::Hidden);
+            let Val::Px(width) = node.width else { panic!("menu node width {:?}", node.width) };
+            let Val::Px(height) = node.height else { panic!("menu node height {:?}", node.height) };
+            assert!(width > 0.0 && height > 0.0, "menu node is {width}x{height}");
+            image |= pictured.is_some();
+        }
+        assert!(count > 1, "menu UI nodes missing");
+        assert!(image, "the painted menu image is missing");
+    }
+
+    fn menu_cameras(app: &mut App) -> Vec<(Entity, bool)> {
+        let mut query = app
+            .world_mut()
+            .query_filtered::<(Entity, &Camera), (With<flow::MenuCamera>, With<Camera2d>)>();
+        query
+            .iter(app.world())
+            .map(|(entity, camera)| (entity, !matches!(camera.clear_color, bevy::camera::ClearColorConfig::None)))
+            .collect()
+    }
+
+    fn camera_count(app: &mut App) -> usize {
+        let mut query = app.world_mut().query_filtered::<Entity, With<Camera3d>>();
+        query.iter(app.world()).count()
+    }
+
+    fn prompt_line(app: &mut App) -> String {
+        hud_text(app).into_iter().find(|line| line.contains("HOLD E") || line.contains("REVIVE") || line == "DOWN").unwrap_or_default()
+    }
+
+    fn hud_text(app: &mut App) -> Vec<String> {
+        let mut query = app.world_mut().query::<&Text>();
+        query.iter(app.world()).map(|text| text.0.clone()).collect()
+    }
+
+    fn locked_cursor() -> CursorOptions {
+        let mut cursor = CursorOptions::default();
+        cursor.grab_mode = CursorGrabMode::Locked;
+        cursor.visible = false;
+        cursor
+    }
+
+    fn cursor_state(app: &mut App) -> (CursorGrabMode, bool) {
+        let mut query = app.world_mut().query::<&CursorOptions>();
+        let cursor = query.single(app.world()).expect("cursor");
+        (cursor.grab_mode, cursor.visible)
+    }
+
+    fn offer_upgrades(app: &mut App) {
+        let mut game = app.world_mut().resource_mut::<session::Game>();
+        game.sim.phase = gemini_sim::sim::Phase::Upgrade {
+            options: vec!["rapid_cells".into(), "hollow_points".into(), "servo_legs".into()],
+        };
+    }
+
+    fn tap(app: &mut App, key: KeyCode) {
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().press(key);
+        app.update();
+        // MinimalPlugins does not clear `just_pressed`, so a leftover left press
+        // would keep winning over the next right press.
+        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset(key);
     }
 
     fn menu_app() -> App {

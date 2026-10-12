@@ -2,6 +2,7 @@
 //! pixel font. Buttons call the same start and pause paths the match already uses.
 
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::ClearColorConfig;
 use bevy::image::Image;
 use bevy::input::gamepad::{Gamepad, GamepadButton};
 use bevy::prelude::*;
@@ -81,6 +82,11 @@ pub struct PendingAction(pub Option<String>);
 #[derive(Component)]
 pub(crate) struct MenuRoot;
 
+/// UI camera for the menu. The match cameras are play pieces and despawn with
+/// the match, so without this the menu has nothing to clear or draw.
+#[derive(Component)]
+pub(crate) struct MenuCamera;
+
 #[derive(Component)]
 pub(crate) struct HitButton(String);
 
@@ -122,7 +128,28 @@ pub fn register(app: &mut App) {
         .add_systems(Update, (navigate, hover, apply, rebuild, debug_hotkeys, crate::audio::flush_ui_cues).chain().run_if(in_state(AppState::Menu)));
 }
 
-fn enter_menu(mut dirty: ResMut<Dirty>, summary: Option<Res<MatchSummary>>, mut page: ResMut<Page>, mut focus: ResMut<Focus>) {
+fn enter_menu(
+    mut commands: Commands,
+    existing: Query<Entity, With<MenuCamera>>,
+    mut dirty: ResMut<Dirty>,
+    summary: Option<Res<MatchSummary>>,
+    mut page: ResMut<Page>,
+    mut focus: ResMut<Focus>,
+) {
+    for entity in &existing {
+        commands.entity(entity).despawn();
+    }
+    // Clears the framebuffer. A camera with no clear leaves the last match frame frozen.
+    commands.spawn((
+        MenuCamera,
+        Camera2d,
+        Camera {
+            order: 0,
+            clear_color: ClearColorConfig::Default,
+            ..default()
+        },
+        IsDefaultUiCamera,
+    ));
     if summary.is_some() {
         *page = Page::Results;
         focus.0 = 0;
@@ -133,12 +160,13 @@ fn enter_menu(mut dirty: ResMut<Dirty>, summary: Option<Res<MatchSummary>>, mut 
 fn enter_match(mut ready: ResMut<PointerReady>, mut pause: ResMut<PauseMenu>, mut dirty: ResMut<Dirty>, mut cursor: Query<&mut CursorOptions>) {
     pause.open = false;
     pause.settings = false;
+    pause.resume_click = false;
     dirty.0 = true;
     if cfg!(target_arch = "wasm32") {
         ready.0 = false;
     } else {
         ready.0 = true;
-        lock_cursor(&mut cursor, true);
+        lock_cursor(&mut cursor, &mut pause, true);
     }
 }
 
@@ -146,8 +174,11 @@ fn drop_summary(mut commands: Commands) {
     commands.remove_resource::<MatchSummary>();
 }
 
-fn despawn_menu(mut commands: Commands, roots: Query<Entity, With<MenuRoot>>) {
+fn despawn_menu(mut commands: Commands, roots: Query<Entity, With<MenuRoot>>, cameras: Query<Entity, With<MenuCamera>>) {
     for entity in &roots {
+        commands.entity(entity).despawn();
+    }
+    for entity in &cameras {
         commands.entity(entity).despawn();
     }
 }
@@ -214,7 +245,7 @@ pub(crate) fn pause_keys(
         pause.open = false;
         dirty.0 = true;
         audio::ui_cue(&mut commands, &assets, &content, &prefs, &content.ui.sounds.pause_close);
-        lock_cursor(&mut cursor, true);
+        lock_cursor(&mut cursor, &mut pause, true);
         return;
     }
     pause.open = true;
@@ -222,12 +253,12 @@ pub(crate) fn pause_keys(
     focus.0 = 0;
     dirty.0 = true;
     audio::ui_cue(&mut commands, &assets, &content, &prefs, &content.ui.sounds.pause_open);
-    lock_cursor(&mut cursor, false);
+    lock_cursor(&mut cursor, &mut pause, false);
 }
 
 pub(crate) fn click_prompt(
     mut ready: ResMut<PointerReady>,
-    pause: Res<PauseMenu>,
+    mut pause: ResMut<PauseMenu>,
     mut dirty: ResMut<Dirty>,
     mut cursor: Query<&mut CursorOptions>,
     mut action: ResMut<PendingAction>,
@@ -242,7 +273,9 @@ pub(crate) fn click_prompt(
     if action.0.as_deref() == Some("click") {
         action.0 = None;
         ready.0 = true;
-        lock_cursor(&mut cursor, true);
+        lock_cursor(&mut cursor, &mut pause, true);
+        // Gather already sampled this frame, so the flag would skip the next shot.
+        pause.swallow_fire = false;
         dirty.0 = true;
     }
 }
@@ -319,16 +352,16 @@ pub(crate) fn navigate(
         }
     }
     if dir != 0 {
-        let n = hits.0.len() as i32;
-        focus.0 = (focus.0 as i32 + dir).rem_euclid(n) as usize;
+        focus.0 = move_focus(&hits.0, focus.0, dir);
         dirty.0 = true;
         audio::ui_cue(&mut commands, &assets, &content, &prefs, &content.ui.sounds.hover);
     }
-    let id = hits.0.get(focus.0).map(|hit| hit.id.as_str()).unwrap_or("");
+    let raw = hits.0.get(focus.0).map(|hit| hit.id.clone()).unwrap_or_default();
+    let id = setting_base(&raw);
     let mut nudge = 0i32;
-    if keys.just_pressed(KeyCode::ArrowLeft) {
+    if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) {
         nudge = -1;
-    } else if keys.just_pressed(KeyCode::ArrowRight) {
+    } else if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) {
         nudge = 1;
     }
     if let Some(pad) = pad {
@@ -368,8 +401,7 @@ fn edit_pref(prefs: &mut Prefs, id: &str, dir: i32, content: &Content) {
 }
 
 fn step_to(value: f32, delta: f32, min: f32, max: f32) -> f32 {
-    let next = value + delta;
-    if next < min || next > max { value } else { next }
+    (value + delta).clamp(min, max)
 }
 
 pub(crate) fn hover(
@@ -387,6 +419,7 @@ pub(crate) fn hover(
             continue;
         }
         let Some(index) = hits.0.iter().position(|row| row.id == hit.0) else { continue };
+        let index = focus_slot(&hits.0, index);
         if focus.0 == index {
             continue;
         }
@@ -399,6 +432,7 @@ pub(crate) fn hover(
 fn on_press(activate: On<Activate>, buttons: Query<&HitButton>, mut action: ResMut<PendingAction>, mut focus: ResMut<Focus>, hits: Res<Hits>, mut dirty: ResMut<Dirty>) {
     let Ok(hit) = buttons.get(activate.entity) else { return };
     if let Some(index) = hits.0.iter().position(|row| row.id == hit.0) {
+        let index = focus_slot(&hits.0, index);
         if focus.0 != index {
             focus.0 = index;
             dirty.0 = true;
@@ -472,7 +506,7 @@ pub(crate) fn apply(
             pause.open = false;
             pause.settings = false;
             dirty.0 = true;
-            lock_cursor(&mut cursor, true);
+            lock_cursor(&mut cursor, &mut pause, true);
             audio::ui_cue(&mut commands, &assets, &content, &prefs, &content.ui.sounds.pause_close);
         }
         "quit_to_menu" => {
@@ -481,7 +515,7 @@ pub(crate) fn apply(
             commands.remove_resource::<MatchSummary>();
             *page = Page::Title;
             focus.0 = 0;
-            lock_cursor(&mut cursor, false);
+            lock_cursor(&mut cursor, &mut pause, false);
             next.set(AppState::Menu);
             audio::ui_cue(&mut commands, &assets, &content, &prefs, back_cue);
         }
@@ -499,7 +533,7 @@ pub(crate) fn apply(
             commands.remove_resource::<MatchSummary>();
             *page = Page::Title;
             focus.0 = 0;
-            lock_cursor(&mut cursor, false);
+            lock_cursor(&mut cursor, &mut pause, false);
             dirty.0 = true;
             audio::ui_cue(&mut commands, &assets, &content, &prefs, back_cue);
         }
@@ -554,7 +588,8 @@ pub(crate) fn apply(
             }
         }
         other if other.starts_with("slider:") || other.starts_with("toggle:") => {
-            edit_pref(&mut prefs, other, 1, &content);
+            let dir = if other.ends_with(":-") { -1 } else { 1 };
+            edit_pref(&mut prefs, setting_base(other), dir, &content);
             settings::store(&content, &prefs);
             dirty.0 = true;
             let cue = if other.starts_with("toggle:") { &content.ui.sounds.toggle } else { &content.ui.sounds.slider };
@@ -631,6 +666,8 @@ pub(crate) struct MenuView<'w, 's> {
     windows: Query<'w, 's, &'static Window>,
     images: Option<ResMut<'w, Assets<Image>>>,
     old: Query<'w, 's, Entity, With<MenuRoot>>,
+    menu_cam: Query<'w, 's, Entity, With<MenuCamera>>,
+    ui_cam: Query<'w, 's, Entity, With<IsDefaultUiCamera>>,
     hits: ResMut<'w, Hits>,
 }
 
@@ -668,9 +705,15 @@ pub(crate) fn rebuild(mut commands: Commands, mut dirty: ResMut<Dirty>, mut view
     };
     let (rgb, painted) = paint_menu(&content, &shot, width, height);
     view.hits.0 = painted;
+    let target = view
+        .menu_cam
+        .iter()
+        .next()
+        .or_else(|| view.ui_cam.iter().next())
+        .expect("menu UI has no camera");
     if let Some(images) = view.images.as_mut() {
         let handle = images.add(image_from_rgb(&rgb, width, height));
-        commands.spawn((
+        let mut spawned = commands.spawn((
             Node {
                 position_type: PositionType::Absolute,
                 width: Val::Px(width as f32),
@@ -678,28 +721,62 @@ pub(crate) fn rebuild(mut commands: Commands, mut dirty: ResMut<Dirty>, mut view
                 ..default()
             },
             ImageNode::new(handle),
+            Visibility::Visible,
             MenuRoot,
         ));
+        spawned.insert(UiTargetCamera(target));
     }
     for hit in &view.hits.0 {
-        commands
-            .spawn((
-                Button,
-                Hovered::default(),
-                HitButton(hit.id.clone()),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(hit.x as f32),
-                    top: Val::Px(hit.y as f32),
-                    width: Val::Px(hit.w as f32),
-                    height: Val::Px(hit.h as f32),
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-                MenuRoot,
-            ))
-            .observe(on_press);
+        let mut spawned = commands.spawn((
+            Button,
+            Hovered::default(),
+            HitButton(hit.id.clone()),
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(hit.x as f32),
+                top: Val::Px(hit.y as f32),
+                width: Val::Px(hit.w as f32),
+                height: Val::Px(hit.h as f32),
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+            Visibility::Visible,
+            MenuRoot,
+        ));
+        spawned.insert(UiTargetCamera(target));
+        spawned.observe(on_press);
     }
+}
+
+fn setting_base(id: &str) -> &str {
+    id.strip_suffix(":-").or_else(|| id.strip_suffix(":+")).unwrap_or(id)
+}
+
+fn stepper_hit(id: &str) -> bool {
+    id.ends_with(":-") || id.ends_with(":+")
+}
+
+fn move_focus(hits: &[Hit], focus: usize, dir: i32) -> usize {
+    let n = hits.len() as i32;
+    if n == 0 {
+        return 0;
+    }
+    let mut i = focus as i32;
+    for _ in 0..n {
+        i = (i + dir).rem_euclid(n);
+        if !stepper_hit(&hits[i as usize].id) {
+            return i as usize;
+        }
+    }
+    focus
+}
+
+fn focus_slot(hits: &[Hit], index: usize) -> usize {
+    let base = setting_base(&hits[index].id);
+    if base == hits[index].id {
+        return index;
+    }
+    hits.iter().position(|hit| hit.id == base).unwrap_or(index)
 }
 
 fn shot_for(
@@ -785,9 +862,12 @@ fn image_from_rgb(rgb: &[u8], width: u32, height: u32) -> Image {
     )
 }
 
-fn lock_cursor(cursor: &mut Query<&mut CursorOptions>, lock: bool) {
+fn lock_cursor(cursor: &mut Query<&mut CursorOptions>, pause: &mut PauseMenu, lock: bool) {
     if let Ok(mut cursor) = cursor.single_mut() {
         if lock {
+            if cursor.grab_mode != CursorGrabMode::Locked {
+                pause.swallow_fire = true;
+            }
             cursor.grab_mode = CursorGrabMode::Locked;
             cursor.visible = false;
         } else {

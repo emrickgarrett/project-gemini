@@ -1,10 +1,14 @@
 //! Amber wave bar, teal crosshair, fuel and health arcs. Magenta only on a boss weak point.
 
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
+use bevy::ui_widgets::{Activate, Button};
+use bevy::window::{CursorGrabMode, CursorOptions};
 use gemini_sim::content::{EnemyKind, StackRule};
+use gemini_sim::math::Vec3 as SimVec;
 use gemini_sim::sim::Phase;
 
-use crate::session::{Away, FrameFx, Game};
+use crate::session::{Away, FrameFx, Game, PauseMenu};
 use crate::world::PlayPiece;
 
 #[derive(Component)]
@@ -18,6 +22,13 @@ pub(crate) struct HudFill;
 
 #[derive(Component)]
 pub(crate) struct HudAmmo;
+
+#[derive(Component)]
+pub(crate) struct HudPrompt;
+
+/// One offered upgrade. The number is the keyboard hint and the pick index.
+#[derive(Component)]
+pub(crate) struct UpgradeCard(pub u8);
 
 #[derive(Default)]
 pub(crate) struct HudShape {
@@ -46,6 +57,7 @@ pub fn draw(
     mut labels: Query<&mut Text, With<HudLabel>>,
     mut fills: Query<&mut Node, (With<HudFill>, Without<Floater>)>,
     mut ammos: Query<&mut Text, (With<HudAmmo>, Without<HudLabel>)>,
+    mut prompts: Query<&mut Text, (With<HudPrompt>, Without<HudLabel>, Without<HudAmmo>)>,
 ) {
     let dt = time.delta_secs();
     for (entity, mut floater, mut node) in &mut floaters {
@@ -62,7 +74,7 @@ pub fn draw(
             }
         }
     }
-    let Some(player) = game.local() else { return };
+    let Some(player) = game.local().cloned() else { return };
     let teal = color(&game, "hero_teal");
     let white = color(&game, "hero_white");
     let accent_rgb = gemini_sim::content::hex_srgb(&game.content.hero.accent);
@@ -109,8 +121,10 @@ pub fn draw(
     let boss_id = boss.map(|enemy| enemy.kind.name()).unwrap_or("");
     let upgrade_sig: String = player.upgrades.keys().cloned().collect();
     let overdrive = player.overdrive_left > 0.0;
+    let prompt = revive_line(&game, &player);
+    let kind = prompt_kind(prompt.as_deref());
     let key = format!(
-        "{:?}|{boss_id}|{}|{upgrade_sig}|{}|{}|{}|{}|{}",
+        "{:?}|{boss_id}|{}|{upgrade_sig}|{}|{}|{}|{}|{}|{kind}",
         std::mem::discriminant(&game.sim.phase),
         player.downed as u8,
         (hp * 14.0) as i32,
@@ -129,6 +143,11 @@ pub fn draw(
         if let Ok(mut text) = ammos.single_mut() {
             let gun = if player.downed { &player.sidearm } else { &player.primary };
             text.0 = format!("{}  /  {}", gun.ammo, gun.reserve);
+        }
+        if let Some(line) = revive_line(&game, &player) {
+            if let Ok(mut text) = prompts.single_mut() {
+                text.0 = line;
+            }
         }
         return;
     }
@@ -332,27 +351,21 @@ pub fn draw(
         HudNode,
     ));
 
-    if player.downed {
-        let cap = game.content.controller.downed.solo_self_revives_per_wave;
-        let need = game.content.controller.downed.solo_self_revive_time.max(0.1);
-        let text = if player.self_revives_used < cap {
-            format!("HOLD E  {:.0}%", (player.self_revive_held / need * 100.0).min(100.0))
-        } else {
-            "DOWN".into()
-        };
+    if let Some(line) = prompt {
         commands.spawn((
-            Text::new(text),
+            Text::new(line),
             TextFont::from_font_size(28.0),
             TextColor(white),
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::Percent(50.0),
                 top: Val::Percent(62.0),
-                margin: UiRect::new(Val::Px(-90.0), Val::Auto, Val::Auto, Val::Auto),
+                margin: UiRect::new(Val::Px(-180.0), Val::Auto, Val::Auto, Val::Auto),
                 ..default()
             },
             ChildOf(root),
             HudNode,
+            HudPrompt,
         ));
     }
 
@@ -367,26 +380,33 @@ pub fn draw(
                 _ => color(&game, "rarity_common"),
             };
             let stat = def.map(|d| d.stat.as_str()).unwrap_or(id);
-            commands.spawn((
-                Text::new(format!("{}  {id}\n{stat}", i + 1)),
-                TextFont::from_font_size(18.0),
-                TextColor(white),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Percent(50.0),
-                    top: Val::Px(180.0 + i as f32 * 64.0),
-                    width: Val::Px(280.0),
-                    padding: UiRect::all(Val::Px(10.0)),
-                    border: UiRect::all(Val::Px(2.0)),
-                    margin: UiRect::new(Val::Px(-140.0), Val::Auto, Val::Auto, Val::Auto),
-                    border_radius: BorderRadius::all(Val::Px(8.0)),
-                    ..default()
-                },
-                BackgroundColor(Color::srgba(0.05, 0.05, 0.08, 0.85)),
-                BorderColor::all(border),
-                ChildOf(root),
-                HudNode,
-            ));
+            let hint = i as u8 + 1;
+            commands
+                .spawn((
+                    Button,
+                    Hovered::default(),
+                    UpgradeCard(i as u8),
+                    Text::new(format!("PRESS {hint}\n{id}\n{stat}")),
+                    TextFont::from_font_size(18.0),
+                    TextColor(white),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Percent(50.0),
+                        top: Val::Px(180.0 + i as f32 * 72.0),
+                        width: Val::Px(280.0),
+                        min_height: Val::Px(64.0),
+                        padding: UiRect::all(Val::Px(10.0)),
+                        border: UiRect::all(Val::Px(2.0)),
+                        margin: UiRect::new(Val::Px(-140.0), Val::Auto, Val::Auto, Val::Auto),
+                        border_radius: BorderRadius::all(Val::Px(8.0)),
+                        ..default()
+                    },
+                    BackgroundColor(panel_fill(&game)),
+                    BorderColor::all(border),
+                    ChildOf(root),
+                    HudNode,
+                ))
+                .observe(on_upgrade_card);
         }
     }
 
@@ -416,6 +436,91 @@ pub fn draw(
             }
         }
     }
+}
+
+/// Shown when a wasm pointer lock after an upgrade pick did not stick.
+#[derive(Component)]
+pub(crate) struct ResumePrompt;
+
+pub fn resume_prompt(
+    mut commands: Commands,
+    hold: Res<PauseMenu>,
+    cursor: Query<&CursorOptions>,
+    existing: Query<Entity, With<ResumePrompt>>,
+) {
+    let locked = cursor.iter().any(|options| options.grab_mode == CursorGrabMode::Locked);
+    let show = hold.resume_click && !locked;
+    if show {
+        if existing.is_empty() {
+            commands.spawn((
+                Text::new("CLICK TO RESUME"),
+                TextFont::from_font_size(28.0),
+                TextColor(Color::WHITE),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Percent(50.0),
+                    top: Val::Percent(58.0),
+                    margin: UiRect::new(Val::Px(-120.0), Val::Auto, Val::Auto, Val::Auto),
+                    ..default()
+                },
+                ResumePrompt,
+                PlayPiece,
+            ));
+        }
+    } else {
+        for entity in &existing {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+fn on_upgrade_card(activate: On<Activate>, cards: Query<&UpgradeCard>, mut game: ResMut<Game>) {
+    let Ok(card) = cards.get(activate.entity) else { return };
+    game.pending_pick = Some(card.0);
+}
+
+/// Solo down is a self-revive on hold. A living teammate holding E revives the downed player.
+pub(crate) fn revive_line(game: &Game, player: &gemini_sim::sim::Player) -> Option<String> {
+    let rules = &game.content.controller.downed;
+    let solo = game.sim.connected_count() <= 1;
+    if player.downed {
+        if solo && player.self_revives_used < rules.solo_self_revives_per_wave {
+            let need = rules.solo_self_revive_time;
+            let pct = (player.self_revive_held / need * 100.0).clamp(0.0, 100.0);
+            return Some(format!("HOLD E TO REVIVE  {pct:.0}%"));
+        }
+        if !solo && player.revive_progress > 0.0 {
+            let need = rules.revive_time;
+            let pct = (player.revive_progress / need * 100.0).clamp(0.0, 100.0);
+            return Some(format!("REVIVING  {pct:.0}%"));
+        }
+        return Some(if solo { "DOWN".into() } else { "WAITING FOR REVIVE".into() });
+    }
+    let range = game.content.combat.revive_range;
+    let near = game.sim.players.iter().any(|other| {
+        other.token != player.token
+            && other.connected
+            && other.alive
+            && other.downed
+            && flat_distance(player.pos, other.pos) <= range
+    });
+    if near { Some("HOLD E TO REVIVE TEAMMATE".into()) } else { None }
+}
+
+fn prompt_kind(line: Option<&str>) -> u8 {
+    match line {
+        Some(text) if text.starts_with("HOLD E TO REVIVE TEAMMATE") => 2,
+        Some(text) if text.starts_with("HOLD E") => 1,
+        Some(text) if text.starts_with("REVIVING") => 3,
+        Some(_) => 4,
+        None => 0,
+    }
+}
+
+fn flat_distance(a: SimVec, b: SimVec) -> f32 {
+    let dx = a.x - b.x;
+    let dz = a.z - b.z;
+    (dx * dx + dz * dz).sqrt()
 }
 
 fn bar_widget(commands: &mut Commands, root: Entity, width: f32, height: f32, fill: f32, color: Color, notches: &[f32], mark: Color) {
@@ -633,4 +738,9 @@ fn paint_away(commands: &mut Commands, root: Entity, game: &Game, away: &Away) {
 fn color(game: &Game, key: &str) -> Color {
     let c = game.content.palette.key(key);
     Color::srgb(c[0], c[1], c[2])
+}
+
+fn panel_fill(game: &Game) -> Color {
+    let c = game.content.palette.key(&game.content.ui.colors.panel);
+    Color::srgba(c[0], c[1], c[2], game.content.ui.layout.panel_alpha)
 }
