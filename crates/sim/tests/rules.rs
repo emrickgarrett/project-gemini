@@ -606,6 +606,7 @@ fn sim_step_cap_comes_from_controller() {
             audio: base.audio,
             bugs: base.bugs,
             crate_reveal: base.crate_reveal,
+            coop: base.coop,
         })
     };
     let missing = base
