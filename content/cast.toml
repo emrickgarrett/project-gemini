@@ -7,12 +7,9 @@
 # In linear color, albedo = (shade / shade_mid_lin) * sum(weight * palette).
 # `shade_mid_lin` is that divisor. The painter reads it from here.
 # `rim_strength` scales the fresnel on an unmasked bug texel when a model has a rim key.
-# A weapon (`fit = "weapon"`) uses the cleaned mask as stored. Green or red at
-# or above `view_gun_mask_threshold` is the glow or the accent. The cleaned
-# PNGs are 0 or 255, so this does not pick up glb noise.
-# `view_gun_rim_strength` is that gun's fresnel, separate from `rim_strength`.
-# Overdrive gun emissive is `overdrive_emissive_key` scaled per channel.
-# The gains are HDR, so they are not hex colors.
+# Overdrive lights one mask channel on the equipped gun. `overdrive_emissive_channel`
+# is `primary`, `secondary`, `accent`, or `fourth`. The trim brightens toward `hero_<id>`.
+# `overdrive_emissive_gain` is the HDR factor on that color. It is not a hex.
 # Brood pod emissive is `pod_glow_key` times `pod_glow_base + glow * pod_glow_per_glow`.
 # A glow disc uses `glow_falloff` (radial exponent, solid core) and
 # `glow_show_through` (sac visible at the edge). The painter has no second copy.
@@ -22,9 +19,7 @@
 base_light = 0.5
 shade_mid_lin = 0.2623
 rim_strength = 1.0
-view_gun_mask_threshold = 0.45
-view_gun_rim_strength = 0.35
-overdrive_emissive_key = "accent"
+overdrive_emissive_channel = "accent"
 overdrive_emissive_gain = [5.0, 2.2, 0.4]
 pod_glow_key = "swarmer_glow"
 pod_glow_base = 2.8

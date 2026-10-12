@@ -160,8 +160,8 @@ thumb_yaw = 0.9
 # Colors are palette.toml keys. Empty `rim` means no rim light.
 # `primary` `secondary` `accent` `fourth` are mask R G B A. They are not the UI
 # `hero_<id>` keys. Empty `accent` or `fourth` means that channel has no weight.
-# `shade` is the sRGB grayscale map. `glow` stays a required key and is not the
-# emissive flag; emissive lives on the palette entry.
+# `shade` is the sRGB grayscale map. Channel rows do not carry `glow`; the tint
+# does not read it. Bug rows still do. Emissive is a palette field, not this key.
 # vex_body, vex_gun, and swarmer are in the handoff. Their task JSON was not,
 # so `task` is empty and the source line records Meshy from Gorkasso's concepts.
 
@@ -180,7 +180,6 @@ primary = "hero_vex_primary"
 secondary = "hero_vex_secondary"
 accent = "hero_vex_accent"
 fourth = "hero_vex_glow"
-glow = "hero_vex_primary"
 rim = ""
 fit = "hero"
 size = 1.84
@@ -204,7 +203,6 @@ primary = "gear_vex_gun_primary"
 secondary = "gear_vex_gun_secondary"
 accent = "gear_vex_gun_accent"
 fourth = ""
-glow = "gear_vex_gun_primary"
 rim = ""
 fit = "weapon"
 size = 0.78
@@ -228,7 +226,6 @@ primary = "hero_nyra_primary"
 secondary = "hero_nyra_secondary"
 accent = "hero_nyra_accent"
 fourth = "hero_nyra_glow"
-glow = "hero_nyra_primary"
 rim = ""
 fit = "hero"
 size = 1.74
@@ -252,7 +249,6 @@ primary = "gear_nyra_gun_primary"
 secondary = "gear_nyra_gun_secondary"
 accent = "gear_nyra_gun_accent"
 fourth = "gear_nyra_gun_glow"
-glow = "gear_nyra_gun_primary"
 rim = ""
 fit = "weapon"
 size = 0.72
@@ -276,7 +272,6 @@ primary = "hero_brakk_primary"
 secondary = "hero_brakk_secondary"
 accent = "hero_brakk_accent"
 fourth = "hero_brakk_glow"
-glow = "hero_brakk_primary"
 rim = ""
 fit = "hero"
 size = 1.96
@@ -300,7 +295,6 @@ primary = "gear_brakk_gun_primary"
 secondary = "gear_brakk_gun_secondary"
 accent = ""
 fourth = "gear_brakk_gun_glow"
-glow = "gear_brakk_gun_primary"
 rim = ""
 fit = "weapon"
 size = 0.82
@@ -324,7 +318,6 @@ primary = "gear_brakk_shield_primary"
 secondary = "gear_brakk_shield_secondary"
 accent = "gear_brakk_shield_accent"
 fourth = ""
-glow = "gear_brakk_shield_primary"
 rim = ""
 fit = "shield"
 size = 1.12
@@ -348,7 +341,6 @@ primary = "hero_kip_primary"
 secondary = "hero_kip_secondary"
 accent = "hero_kip_accent"
 fourth = "hero_kip_glow"
-glow = "hero_kip_primary"
 rim = ""
 fit = "hero"
 size = 1.66
@@ -372,7 +364,6 @@ primary = "gear_kip_gun_primary"
 secondary = "gear_kip_gun_secondary"
 accent = "gear_kip_gun_accent"
 fourth = ""
-glow = "gear_kip_gun_primary"
 rim = ""
 fit = "weapon"
 size = 0.86

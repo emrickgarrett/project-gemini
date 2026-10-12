@@ -54,11 +54,6 @@ hero_vex = "#F97316"
 hero_nyra = "#7DD3FC"
 hero_brakk = "#DC2626"
 hero_kip = "#FDE047"
-# Kept for older rows. The channel tint does not multiply by these.
-hero_vex_base = "#6B3010"
-hero_nyra_base = "#163E52"
-hero_brakk_base = "#6E1212"
-hero_kip_base = "#6A5810"
 # Spitter rim. The carapace is too dark against arena_sky without it.
 spitter_rim = "#E6D3C2"
 # Brakk's plates. hero_cobalt shades to near-black on a lit facet.

@@ -1365,12 +1365,9 @@ pub struct CastLook {
     /// Linear divisor for an sRGB shade map. Albedo is `(shade / shade_mid_lin) * sum(weight * color)`.
     pub shade_mid_lin: f32,
     pub rim_strength: f32,
-    /// Weapon grade. Compared against the cleaned mask, which is 0 or 255.
-    pub view_gun_mask_threshold: f32,
-    /// Fresnel on an unmasked weapon texel. Separate from `rim_strength`.
-    pub view_gun_rim_strength: f32,
-    /// Palette key. Overdrive multiplies this color by `overdrive_emissive_gain`.
-    pub overdrive_emissive_key: String,
+    /// Mask channel Overdrive lights on the equipped gun: primary, secondary, accent, or fourth.
+    pub overdrive_emissive_channel: String,
+    /// HDR multiplier on `hero_<id>` while that channel is emissive.
     pub overdrive_emissive_gain: [f32; 3],
     /// Palette key for a live brood pod.
     pub pod_glow_key: String,
@@ -1831,11 +1828,13 @@ fn load_model_rows(
         let fit_peek = map.get("fit").and_then(|v| v.as_str()).unwrap_or("");
         let channeled = matches!(fit_peek, "hero" | "weapon" | "shield");
         let mut keys = vec![
-            "id", "file", "mask", "triangles", "bytes", "source", "license", "task", "base", "accent", "glow", "rim", "fit",
-            "size", "yaw_deg", "at", "grip", "view",
+            "id", "file", "mask", "triangles", "bytes", "source", "license", "task", "base", "accent", "rim", "fit", "size",
+            "yaw_deg", "at", "grip", "view",
         ];
         if channeled {
             keys.extend(["primary", "secondary", "fourth", "shade"]);
+        } else {
+            keys.push("glow");
         }
         expect_keys(map, &keys, &format!("{what} model"))?;
         let id = vis_str(map, "id", &format!("{what} model"))?.to_string();
@@ -1919,7 +1918,7 @@ fn load_model_rows(
             accent: color("accent")?,
             fourth: if channeled { color("fourth")? } else { String::new() },
             shade,
-            glow: color("glow")?,
+            glow: if channeled { String::new() } else { color("glow")? },
             rim: color("rim")?,
             fit,
             size,
@@ -1973,9 +1972,7 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
             "base_light",
             "shade_mid_lin",
             "rim_strength",
-            "view_gun_mask_threshold",
-            "view_gun_rim_strength",
-            "overdrive_emissive_key",
+            "overdrive_emissive_channel",
             "overdrive_emissive_gain",
             "pod_glow_key",
             "pod_glow_base",
@@ -2001,17 +1998,11 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
     if !(rim_strength >= 0.0 && rim_strength <= 1.0) {
         return Err("cast.toml rim_strength must be between 0 and 1".into());
     }
-    let view_gun_mask_threshold = vis_f32(table, "view_gun_mask_threshold", "cast.toml")?;
-    let view_gun_rim_strength = vis_f32(table, "view_gun_rim_strength", "cast.toml")?;
-    if !(view_gun_mask_threshold > 0.0 && view_gun_mask_threshold < 1.0) {
-        return Err("cast.toml view_gun_mask_threshold must be between 0 and 1".into());
-    }
-    if !(view_gun_rim_strength >= 0.0 && view_gun_rim_strength <= 1.0) {
-        return Err("cast.toml view_gun_rim_strength must be between 0 and 1".into());
-    }
-    let overdrive_emissive_key = vis_str(table, "overdrive_emissive_key", "cast.toml")?.to_string();
-    if palette.hex(&overdrive_emissive_key).is_none() {
-        return Err(format!("cast.toml overdrive_emissive_key \"{overdrive_emissive_key}\" does not resolve"));
+    let overdrive_emissive_channel = vis_str(table, "overdrive_emissive_channel", "cast.toml")?.to_string();
+    if !matches!(overdrive_emissive_channel.as_str(), "primary" | "secondary" | "accent" | "fourth") {
+        return Err(format!(
+            "cast.toml overdrive_emissive_channel \"{overdrive_emissive_channel}\" is unknown"
+        ));
     }
     let gain_value = table
         .get("overdrive_emissive_gain")
@@ -2048,9 +2039,7 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
         base_light,
         shade_mid_lin,
         rim_strength,
-        view_gun_mask_threshold,
-        view_gun_rim_strength,
-        overdrive_emissive_key,
+        overdrive_emissive_channel,
         overdrive_emissive_gain,
         pod_glow_key,
         pod_glow_base,
@@ -3742,10 +3731,6 @@ pub struct PaletteKeys {
     pub hero_nyra: String,
     pub hero_brakk: String,
     pub hero_kip: String,
-    pub hero_vex_base: String,
-    pub hero_nyra_base: String,
-    pub hero_brakk_base: String,
-    pub hero_kip_base: String,
     pub spitter_rim: String,
     pub hero_plate: String,
     pub portrait_field: String,
@@ -3804,10 +3789,6 @@ impl Palette {
             "hero_nyra" => self.keys.hero_nyra.as_str(),
             "hero_brakk" => self.keys.hero_brakk.as_str(),
             "hero_kip" => self.keys.hero_kip.as_str(),
-            "hero_vex_base" => self.keys.hero_vex_base.as_str(),
-            "hero_nyra_base" => self.keys.hero_nyra_base.as_str(),
-            "hero_brakk_base" => self.keys.hero_brakk_base.as_str(),
-            "hero_kip_base" => self.keys.hero_kip_base.as_str(),
             "spitter_rim" => self.keys.spitter_rim.as_str(),
             "hero_plate" => self.keys.hero_plate.as_str(),
             "portrait_field" => self.keys.portrait_field.as_str(),
@@ -3864,11 +3845,28 @@ impl Palette {
     }
 
     /// True only when that entry's `emissive` field is true. A `_glow` suffix is not enough.
+    /// An unknown name panics, the same way `key` does.
     pub fn emissive(&self, name: &str) -> bool {
+        if self.hex(name).is_none() {
+            panic!("unknown palette key {name}");
+        }
         match name {
             "gear_nyra_gun_glow" => self.keys.gear_nyra_gun_glow.emissive,
             "gear_brakk_gun_glow" => self.keys.gear_brakk_gun_glow.emissive,
             _ => false,
+        }
+    }
+}
+
+impl CastLook {
+    /// Mask slot for `overdrive_emissive_channel`. Load rejects any other name.
+    pub fn overdrive_channel_index(&self) -> usize {
+        match self.overdrive_emissive_channel.as_str() {
+            "primary" => 0,
+            "secondary" => 1,
+            "accent" => 2,
+            "fourth" => 3,
+            other => panic!("cast.toml overdrive_emissive_channel \"{other}\" is unknown"),
         }
     }
 }
@@ -4867,6 +4865,31 @@ fn check_range(name: &str, value: f32, min: f32, max: f32, step: f32) -> Result<
         return Err(format!("ui.toml settings.{name} {value} is outside [{min}, {max}]"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod cast_look_tests {
+    use super::{load_cast_look, Content};
+
+    #[test]
+    fn overdrive_channel_must_name_a_mask_slot() {
+        let palette = Content::embedded().palette;
+        let text = include_str!("../../../content/cast.toml");
+        let look = load_cast_look(text, &palette).expect("cast.toml");
+        assert_eq!(look.overdrive_emissive_channel, "accent");
+        assert_eq!(look.overdrive_channel_index(), 2);
+        let missing = text.replacen("overdrive_emissive_channel = \"accent\"\n", "", 1);
+        assert_ne!(missing, text);
+        let err = load_cast_look(&missing, &palette).expect_err("a missing channel must fail");
+        assert!(err.contains("overdrive_emissive_channel"), "{err}");
+        let unknown = text.replacen(
+            "overdrive_emissive_channel = \"accent\"",
+            "overdrive_emissive_channel = \"glow\"",
+            1,
+        );
+        let err = load_cast_look(&unknown, &palette).expect_err("an unknown channel must fail");
+        assert!(err.contains("unknown"), "{err}");
+    }
 }
 
 fn require_fit(label: &str, scale: u32, glyph: u32, inner: f32, what: &str) -> Result<(), String> {

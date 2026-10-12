@@ -1078,6 +1078,8 @@ fn emissive_is_a_palette_field_not_a_name_suffix() {
     assert!(!content.palette.emissive("hero_nyra_glow"));
     assert!(!content.palette.emissive("swarmer_glow"), "a _glow suffix is not emissive");
     assert!((content.cast.shade_mid_lin - 0.2623).abs() < 1.0e-4);
+    assert_eq!(content.cast.overdrive_emissive_channel, "accent");
+    assert_eq!(content.cast.overdrive_channel_index(), 2);
 
     let base = gemini_sim::content::embedded_sources();
     let palette = include_str!("../../../content/palette.toml");
@@ -1121,6 +1123,12 @@ fn emissive_is_a_palette_field_not_a_name_suffix() {
     );
     let err = load(&off).expect_err("emissive = false must fail load");
     assert!(err.contains("emissive must be true"), "{err}");
+}
+
+#[test]
+#[should_panic(expected = "unknown palette key")]
+fn emissive_rejects_an_unknown_name() {
+    Content::embedded().palette.emissive("not_a_palette_key");
 }
 
 #[test]

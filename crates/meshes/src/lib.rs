@@ -14,7 +14,7 @@ mod reveal_still;
 mod visual;
 
 pub use cast::{
-    bake_textures, body_pivot, cast, casts, hero_pieces, hero_placement, load_catalog, model_bytes, muzzle_tip, paint_approved_gun, place_point, read_model_file,
+    bake_overdrive_emissive, bake_textures, body_pivot, cast, casts, hero_pieces, hero_placement, load_catalog, model_bytes, muzzle_tip, paint_approved_gun, place_point, read_model_file,
     CastMesh, PaintCam, Placement,
 };
 

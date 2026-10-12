@@ -307,9 +307,13 @@ pub fn scene(
         .get(&gun_idle)
         .cloned()
         .unwrap_or_else(|| panic!("{gun_id} material is not loaded"));
+    let gun_mesh_data = gemini_meshes::cast(&gun_id);
+    let (ew, eh, emit) = gemini_meshes::bake_overdrive_emissive(gun_mesh_data, &content.cast.overdrive_emissive_channel);
+    gun_hot_src.emissive_texture = Some(images.add(rgba_image(ew, eh, emit)));
+    let hero_id = gun_id.trim_end_matches("_gun");
+    let toward = content.palette.key(&format!("hero_{hero_id}"));
     let gain = content.cast.overdrive_emissive_gain;
-    let hot = content.palette.key(&content.cast.overdrive_emissive_key);
-    gun_hot_src.emissive = LinearRgba::rgb(hot[0] * gain[0], hot[1] * gain[1], hot[2] * gain[2]);
+    gun_hot_src.emissive = LinearRgba::rgb(toward[0] * gain[0], toward[1] * gain[1], toward[2] * gain[2]);
     let gun_hot = materials.add(gun_hot_src);
     let pieces = [
         (upload(&mut meshes, &vm.teal), mat_of(&bank, "hero_teal", false, false), hands, None),

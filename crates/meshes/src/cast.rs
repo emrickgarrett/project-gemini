@@ -25,7 +25,7 @@ pub struct CastMesh {
     pub mask: Tex,
     /// sRGB shade map. Empty on a bug cast.
     pub shade: Tex,
-    /// `weapon`, `hero`, `hitbox`, or `shield`. A weapon uses the view-gun grade.
+    /// `weapon`, `hero`, `hitbox`, or `shield`. Channel fits use the shade map.
     pub fit: String,
     pub base_key: String,
     pub primary_key: String,
@@ -613,15 +613,14 @@ pub fn bake_textures(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> (u3
         (mesh.base.w.max(1), mesh.base.h.max(1))
     };
     let job = paint_tint(mesh, palette);
-    let (view_threshold, view_rim) = view_gun_grade();
-    let view_gun = mesh.fit == "weapon" && !channeled;
     let fresnel = 0.0;
     let mut albedo = vec![0u8; (w * h * 4) as usize];
     let mut emit = vec![0u8; (w * h * 4) as usize];
     for y in 0..h {
         for x in 0..w {
+            // Image row 0 is v = 0. glTF and the mask PNGs share that top-left origin.
             let u = if w > 1 { x as f32 / (w as f32 - 1.0) } else { 0.0 };
-            let v = if h > 1 { 1.0 - (y as f32 / (h as f32 - 1.0)) } else { 0.0 };
+            let v = if h > 1 { y as f32 / (h as f32 - 1.0) } else { 0.0 };
             let i = ((y * w + x) * 4) as usize;
             if channeled {
                 let shade = sample(&mesh.shade, [u, v])[0];
@@ -632,13 +631,10 @@ pub fn bake_textures(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> (u3
                     write_rgb(&mut emit, i, glow);
                 }
             } else {
+                // The client texture stays a 1:1 copy. Bug stills flip in the software raster.
                 let base = sample(&mesh.base, [u, v]);
                 let mask = sample(&mesh.mask, [u, v]);
-                let color = if view_gun {
-                    tint_view_gun(base, mask, job.base_c, job.accent, job.glow, job.rim, 1.0, fresnel, view_threshold, view_rim)
-                } else {
-                    tint_texel(base, mask, job.base_c, job.accent, job.glow, job.rim, 1.0, fresnel, job.base_light, job.rim_strength)
-                };
+                let color = tint_texel(base, mask, job.base_c, job.accent, job.glow, job.rim, 1.0, fresnel, job.base_light, job.rim_strength);
                 write_rgb(&mut albedo, i, color);
                 if mask[1] > 0.0 {
                     write_rgb(&mut emit, i, [job.glow[0], job.glow[1], job.glow[2]]);
@@ -647,6 +643,33 @@ pub fn bake_textures(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> (u3
         }
     }
     (w, h, albedo, emit)
+}
+
+/// White where the named mask channel has weight. The client multiplies this by the HDR gain.
+pub fn bake_overdrive_emissive(mesh: &CastMesh, channel: &str) -> (u32, u32, Vec<u8>) {
+    let index = match channel {
+        "primary" => 0,
+        "secondary" => 1,
+        "accent" => 2,
+        "fourth" => 3,
+        other => panic!("overdrive channel \"{other}\" is unknown"),
+    };
+    let (w, h) = (mesh.mask.w.max(1), mesh.mask.h.max(1));
+    let mut emit = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let u = if w > 1 { x as f32 / (w as f32 - 1.0) } else { 0.0 };
+            let v = if h > 1 { y as f32 / (h as f32 - 1.0) } else { 0.0 };
+            let weight = sample4(&mesh.mask, [u, v])[index];
+            let byte = (weight.clamp(0.0, 1.0) * 255.0).round() as u8;
+            let i = ((y * w + x) * 4) as usize;
+            emit[i] = byte;
+            emit[i + 1] = byte;
+            emit[i + 2] = byte;
+            emit[i + 3] = 255;
+        }
+    }
+    (w, h, emit)
 }
 
 fn write_rgb(buf: &mut [u8], i: usize, color: [f32; 3]) {
@@ -667,6 +690,8 @@ struct PaintTint {
     shade_mid_lin: f32,
     base_light: f32,
     rim_strength: f32,
+    overdrive_channel: Option<usize>,
+    overdrive_toward: [f32; 3],
 }
 
 fn paint_tint(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> PaintTint {
@@ -713,6 +738,8 @@ fn paint_tint(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> PaintTint 
         shade_mid_lin,
         base_light,
         rim_strength,
+        overdrive_channel: None,
+        overdrive_toward: [0.0, 0.0, 0.0],
     }
 }
 
@@ -813,56 +840,30 @@ pub fn tint_texel(
     color
 }
 
-/// First-person gun. `threshold` and `rim_strength` come from cast.toml.
-/// The mask is the cleaned PNG. On a 0-or-255 mask the threshold matches a solid texel.
-fn tint_view_gun(
-    base: [f32; 3],
-    mask: [f32; 3],
-    base_c: [f32; 4],
-    accent: [f32; 4],
-    glow: [f32; 4],
-    rim: [f32; 4],
-    shade: f32,
-    fresnel: f32,
-    threshold: f32,
-    rim_strength: f32,
-) -> [f32; 3] {
-    let r = mask[0];
-    let g = mask[1];
-    if g >= threshold {
-        return [glow[0], glow[1], glow[2]];
-    }
-    if r >= threshold {
-        return [accent[0], accent[1], accent[2]];
-    }
-    let unmasked = (1.0 - r - g).clamp(0.0, 1.0);
-    let mut color = [
-        base[0] * base_c[0] * shade * unmasked + base[0] * accent[0] * r + glow[0] * g,
-        base[1] * base_c[1] * shade * unmasked + base[1] * accent[1] * r + glow[1] * g,
-        base[2] * base_c[2] * shade * unmasked + base[2] * accent[2] * r + glow[2] * g,
-    ];
-    if rim[3] > 0.0 || rim[0] + rim[1] + rim[2] > 0.0 {
-        let k = fresnel * rim_strength * unmasked;
-        color[0] += rim[0] * k;
-        color[1] += rim[1] * k;
-        color[2] += rim[2] * k;
-    }
-    color
+fn sample(tex: &Tex, uv: [f32; 2]) -> [f32; 3] {
+    sample_origin(tex, uv, true)
 }
 
-fn sample(tex: &Tex, uv: [f32; 2]) -> [f32; 3] {
-    let px = sample4(tex, uv);
+fn sample_origin(tex: &Tex, uv: [f32; 2], top_left: bool) -> [f32; 3] {
+    let px = sample4_origin(tex, uv, top_left);
     [px[0], px[1], px[2]]
 }
 
 fn sample4(tex: &Tex, uv: [f32; 2]) -> [f32; 4] {
+    sample4_origin(tex, uv, true)
+}
+
+/// `top_left` matches glTF and the hero masks. Bug masks were authored for the
+/// previous bottom-left read, which is what their approved stills show.
+fn sample4_origin(tex: &Tex, uv: [f32; 2], top_left: bool) -> [f32; 4] {
     if tex.w == 0 || tex.h == 0 {
         return [0.5, 0.5, 0.5, 1.0];
     }
     let u = uv[0] - uv[0].floor();
     let v = uv[1] - uv[1].floor();
     let x = ((u * (tex.w as f32 - 1.0)).round() as u32).min(tex.w - 1);
-    let y = (((1.0 - v) * (tex.h as f32 - 1.0)).round() as u32).min(tex.h - 1);
+    let row = if top_left { v } else { 1.0 - v };
+    let y = ((row * (tex.h as f32 - 1.0)).round() as u32).min(tex.h - 1);
     let i = ((y * tex.w + x) * 4) as usize;
     [
         tex.rgba[i] as f32 / 255.0,
@@ -884,10 +885,10 @@ pub fn paint(
     let job = paint_tint(mesh, palette);
     let xform = |p: [f32; 3]| place_point(p, &place);
     let rotate_n = |n: [f32; 3]| place_normal(n, &place);
-    paint_tris(color, depth, None, mesh, &xform, &rotate_n, cam, &job, silhouette, false);
+    paint_tris(color, depth, None, mesh, &xform, &rotate_n, cam, &job, silhouette);
 }
 
-/// First-person gun. Channel casts use the shade formula. A binary mask still uses the view-gun grade.
+/// First-person gun. Overdrive brightens `overdrive_emissive_channel` toward `hero_<id>`.
 pub fn paint_approved_gun(
     color: &mut [u8],
     depth: &mut [f32],
@@ -895,12 +896,19 @@ pub fn paint_approved_gun(
     place: Placement,
     palette: &dyn Fn(&str) -> [f32; 4],
     cam: &PaintCam,
+    overdrive: bool,
 ) {
-    let job = paint_tint(mesh, palette);
+    let mut job = paint_tint(mesh, palette);
+    if overdrive {
+        let look = &Content::embedded().cast;
+        let hero = mesh.id.trim_end_matches("_gun");
+        let toward = palette(&format!("hero_{hero}"));
+        job.overdrive_channel = Some(look.overdrive_channel_index());
+        job.overdrive_toward = [toward[0], toward[1], toward[2]];
+    }
     let xform = |p: [f32; 3]| place_point(p, &place);
     let rotate_n = |n: [f32; 3]| place_normal(n, &place);
-    let view_gun = mesh.fit == "weapon" && !job.channeled;
-    paint_tris(color, depth, None, mesh, &xform, &rotate_n, cam, &job, false, view_gun);
+    paint_tris(color, depth, None, mesh, &xform, &rotate_n, cam, &job, false);
 }
 
 /// Same raster as `paint`, plus a per-pixel tag. 2 is mask green, 1 is mask red.
@@ -917,7 +925,7 @@ fn paint_tagged(
     let job = paint_tint(mesh, palette);
     let xform = |p: [f32; 3]| place_point(p, &place);
     let rotate_n = |n: [f32; 3]| place_normal(n, &place);
-    paint_tris(color, depth, Some(tags), mesh, &xform, &rotate_n, cam, &job, false, false);
+    paint_tris(color, depth, Some(tags), mesh, &xform, &rotate_n, cam, &job, false);
 }
 
 fn paint_tris(
@@ -930,7 +938,6 @@ fn paint_tris(
     cam: &PaintCam,
     job: &PaintTint,
     silhouette: bool,
-    view_gun: bool,
 ) {
     for tri in mesh.indices.chunks(3) {
         if tri.len() < 3 {
@@ -955,7 +962,6 @@ fn paint_tris(
             rotate_n,
             job,
             silhouette,
-            view_gun,
         );
     }
 }
@@ -965,14 +971,6 @@ fn tint_look() -> (f32, f32, f32) {
     *CELL.get_or_init(|| {
         let look = &Content::embedded().cast;
         (look.base_light, look.rim_strength, look.shade_mid_lin)
-    })
-}
-
-fn view_gun_grade() -> (f32, f32) {
-    static CELL: OnceLock<(f32, f32)> = OnceLock::new();
-    *CELL.get_or_init(|| {
-        let look = &Content::embedded().cast;
-        (look.view_gun_mask_threshold, look.view_gun_rim_strength)
     })
 }
 
@@ -990,7 +988,6 @@ fn fill_textured(
     rotate_n: &dyn Fn([f32; 3]) -> [f32; 3],
     job: &PaintTint,
     silhouette: bool,
-    view_gun: bool,
 ) {
     let min_x = a[0].min(b[0]).min(c[0]).floor().max(0.0) as i32;
     let max_x = a[0].max(b[0]).max(c[0]).ceil().min(cam.w as f32 - 1.0) as i32;
@@ -1021,7 +1018,8 @@ fn fill_textured(
                 uvs[0][0] * w0 + uvs[1][0] * w1 + uvs[2][0] * w2,
                 uvs[0][1] * w0 + uvs[1][1] * w1 + uvs[2][1] * w2,
             ];
-            let mask = sample(&mesh.mask, uv);
+            let top_left = job.channeled;
+            let mask = sample_origin(&mesh.mask, uv, top_left);
             if let Some(tags) = tags.as_deref_mut() {
                 tags[idx] = if mask[1] > 0.0 { 2 } else if mask[0] > 0.0 { 1 } else { 0 };
             }
@@ -1047,28 +1045,18 @@ fn fill_textured(
                 let fresnel = (1.0 - facing).powf(2.0);
                 let texel = if job.channeled {
                     // The shade map is the lighting. Emissive stays in the client texture.
-                    let shade_srgb = sample(&mesh.shade, uv)[0];
-                    let weights = sample4(&mesh.mask, uv);
-                    tint_channels(shade_srgb, weights, job.channels, job.emissive, job.shade_mid_lin).0
-                } else if view_gun {
-                    let (threshold, view_rim) = view_gun_grade();
-                    let sampled = sample(&mesh.mask, uv);
-                    tint_view_gun(
-                        sample(&mesh.base, uv),
-                        sampled,
-                        job.base_c,
-                        job.accent,
-                        job.glow,
-                        job.rim,
-                        shade,
-                        fresnel,
-                        threshold,
-                        view_rim,
-                    )
+                    let shade_srgb = sample_origin(&mesh.shade, uv, true)[0];
+                    let weights = sample4_origin(&mesh.mask, uv, true);
+                    let albedo = tint_channels(shade_srgb, weights, job.channels, job.emissive, job.shade_mid_lin).0;
+                    if let Some(channel) = job.overdrive_channel {
+                        brighten_channel(albedo, weights, channel, job.overdrive_toward)
+                    } else {
+                        albedo
+                    }
                 } else {
                     tint_texel(
-                        sample(&mesh.base, uv),
-                        sample(&mesh.mask, uv),
+                        sample_origin(&mesh.base, uv, false),
+                        sample_origin(&mesh.mask, uv, false),
                         job.base_c,
                         job.accent,
                         job.glow,
@@ -1106,6 +1094,27 @@ fn project(p: [f32; 3], cam: &PaintCam) -> Option<[f32; 3]> {
 
 fn edge(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> f32 {
     (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])
+}
+
+/// Pull the named channel toward `toward`, then lift it. Other channels stay put.
+fn brighten_channel(albedo: [f32; 3], weights: [f32; 4], channel: usize, toward: [f32; 3]) -> [f32; 3] {
+    let w = weights[channel].clamp(0.0, 1.0);
+    if w <= 0.0 {
+        return albedo;
+    }
+    let mut hot = [
+        albedo[0] + (toward[0] - albedo[0]) * 0.75,
+        albedo[1] + (toward[1] - albedo[1]) * 0.75,
+        albedo[2] + (toward[2] - albedo[2]) * 0.75,
+    ];
+    hot[0] = (hot[0] * 1.35).min(1.0);
+    hot[1] = (hot[1] * 1.25).min(1.0);
+    hot[2] = (hot[2] * 1.1).min(1.0);
+    [
+        albedo[0] + (hot[0] - albedo[0]) * w,
+        albedo[1] + (hot[1] - albedo[1]) * w,
+        albedo[2] + (hot[2] - albedo[2]) * w,
+    ]
 }
 
 fn norm(v: [f32; 3]) -> [f32; 3] {
@@ -1763,8 +1772,8 @@ mod tests {
         assert!((look.shade_mid_lin - shade_mid).abs() < 1.0e-6);
         assert!(!text.contains("base_gray"), "base_gray is not a cast key");
         assert!((look.rim_strength - 1.0).abs() < 1.0e-6);
-        assert!((look.view_gun_mask_threshold - 0.45).abs() < 1.0e-6);
-        assert!((look.view_gun_rim_strength - 0.35).abs() < 1.0e-6);
+        assert_eq!(look.overdrive_emissive_channel, "accent");
+        assert!(!text.contains("view_gun_"), "the view-gun grade is not a cast key");
         assert!((look.glow_falloff - 2.0).abs() < 1.0e-6);
         assert!((look.glow_show_through - 0.45).abs() < 1.0e-6);
         assert!(
@@ -1789,6 +1798,57 @@ mod tests {
         );
         let edged = tint_texel(base, [0.0, 0.0, 0.0], base_c, accent, glow, rim, 1.0, 1.0, look.base_light, look.rim_strength);
         assert!((edged[0] - (body[0] + look.rim_strength)).abs() < 1.0e-4, "rim {edged:?}");
+    }
+
+    #[test]
+    fn kip_panel_uvs_read_the_mask_from_the_top_left() {
+        let content = Content::embedded();
+        let mesh = cast("kip_body");
+        let spec = content.models.iter().find(|model| model.id == "kip_body").unwrap();
+        assert_eq!(spec.file, "models/kip_body.glb");
+        // Shoulder, chest, and thigh UVs from the Meshy kip body. fit_height
+        // moves the positions; the UVs stay on the same vertices.
+        let panels = [
+            ([0.690408_f32, 0.173917], [0u8, 0, 242, 13], 2usize),
+            ([0.654068, 0.401659], [185, 0, 0, 70], 0),
+            ([0.294907, 0.469354], [5, 250, 0, 0], 1),
+        ];
+        for (uv, expect, channel) in panels {
+            let mut best = f32::MAX;
+            let mut found = [0.0_f32; 2];
+            for tex in &mesh.uvs {
+                let d = (tex[0] - uv[0]).powi(2) + (tex[1] - uv[1]).powi(2);
+                if d < best {
+                    best = d;
+                    found = *tex;
+                }
+            }
+            assert!(best.sqrt() < 1.0e-4, "panel uv is not on the in-game mesh ({:.6})", best.sqrt());
+            let px = sample4(&mesh.mask, found);
+            let bytes = [
+                (px[0] * 255.0).round() as u8,
+                (px[1] * 255.0).round() as u8,
+                (px[2] * 255.0).round() as u8,
+                (px[3] * 255.0).round() as u8,
+            ];
+            assert_eq!(bytes, expect, "channel {channel} mask {bytes:?}");
+            let dominant = (0..4).max_by_key(|i| bytes[*i]).unwrap();
+            assert_eq!(dominant, channel);
+        }
+    }
+
+    #[test]
+    fn overdrive_brightens_only_the_named_channel() {
+        let toward = [0.976, 0.451, 0.086];
+        let albedo = [0.15, 0.45, 0.50];
+        let hot = brighten_channel(albedo, [0.0, 0.0, 1.0, 0.0], 2, toward);
+        assert!(hot[0] > albedo[0] && hot[2] < albedo[2], "accent moves toward hero_vex {hot:?}");
+        let other = brighten_channel(albedo, [1.0, 0.0, 0.0, 0.0], 2, toward);
+        assert_eq!(other, albedo);
+        let (w, h, emit) = bake_overdrive_emissive(cast("vex_gun"), "accent");
+        assert!(w > 1 && h > 1);
+        assert!(emit.chunks(4).any(|px| px[0] > 200), "vex gun accent channel has weight");
+        assert!(emit.chunks(4).any(|px| px[0] == 0), "the emissive mask is not the whole gun");
     }
 
     #[test]
@@ -1819,7 +1879,7 @@ mod tests {
                 off += 1;
                 let u = ((i / 4) % mesh.mask.w as usize) as f32 / (mesh.mask.w.max(2) - 1) as f32;
                 let v = ((i / 4) / mesh.mask.w as usize) as f32 / (mesh.mask.h.max(2) - 1) as f32;
-                let base = sample(&mesh.base, [u, 1.0 - v]);
+                let base = sample(&mesh.base, [u, v]);
                 for shade in [0.6_f32, 1.0] {
                     let color = tint_texel(
                         base,

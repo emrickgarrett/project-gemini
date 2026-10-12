@@ -372,7 +372,7 @@ fn paint_view_gun(color: &mut [u8], depth: &mut [f32], frame: &ViewmodelFrame, y
         fill: norm([0.6, 0.25, -0.35]),
     };
     let palette = palette_of();
-    crate::cast::paint_approved_gun(color, depth, gun, place, &palette, &cam);
+    crate::cast::paint_approved_gun(color, depth, gun, place, &palette, &cam, frame.overdrive);
 }
 
 fn draw_parts(
@@ -695,11 +695,19 @@ pub fn raster_heroes_at_15m(width: u32, height: u32) -> Vec<u8> {
     let dress = &content.arena_dressing;
     let platform = &content.arena.platform;
     let deck = platform.height;
+    let stature = content
+        .models
+        .iter()
+        .filter(|model| model.fit == "hero")
+        .map(|model| model.size)
+        .fold(0.0_f32, f32::max);
     let eye_y = deck + content.controller.camera.eye_height;
-    let cam_z = platform.radius - 0.5;
-    let hero_z = cam_z - dress.review_distance;
-    let eye = [platform.center.x, eye_y, platform.center.z + cam_z];
-    let look = [platform.center.x, deck + 1.05, platform.center.z + hero_z];
+    let look_y = deck + stature * dress.review_look_height;
+    let dy = eye_y - look_y;
+    let horiz = (dress.review_distance * dress.review_distance - dy * dy).max(0.25).sqrt();
+    let hero_z = platform.center.z - horiz * 0.5;
+    let eye = [platform.center.x, eye_y, platform.center.z + horiz * 0.5];
+    let look = [platform.center.x, look_y, hero_z];
     let sky = content.palette.key("arena_sky");
     let bg = [byte(sky[0]), byte(sky[1]), byte(sky[2])];
     let w = width.max(8);
@@ -735,7 +743,7 @@ pub fn raster_heroes_at_15m(width: u32, height: u32) -> Vec<u8> {
     let ids = ["vex", "nyra", "brakk", "kip"];
     for (i, id) in ids.iter().enumerate() {
         let x = (i as f32 - 1.5) * spacing;
-        let at = [platform.center.x + x, deck, platform.center.z + hero_z];
+        let at = [platform.center.x + x, deck, hero_z];
         paint_named_hero(&mut color, &mut depth, &cam, id, at, eye);
     }
     color

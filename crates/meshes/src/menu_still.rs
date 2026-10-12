@@ -808,8 +808,39 @@ fn gray(px: [u8; 3]) -> [u8; 3] {
     [y, y, y]
 }
 
+fn hue_deg(px: [u8; 3]) -> Option<f32> {
+    let r = px[0] as f32;
+    let g = px[1] as f32;
+    let b = px[2] as f32;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let chroma = max - min;
+    if chroma < 18.0 || max < 24.0 {
+        return None;
+    }
+    let h = if max == r {
+        60.0 * ((g - b) / chroma)
+    } else if max == g {
+        60.0 * ((b - r) / chroma + 2.0)
+    } else {
+        60.0 * ((r - g) / chroma + 4.0)
+    };
+    Some(if h < 0.0 { h + 360.0 } else { h })
+}
+
+fn near_accent(px: [u8; 3], accent: [u8; 3]) -> bool {
+    let (Some(h), Some(a)) = (hue_deg(px), hue_deg(accent)) else {
+        return false;
+    };
+    let mut d = (h - a).abs();
+    if d > 180.0 {
+        d = 360.0 - d;
+    }
+    d <= 20.0
+}
+
 fn locked_pixel(px: [u8; 3], accent: [u8; 3], mix: f32, dim: f32, accent_desat: f32, body_desat: f32, floor: f32) -> [u8; 3] {
-    let accent_px = px == accent;
+    let accent_px = near_accent(px, accent);
     let desat = if accent_px { accent_desat } else { body_desat };
     let body = crate::away_still::grade(px[0], px[1], px[2], dim, desat, floor);
     if accent_px { lift(body, accent, mix) } else { body }
@@ -976,12 +1007,14 @@ mod tests {
                 }
             }
         }
-        let content = Content::embedded();
-        let panel = bytes(&content, &content.ui.colors.panel);
-        let (rgb, hits) = paint_menu(&content, &MenuShot::Heroes { focus: 0 }, 1280, 720);
-        for hit in hits.iter().filter(|hit| hit.id.starts_with("hero:") && hit.id != "hero:vex") {
+        let mut locked = Content::embedded();
+        for hero in &mut locked.heroes {
+            hero.owned = false;
+        }
+        let panel = bytes(&locked, &content.ui.colors.panel);
+        let (rgb, hits) = paint_menu(&locked, &MenuShot::Heroes { focus: 0 }, 1280, 720);
+        for hit in hits.iter().filter(|hit| hit.id.starts_with("hero:")) {
             let id = hit.id.trim_start_matches("hero:");
-            let hero = content.heroes.iter().find(|hero| hero.id == id).unwrap();
             let mut colored = 0u32;
             let inset = ((content.ui.layout.border_px * (720.0 / content.ui.layout.fit_height)).round() as i32).max(1);
             let top = hit.y + inset;
@@ -997,8 +1030,7 @@ mod tests {
                     }
                 }
             }
-            // The cast does not paint the UI accent, so a locked body stays gray.
-            assert_eq!(colored, 0, "{id} locked portrait is grayscale");
+            assert!(colored > 8, "{id} locked portrait keeps {colored} accent pixels");
         }
     }
 
@@ -1076,11 +1108,6 @@ mod tests {
         }
         assert!(crate::portrait::build(&content.heroes_visual, "laser_knife").is_none());
         assert!(crate::portrait::build(&content.heroes_visual, "pulse_rifle").is_none());
-    }
-
-    fn round_bytes(content: &Content, key: &str) -> [u8; 3] {
-        let c = content.palette.key(key);
-        [(c[0] * 255.0).round() as u8, (c[1] * 255.0).round() as u8, (c[2] * 255.0).round() as u8]
     }
 
     fn bytes(content: &Content, key: &str) -> [u8; 3] {
