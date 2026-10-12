@@ -520,10 +520,13 @@ pub(crate) fn register(app: &mut App) -> &mut App {
 pub fn attach_duck(
     mut commands: Commands,
     sources: Res<Assets<AudioSource>>,
-    mut ducked: ResMut<Assets<DuckedMusic>>,
-    music: Res<Music>,
+    ducked: Option<ResMut<Assets<DuckedMusic>>>,
+    music: Option<Res<Music>>,
     pending: Query<(Entity, &StemFile), (With<MusicStem>, Without<AudioPlayer<DuckedMusic>>)>,
 ) {
+    let (Some(mut ducked), Some(music)) = (ducked, music) else {
+        return;
+    };
     for (entity, file) in &pending {
         let Some(source) = sources.get(&file.0) else { continue };
         let handle = ducked.add(DuckedMusic {

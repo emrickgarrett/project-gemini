@@ -264,6 +264,7 @@ mod tests {
         app.init_resource::<AccumulatedMouseMotion>();
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(1.0 / 60.0)));
         app.insert_resource(MatchEntries::default());
+        app.add_message::<bevy::window::WindowOccluded>();
         install_match(&mut app);
         app.add_systems(OnEnter(AppState::Playing), count_match_enter);
 
