@@ -11,6 +11,8 @@ focus_before_hero = "rarity_common"
 victory = "rarity_legendary"
 defeat = "spitter_glow"
 locked = "reveal_ink"
+# Every line on a locked card, including the HP/SPD line.
+locked_text = "rarity_common"
 
 [copy]
 title = "PROJECT GEMINI"
@@ -87,6 +89,7 @@ stick_deadzone = 0.45
 # Focused borders mix this far toward the paper color so the highlight reads without a mouse.
 focus_lift = 0.45
 # Reference frame the fit check uses. Labels are not scaled down to pass it.
+# The painter multiplies every layout size by window height / fit_height.
 fit_width = 1280.0
 fit_height = 720.0
 

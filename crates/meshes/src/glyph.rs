@@ -66,6 +66,9 @@ pub fn blit(rgb: &mut [u8], width: u32, height: u32, x: i32, y: i32, text: &str,
     let scale = scale.max(1);
     let advance = advance.max(1);
     for (index, ch) in text.chars().enumerate() {
+        if !covers(ch) {
+            continue;
+        }
         let glyph = bits(ch);
         let gx = x + index as i32 * advance as i32 * scale as i32;
         for (row, bits) in glyph.iter().enumerate() {

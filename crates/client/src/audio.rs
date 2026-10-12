@@ -331,8 +331,9 @@ pub fn ui_cue(commands: &mut Commands, _assets: &AssetServer, content: &Content,
     commands.spawn(UiRequest(id.to_string()));
 }
 
-/// The same picker as gameplay sfx. Live voices occupy `max_instances` and the 32-voice cap.
-pub fn flush_ui_cues(mut commands: Commands, assets: Res<AssetServer>, prefs: Res<Prefs>, requests: Query<(Entity, &UiRequest)>, live: Query<&OneShot>) {
+/// Live voices occupy `max_instances` and the mix voice cap. A UI cue that needs a
+/// slot stops the quietest stealable one-shot. Warnings and loops stay.
+pub fn flush_ui_cues(mut commands: Commands, assets: Res<AssetServer>, prefs: Res<Prefs>, requests: Query<(Entity, &UiRequest)>, live: Query<(Entity, &OneShot)>) {
     let asked: Vec<String> = requests.iter().map(|(_, request)| request.0.clone()).collect();
     for (entity, _) in &requests {
         commands.entity(entity).despawn();
@@ -341,11 +342,23 @@ pub fn flush_ui_cues(mut commands: Commands, assets: Res<AssetServer>, prefs: Re
         return;
     }
     let content = Content::embedded();
-    let playing: Vec<SoundEvent> = live
+    let live: Vec<(Entity, SoundEvent)> = live
         .iter()
-        .map(|shot| SoundEvent { id: shot.id.clone(), pos: SimVec::ZERO, owner: shot.owner })
+        .map(|(entity, shot)| {
+            (
+                entity,
+                SoundEvent { id: shot.id.clone(), pos: SimVec::ZERO, owner: shot.owner },
+            )
+        })
         .collect();
-    for id in admit_ui(&content.audio, &playing, &asked) {
+    let playing: Vec<SoundEvent> = live.iter().map(|(_, event)| event.clone()).collect();
+    let admitted = admit_ui(&content.audio, &playing, &asked);
+    for index in admitted.stop {
+        if let Some((entity, _)) = live.get(index) {
+            commands.entity(*entity).despawn();
+        }
+    }
+    for id in admitted.play {
         let Some(def) = content.sfx(&id) else { continue };
         commands.spawn((
             AudioPlayer::new(assets.load::<AudioSource>(def.path.clone())),
@@ -355,22 +368,84 @@ pub fn flush_ui_cues(mut commands: Commands, assets: Res<AssetServer>, prefs: Re
     }
 }
 
-/// Admits queued cues one at a time so earlier voices keep their slots.
-pub fn admit_ui(audio: &gemini_sim::content::AudioTable, playing: &[SoundEvent], asked: &[String]) -> Vec<String> {
-    let mut events = playing.to_vec();
-    let mut admitted = Vec::new();
+#[derive(Clone, Debug, PartialEq)]
+pub struct UiVoices {
+    pub play: Vec<String>,
+    pub stop: Vec<usize>,
+}
+
+struct Occupant {
+    id: String,
+    loudness: f32,
+    stealable: bool,
+    age: u32,
+    /// Index into the `playing` slice. `None` is a cue admitted in this call.
+    playing: Option<usize>,
+}
+
+/// Admits queued cues without going past the voice cap.
+///
+/// When the cap is full, the cue steals the quietest stealable one-shot that is
+/// already playing. Equal loudness keeps the older voice as the victim. If every
+/// voice is a warning or a loop, the cue is dropped.
+pub fn admit_ui(audio: &gemini_sim::content::AudioTable, playing: &[SoundEvent], asked: &[String]) -> UiVoices {
+    let cap = audio.voice_cap.max(1);
+    let mut occupants: Vec<Occupant> = playing
+        .iter()
+        .enumerate()
+        .map(|(index, event)| {
+            let def = audio.sfx.iter().find(|row| row.id == event.id);
+            Occupant {
+                id: event.id.clone(),
+                loudness: def.map(|row| row.loudness).unwrap_or(f32::MAX),
+                stealable: def.is_some_and(|row| row.stealable && !row.looped && !row.is_warning),
+                age: index as u32,
+                playing: Some(index),
+            }
+        })
+        .collect();
+    let mut stop = Vec::new();
+    let mut born = playing.len() as u32;
     for id in asked {
-        events.push(SoundEvent { id: id.clone(), pos: SimVec::ZERO, owner: 0 });
-        let selected = select_voices(audio, &events, SimVec::ZERO);
-        let kept = selected.iter().filter(|voice| voice.id == *id).count();
-        let before = events.iter().filter(|event| event.id == *id).count() - 1;
-        if kept > before {
-            admitted.push(id.clone());
-        } else {
-            events.pop();
+        let Some(def) = audio.sfx.iter().find(|row| row.id == *id) else {
+            continue;
+        };
+        if def.max_instances > 0 {
+            let live = occupants.iter().filter(|occupant| occupant.id == def.id).count() as u32;
+            if live >= def.max_instances {
+                continue;
+            }
         }
+        if occupants.len() >= cap {
+            let victim = occupants
+                .iter()
+                .enumerate()
+                .filter(|(_, occupant)| occupant.stealable)
+                .min_by(|(_, a), (_, b)| {
+                    a.loudness
+                        .partial_cmp(&b.loudness)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then(a.age.cmp(&b.age))
+                });
+            let Some((index, _)) = victim else {
+                continue;
+            };
+            let removed = occupants.remove(index);
+            if let Some(playing_index) = removed.playing {
+                stop.push(playing_index);
+            }
+        }
+        occupants.push(Occupant {
+            id: def.id.clone(),
+            loudness: def.loudness,
+            stealable: def.stealable && !def.looped && !def.is_warning,
+            age: born,
+            playing: None,
+        });
+        born += 1;
     }
-    admitted
+    let play = occupants.iter().filter(|occupant| occupant.playing.is_none()).map(|occupant| occupant.id.clone()).collect();
+    UiVoices { play, stop }
 }
 
 pub fn menu_levels(prefs: Res<Prefs>, mut music: Option<ResMut<Music>>) {
@@ -843,15 +918,88 @@ mod tests {
         assert_eq!(cap, 2, "ui_hover max_instances");
         let asked = vec![hover.clone(); 8];
         let admitted = admit_ui(&content.audio, &[], &asked);
-        assert_eq!(admitted.len() as u32, cap);
+        assert_eq!(admitted.play.len() as u32, cap);
+        assert!(admitted.stop.is_empty());
         let playing: Vec<SoundEvent> = admitted
+            .play
             .iter()
             .map(|id| SoundEvent { id: id.clone(), pos: Vec3::ZERO, owner: 0 })
             .collect();
-        assert!(admit_ui(&content.audio, &playing, &asked).is_empty(), "live hovers already fill the cap");
+        assert!(admit_ui(&content.audio, &playing, &asked).play.is_empty(), "live hovers already fill the cap");
         let tick = content.ui.sounds.slider.clone();
         assert_eq!(content.sfx(&tick).unwrap().max_instances, 3, "ui_slider_tick max_instances");
         let ticks = vec![tick; 6];
-        assert_eq!(admit_ui(&content.audio, &[], &ticks).len(), 3);
+        assert_eq!(admit_ui(&content.audio, &[], &ticks).play.len(), 3);
+    }
+
+    #[test]
+    fn hover_steals_the_quietest_oneshot_and_spares_warnings_and_loops() {
+        use gemini_sim::audio_mix::SoundEvent;
+        use gemini_sim::content::Content;
+        use gemini_sim::math::Vec3;
+
+        use super::admit_ui;
+
+        let content = Content::embedded();
+        let voice_cap = content.audio.voice_cap;
+        assert_eq!(voice_cap, 32);
+        let hover = content.ui.sounds.hover.clone();
+        let warning_ids: Vec<&str> = content.audio.sfx.iter().filter(|row| row.is_warning).map(|row| row.id.as_str()).collect();
+        let loop_ids: Vec<&str> = content.audio.sfx.iter().filter(|row| row.looped).map(|row| row.id.as_str()).collect();
+        assert!(!warning_ids.is_empty());
+        assert!(!loop_ids.is_empty());
+        let quiet = content
+            .audio
+            .sfx
+            .iter()
+            .filter(|row| row.stealable && !row.looped && !row.is_warning && row.id != hover)
+            .min_by(|a, b| a.loudness.partial_cmp(&b.loudness).unwrap())
+            .expect("stealable one-shot");
+        let louder = content.audio.sfx.iter().find(|row| {
+            row.stealable && !row.looped && !row.is_warning && row.id != hover && row.id != quiet.id && row.loudness > quiet.loudness
+        });
+        let cue = |id: &str| SoundEvent { id: id.to_string(), pos: Vec3::ZERO, owner: 0 };
+        let mut playing = vec![cue(&quiet.id), cue(&quiet.id)];
+        let mut protected = Vec::new();
+        for id in warning_ids.iter().chain(loop_ids.iter()) {
+            if playing.len() + 1 >= voice_cap {
+                break;
+            }
+            protected.push(playing.len());
+            playing.push(cue(id));
+        }
+        assert!(protected.len() >= 2, "the full list includes a warning and a loop");
+        while playing.len() < voice_cap {
+            if let Some(row) = louder {
+                playing.push(cue(&row.id));
+            } else {
+                playing.push(cue(warning_ids[playing.len() % warning_ids.len()]));
+            }
+        }
+        assert_eq!(playing.len(), voice_cap);
+        let asked = vec![hover.clone()];
+        let stolen = admit_ui(&content.audio, &playing, &asked);
+        assert_eq!(stolen.play, vec![hover]);
+        assert_eq!(stolen.stop, vec![0], "the older of the quietest one-shots is the victim");
+        for index in &protected {
+            assert!(!stolen.stop.contains(index), "protected {}", playing[*index].id);
+            let row = content.sfx(&playing[*index].id).unwrap();
+            assert!(row.is_warning || row.looped);
+            assert!(!row.stealable);
+        }
+        assert_eq!(playing.len() - stolen.stop.len() + stolen.play.len(), voice_cap);
+
+        let mut blocked = Vec::new();
+        while blocked.len() < voice_cap {
+            let id = if blocked.len() % 2 == 0 {
+                warning_ids[blocked.len() % warning_ids.len()]
+            } else {
+                loop_ids[blocked.len() % loop_ids.len()]
+            };
+            blocked.push(cue(id));
+        }
+        let dropped = admit_ui(&content.audio, &blocked, &asked);
+        assert!(dropped.play.is_empty(), "a full list of warnings and loops drops the cue");
+        assert!(dropped.stop.is_empty());
     }
 }

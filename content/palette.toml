@@ -4,8 +4,6 @@
 teal = "#1FB5A8"
 cobalt = "#1E40AF"
 white = "#F2F2F2"
-# Replaced at load by the starter hero's accent_key. hero_vex is the source.
-accent = "#F97316"
 
 [shots]
 player = "#2DE1D0"

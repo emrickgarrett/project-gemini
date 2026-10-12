@@ -2681,6 +2681,8 @@ pub struct HeroColors {
     pub teal: String,
     pub cobalt: String,
     pub white: String,
+    /// Filled at load from the starter hero's `accent_key`. Not a palette.toml entry.
+    #[serde(default)]
     pub accent: String,
 }
 
@@ -3079,6 +3081,11 @@ pub struct SfxDef {
     pub sync_at: Option<f32>,
     /// True when the mix row's category is `ui`. Menu cues must be this category.
     pub category_ui: bool,
+    /// A full voice list may stop this one-shot to make room for a UI cue.
+    /// Looping rows are forced off when the mix loads.
+    pub stealable: bool,
+    /// Telegraphs and other cues that must play out. Loading rejects a warning that is stealable.
+    pub is_warning: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -3192,7 +3199,7 @@ pub struct Ui {
 }
 
 impl Ui {
-    pub fn color_keys(&self) -> [(&str, &str); 8] {
+    pub fn color_keys(&self) -> [(&str, &str); 9] {
         [
             ("ui.colors.panel", self.colors.panel.as_str()),
             ("ui.colors.text", self.colors.text.as_str()),
@@ -3202,6 +3209,7 @@ impl Ui {
             ("ui.colors.victory", self.colors.victory.as_str()),
             ("ui.colors.defeat", self.colors.defeat.as_str()),
             ("ui.colors.locked", self.colors.locked.as_str()),
+            ("ui.colors.locked_text", self.colors.locked_text.as_str()),
         ]
     }
 }
@@ -3216,6 +3224,8 @@ pub struct UiColors {
     pub victory: String,
     pub defeat: String,
     pub locked: String,
+    /// Palette key for name, role, ability, and the HP/SPD line on a locked card.
+    pub locked_text: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
