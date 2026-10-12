@@ -607,6 +607,7 @@ fn sim_step_cap_comes_from_controller() {
             bugs: base.bugs,
             crate_reveal: base.crate_reveal,
             coop: base.coop,
+            cosmetics: base.cosmetics,
         })
     };
     let missing = base
