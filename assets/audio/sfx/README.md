@@ -83,3 +83,6 @@ All sounds except brood_pod_hatch.ogg and tyrant_roar.ogg are procedurally synth
 | reroll_result.ogg | 0.540 |  | Reroll lands on new secondary stat (settle chime) |
 | legendary_perk_reveal.ogg | 1.299 |  | Legendary part unique perk revealed (bigger/brighter than dupe_upgrade) |
 | cosmetic_equip.ogg | 0.438 |  | Cosmetic equipped (soft swish + light chime) |
+| vent_warn.ogg | 1.500 |  | Arena vent telegraph: exactly 1.5 s, play when a vent starts its telegraph |
+| vent_burst.ogg | 0.500 |  | Arena vent opens and the bug comes out |
+| perch_climb_warn.ogg | 1.500 |  | Swarmer starts climbing a resin streak toward a perch (anti-camp) |

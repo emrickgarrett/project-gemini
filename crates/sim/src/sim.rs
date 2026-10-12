@@ -10,7 +10,7 @@ use crate::content::{
 };
 use crate::content::{endless_hp_dmg_mult, rank_bonus};
 use crate::math::{
-    flat_forward, flat_right, look_dir, rotate_y, segment_hits_aabb, segment_hits_sphere, Vec3,
+    flat_forward, flat_right, look_dir, rotate_y, segment_hits_sphere, Vec3,
 };
 use crate::rng::Rng;
 use crate::spatial::SpatialGrid;
@@ -234,6 +234,16 @@ pub struct Enemy {
     pub reinforce_warn: f32,
     #[serde(default)]
     pub cue: EnemyCue,
+    /// Swarmer is on a resin streak toward a perch. Anti-camp only.
+    #[serde(default)]
+    pub climbing: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PendingVent {
+    pub kind: EnemyKind,
+    pub vent: u8,
+    pub left: f32,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -293,6 +303,9 @@ pub struct Sim {
     pub next_id: u32,
     pub boss_kills: u32,
     pub endless_mode: bool,
+    pub pending_vents: Vec<PendingVent>,
+    /// Seconds every living player has stayed on a jetpack perch.
+    pub all_perched_for: f32,
     #[serde(skip)]
     pub spatial: SpatialGrid,
     #[serde(skip)]
@@ -352,6 +365,8 @@ impl Sim {
             next_id: 1,
             boss_kills: 0,
             endless_mode: false,
+            pending_vents: Vec::new(),
+            all_perched_for: 0.0,
             spatial: SpatialGrid::new(content.combat.cell_size, content.arena.half_extent),
             sounds: Vec::new(),
             stops: Vec::new(),
@@ -410,7 +425,7 @@ impl Sim {
         let max_fuel = content.controller.boost.fuel_max;
         Player {
             id: self.alloc_id(),
-            pos: Vec3::ZERO,
+            pos: content.arena.player_spawn,
             vel: Vec3::ZERO,
             yaw: 0.0,
             pitch: 0.0,
@@ -474,6 +489,7 @@ impl Sim {
                     self.phase = Phase::Breather {
                         left: content.waves.budget.breather_seconds,
                     };
+                    self.spawn_breather_pickups(content);
                 }
             }
             return;
@@ -481,6 +497,7 @@ impl Sim {
 
         let dt = SIM_DT;
         self.tick_player(content, input, dt);
+        self.note_perches(content, dt);
         if !matches!(self.phase, Phase::Combat) {
             self.tick_breather(content, dt);
             return;
@@ -494,6 +511,7 @@ impl Sim {
         self.tick_drones(content, dt);
         self.tick_pickups(content);
         self.tick_boss_logic(content, dt);
+        self.tick_vents(content, dt);
         self.tick_spawner(content, dt);
         self.reap(content);
         self.tick_downed(content, input.interact_held, dt);
@@ -650,11 +668,13 @@ impl Sim {
             burning = true;
         }
         let max_fuel = ctl.boost.fuel_max * (1.0 + mods.jetpack_fuel_pct);
+        let perched = content.arena.on_perch(player.pos);
+        let regen_ok = !perched || content.arena.perch_rules.fuel_regen_on_perch;
         if burning {
             player.fuel_delay = ctl.boost.regen_delay;
         } else if player.fuel_delay > 0.0 {
             player.fuel_delay -= dt;
-        } else {
+        } else if regen_ok {
             player.fuel = (player.fuel + ctl.boost.fuel_regen_per_s * dt).min(max_fuel);
         }
         if can_jump {
@@ -667,20 +687,18 @@ impl Sim {
         }
 
         let was_grounded = player.grounded;
+        let old = player.pos;
+        let fall = player.vel.y;
         player.pos += player.vel * dt;
         let radius = content.combat.hit_radius.player;
-        let half = content.arena.half_extent - radius;
-        for obstacle in &content.arena.obstacles {
-            player.pos = obstacle.push_circle_xz(player.pos, radius);
-        }
-        player.pos.x = player.pos.x.clamp(-half, half);
-        player.pos.z = player.pos.z.clamp(-half, half);
+        content.arena.resolve_player(&mut player.pos, old, radius);
+        let support = content.arena.support_y(player.pos.x, player.pos.y, player.pos.z, player.vel.y);
         let mut just_landed = false;
-        if player.pos.y <= 0.0 {
-            if !was_grounded && player.vel.y <= 0.0 {
+        if player.pos.y <= support + 0.02 && player.vel.y <= 0.05 {
+            if !was_grounded && fall <= 0.0 {
                 just_landed = true;
             }
-            player.pos.y = 0.0;
+            player.pos.y = support;
             if player.vel.y < 0.0 {
                 player.vel.y = 0.0;
             }
@@ -780,13 +798,30 @@ impl Sim {
             }
         }
         let mut opened: Vec<(u32, Vec3)> = Vec::new();
+        let mut climbed: Vec<(u32, Vec3)> = Vec::new();
         let mut phased: Vec<(String, u8, Vec3)> = Vec::new();
-        for (enemy, push) in self.enemies.iter_mut().zip(pushes) {
+        let anti_camp = self.all_perched(content)
+            && self.all_perched_for >= content.arena.perch_rules.all_perched_grace;
+        let goals: Vec<Vec3> = self
+            .enemies
+            .iter()
+            .map(|enemy| {
+                if player_alive {
+                    self.flow_goal(content, enemy.pos)
+                } else {
+                    player_pos
+                }
+            })
+            .collect();
+        for ((enemy, push), goal) in self.enemies.iter_mut().zip(pushes).zip(goals) {
             if !enemy.alive {
                 continue;
             }
             let before = enemy.phase;
-            step_enemy(enemy, content, player_pos, player_alive, push, dt);
+            let started = step_enemy(enemy, content, goal, player_alive, push, dt, anti_camp);
+            if started {
+                climbed.push((enemy.id, enemy.pos));
+            }
             if enemy.just_opened {
                 enemy.just_opened = false;
                 opened.push((enemy.id, enemy.pos));
@@ -798,6 +833,9 @@ impl Sim {
         let shell = content.bug(EnemyKind::Brute).audio.shell_open.clone();
         for (owner, pos) in opened {
             self.sound_owned(&shell, pos, owner);
+        }
+        for (owner, pos) in climbed {
+            self.sound_owned("perch_climb_warn", pos, owner);
         }
         for (boss_id, phase, pos) in phased {
             if let Some(def) = content.boss(&boss_id) {
@@ -937,11 +975,7 @@ impl Sim {
     ) {
         let (mut dir, eye, origin_base, owner) = {
             let player = &self.players[0];
-            let eye = if player.crouching || player.downed {
-                content.arena.crouch_eye
-            } else {
-                content.arena.eye_height
-            };
+            let eye = content.view_eye(player.crouching || player.downed);
             (look_dir(player.yaw, player.pitch), eye, player.pos, player.id)
         };
         if spec.spread > 0.0 {
@@ -998,11 +1032,7 @@ impl Sim {
             let vel = self.projectiles[i].vel;
             let p1 = p0 + vel * dt;
             let team = self.projectiles[i].team;
-            let blocked = content.arena.obstacles.iter().any(|b| segment_hits_aabb(p0, p1, *b))
-                || p1.x.abs() > content.arena.half_extent
-                || p1.z.abs() > content.arena.half_extent
-                || p1.y < 0.0
-                || p1.y > 40.0;
+            let blocked = content.arena.blocks_shot(p0, p1) || p1.y < 0.0 || p1.y > 40.0;
             if team == Team::Player {
                 let hits = gather_enemy_hits(content, &self.enemies, &self.projectiles[i], p0, p1);
                 let mut remove = blocked;
@@ -1193,7 +1223,7 @@ impl Sim {
         if !player.alive {
             return true;
         }
-        let center = player.pos + Vec3::new(0.0, content.arena.eye_height * 0.5, 0.0);
+        let center = player.pos + Vec3::new(0.0, content.view_eye(false) * 0.5, 0.0);
         let radius = content.combat.hit_radius.player + self.projectiles[proj_index].radius;
         if segment_hits_sphere(p0, p1, center, radius).is_some() {
             let dmg = self.projectiles[proj_index].damage;
@@ -1593,7 +1623,12 @@ impl Sim {
             if self.director.group_left <= 0.0 || self.director.parked {
                 break;
             }
-            let Some(kind) = self.pick_mix(content, &wave.mix, cheapest) else {
+            let mix = if self.all_perched(content) {
+                shift_mix(wave.mix, content.arena.perch_rules.budget_shift_to_spitters)
+            } else {
+                wave.mix
+            };
+            let Some(kind) = self.pick_mix(content, &mix, cheapest) else {
                 break;
             };
             let cost = trash_cost(content, kind);
@@ -1601,15 +1636,117 @@ impl Sim {
                 break;
             }
             let reserved: usize = self.enemies.iter().map(|e| e.reserved as usize).sum();
-            if self.enemies.iter().filter(|e| e.alive).count() + reserved >= cap as usize {
+            let pending = self.pending_vents.len();
+            if self.enemies.iter().filter(|e| e.alive).count() + reserved + pending >= cap as usize {
                 self.park_budget(content.waves.budget.queue_cap_waves);
                 break;
             }
             self.director.pool -= cost;
             self.director.group_left -= cost;
-            let pos = self.ring_pos(content);
-            self.spawn_trash(content, kind, pos);
+            self.queue_vent(content, kind);
         }
+    }
+
+    fn queue_vent(&mut self, content: &Content, kind: EnemyKind) {
+        if content.arena.vents.is_empty() {
+            return;
+        }
+        let index = self.rng.next_u32() as usize % content.arena.vents.len();
+        let vent = &content.arena.vents[index];
+        let pos = vent.pos;
+        let telegraph = vent.telegraph;
+        self.sound_at("vent_warn", pos);
+        self.pending_vents.push(PendingVent {
+            kind,
+            vent: index as u8,
+            left: telegraph,
+        });
+    }
+
+    fn tick_vents(&mut self, content: &Content, dt: f32) {
+        let mut i = 0;
+        while i < self.pending_vents.len() {
+            self.pending_vents[i].left -= dt;
+            if self.pending_vents[i].left > 0.0 {
+                i += 1;
+                continue;
+            }
+            let pending = self.pending_vents.swap_remove(i);
+            let Some(vent) = content.arena.vents.get(pending.vent as usize) else {
+                continue;
+            };
+            let pos = vent.pos;
+            let yaw = vent.inward_yaw();
+            self.spawn_trash(content, pending.kind, pos);
+            if let Some(enemy) = self.enemies.last_mut() {
+                enemy.yaw = yaw;
+            }
+            self.sound_at("vent_burst", pos);
+        }
+    }
+
+    fn spawn_breather_pickups(&mut self, content: &Content) {
+        for spot in &content.arena.pickups {
+            if spot.spawns_during != "breather" {
+                continue;
+            }
+            let already = self.pickups.iter().any(|pickup| {
+                (pickup.pos.x - spot.pos.x).abs() < 0.2 && (pickup.pos.z - spot.pos.z).abs() < 0.2
+            });
+            if already {
+                continue;
+            }
+            let id = self.alloc_id();
+            self.pickups.push(Pickup {
+                id,
+                pos: spot.pos,
+                ammo: content.combat.ammo_pickup_amount,
+            });
+        }
+    }
+
+    fn note_perches(&mut self, content: &Content, dt: f32) {
+        if self.all_perched(content) {
+            self.all_perched_for += dt;
+        } else {
+            self.all_perched_for = 0.0;
+        }
+    }
+
+    fn all_perched(&self, content: &Content) -> bool {
+        let alive = self.players.iter().filter(|player| player.alive && !player.downed);
+        let mut any = false;
+        for player in alive {
+            any = true;
+            if !content.arena.on_perch(player.pos) {
+                return false;
+            }
+        }
+        any
+    }
+
+    fn flow_goal(&self, content: &Content, from: Vec3) -> Vec3 {
+        if content.arena.perch_rules.flow_field_targets != "nearest_grounded_player" {
+            return from;
+        }
+        let mut best: Option<(f32, Vec3)> = None;
+        for player in &self.players {
+            if !player.alive || !player.grounded || content.arena.on_perch(player.pos) {
+                continue;
+            }
+            let d = Vec3::new(player.pos.x - from.x, 0.0, player.pos.z - from.z).length();
+            if best.map(|(bd, _)| d < bd).unwrap_or(true) {
+                best = Some((d, player.pos));
+            }
+        }
+        if let Some((_, pos)) = best {
+            return pos;
+        }
+        content
+            .arena
+            .nearest_ledge(from)
+            .map(|ledge| Vec3::new(ledge.pos.x, 0.0, ledge.pos.z))
+            .unwrap_or(from)
     }
 
     fn pick_mix(&mut self, content: &Content, mix: &[f32; 3], _cheapest: f32) -> Option<EnemyKind> {
@@ -1634,12 +1771,6 @@ impl Sim {
             }
         }
         kinds.into_iter().rev().find(|k| weights[kind_index(*k)] > 0.0)
-    }
-
-    fn ring_pos(&mut self, content: &Content) -> Vec3 {
-        let ang = self.rng.next_f32() * std::f32::consts::TAU;
-        let r = content.arena.spawn_ring;
-        Vec3::new(ang.sin() * r, 0.0, ang.cos() * r)
     }
 
     fn spawn_trash(&mut self, content: &Content, kind: EnemyKind, pos: Vec3) {
@@ -1689,6 +1820,7 @@ impl Sim {
             reinforce_cd: 0.0,
             reinforce_warn: 0.0,
             cue: EnemyCue::None,
+            climbing: false,
         });
     }
 
@@ -1703,7 +1835,7 @@ impl Sim {
         let hp_scale = 1.0 + content.waves.budget.boss_hp_per_extra_player * (players - 1.0);
         let (mut hp, dmg) = scaled_stats(content, self, def.hp, def.dmg);
         hp *= hp_scale;
-        let pos = Vec3::new(0.0, 0.0, -content.arena.spawn_ring * 0.65);
+        let pos = content.arena.boss_spawn();
         let Some(spawn_kind) = EnemyKind::from_name(&def.spawn_kind) else {
             return;
         };
@@ -1754,6 +1886,7 @@ impl Sim {
             reinforce_cd: def.phase(0).map(|p| p.reinforce_interval).unwrap_or(0.0),
             reinforce_warn: 0.0,
             cue: EnemyCue::None,
+            climbing: false,
         });
         let _ = dmg;
         if !def.intro_sfx.is_empty() {
@@ -1894,7 +2027,7 @@ impl Sim {
         if self.phase != Phase::Combat {
             return;
         }
-        if self.enemies.iter().any(|e| e.alive) || self.director.pool > 0.0 {
+        if self.enemies.iter().any(|e| e.alive) || !self.pending_vents.is_empty() || self.director.pool > 0.0 {
             return;
         }
         let last = content.waves.wave.iter().map(|w| w.n).max().unwrap_or(1);
@@ -2025,7 +2158,7 @@ fn apply_look(player: &mut Player, input: &PlayerInput, content: &Content, enemi
 
 fn aim_target(player: &Player, content: &Content, enemies: &[Enemy]) -> Option<(f32, f32, f32)> {
     let look = look_dir(player.yaw, player.pitch);
-    let eye = player.pos + Vec3::new(0.0, content.arena.eye_height, 0.0);
+    let eye = player.pos + Vec3::new(0.0, content.view_eye(player.crouching), 0.0);
     let mut best: Option<(f32, f32, f32)> = None;
     for enemy in enemies {
         if !enemy.alive {
@@ -2065,7 +2198,8 @@ fn step_enemy(
     player_alive: bool,
     push: Vec3,
     dt: f32,
-) {
+    anti_camp: bool,
+) -> bool {
     enemy.attack_cd = (enemy.attack_cd - dt).max(0.0);
     enemy.anim_time += dt;
     if enemy.invuln > 0.0 {
@@ -2142,7 +2276,7 @@ fn step_enemy(
             }
             enemy.pos.x += push.x * dt;
             enemy.pos.z += push.z * dt;
-            return;
+            return false;
         }
         AiState::Lunge { left } => {
             let step = dir * speed * 2.6 * dt;
@@ -2165,7 +2299,7 @@ fn step_enemy(
             } else {
                 AiState::Lunge { left }
             };
-            return;
+            return false;
         }
         AiState::Recover { left } => {
             let left = left - dt;
@@ -2175,14 +2309,18 @@ fn step_enemy(
             } else {
                 AiState::Recover { left }
             };
-            return;
+            return false;
         }
         AiState::Chase => {}
     }
 
     if !player_alive {
         enemy.pos += enemy.vel * dt;
-        return;
+        if enemy.climbing {
+            enemy.climbing = false;
+            enemy.pos.y = 0.0;
+        }
+        return false;
     }
 
     let mut move_dir = dir + push * dt;
@@ -2229,13 +2367,51 @@ fn step_enemy(
         }
         EnemyKind::Swarmer => {}
     }
+    let climb = anti_camp && enemy.kind == EnemyKind::Swarmer;
+    if climb {
+        let dx = player_pos.x - enemy.pos.x;
+        let dz = player_pos.z - enemy.pos.z;
+        let horiz = (dx * dx + dz * dz).sqrt();
+        if horiz < 1.8 {
+            let top = content
+                .arena
+                .ledges
+                .iter()
+                .find(|ledge| {
+                    let lx = ledge.pos.x - player_pos.x;
+                    let lz = ledge.pos.z - player_pos.z;
+                    lx * lx + lz * lz < 4.0
+                })
+                .map(|ledge| ledge.pos.y)
+                .unwrap_or(0.0);
+            let started = !enemy.climbing;
+            enemy.climbing = true;
+            let mult = content.arena.perch_rules.climb_speed_mult;
+            enemy.pos.y = (enemy.pos.y + speed * mult.max(0.0) * dt).min(top);
+            enemy.pos.x += dx * dt * 0.4;
+            enemy.pos.z += dz * dt * 0.4;
+            content.arena.clamp_play(&mut enemy.pos, 0.5);
+            return started;
+        }
+    }
+    if enemy.climbing {
+        enemy.climbing = false;
+        enemy.pos.y = 0.0;
+    }
     let step = move_dir.normalized() * speed * dt + enemy.vel * dt;
     enemy.pos.x += step.x;
     enemy.pos.z += step.z;
-    let half = content.arena.half_extent - 0.5;
-    enemy.pos.x = enemy.pos.x.clamp(-half, half);
-    enemy.pos.z = enemy.pos.z.clamp(-half, half);
+    content.arena.clamp_play(&mut enemy.pos, 0.5);
+    content.arena.shove_bug(&mut enemy.pos);
     enemy.pos.y = 0.0;
+    false
+}
+
+fn shift_mix(mix: [f32; 3], shift: f32) -> [f32; 3] {
+    let shift = shift.clamp(0.0, 1.0);
+    let from_swarmer = mix[0] * shift;
+    let from_brute = mix[2] * shift;
+    [mix[0] - from_swarmer, mix[1] + from_swarmer + from_brute, mix[2] - from_brute]
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2301,14 +2477,15 @@ fn gather_enemy_hits(
                 }
             }
         }
-        let pod_r = book.hitbox.pod_radius();
-        for (pi, place) in book.hitbox.pods.iter().enumerate() {
-            if enemy.pods.get(pi).copied().unwrap_or(0.0) <= 0.0 {
-                continue;
-            }
-            let center = enemy.pos + rotate_y(enemy.yaw, Vec3::new(place.offset[0], place.offset[1], place.offset[2]));
-            if let Some(t) = segment_hits_sphere(p0, p1, center, pod_r + projectile.radius) {
-                consider(&mut best, t, HitSpot::Pod(pi));
+        if let Some(pod_r) = book.hitbox.pod_radius() {
+            for (pi, place) in book.hitbox.pods.iter().enumerate() {
+                if enemy.pods.get(pi).copied().unwrap_or(0.0) <= 0.0 {
+                    continue;
+                }
+                let center = enemy.pos + rotate_y(enemy.yaw, Vec3::new(place.offset[0], place.offset[1], place.offset[2]));
+                if let Some(t) = segment_hits_sphere(p0, p1, center, pod_r + projectile.radius) {
+                    consider(&mut best, t, HitSpot::Pod(pi));
+                }
             }
         }
         if let Some((t, spot)) = best {
@@ -2566,7 +2743,7 @@ pub fn launch_pending_shots(sim: &mut Sim, content: &Content) {
             && (enemy.kind == EnemyKind::Spitter || enemy.kind == EnemyKind::HiveTyrant)
         {
             let origin = enemy.pos + Vec3::new(0.0, body_lift_of(content, enemy.kind), 0.0);
-            let aim = (player_pos + Vec3::new(0.0, content.arena.eye_height * 0.6, 0.0) - origin)
+            let aim = (player_pos + Vec3::new(0.0, content.view_eye(false) * 0.6, 0.0) - origin)
                 .normalized();
             let mut damage = enemy.contact;
             if enemy.kind == EnemyKind::HiveTyrant {

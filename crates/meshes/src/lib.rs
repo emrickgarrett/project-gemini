@@ -8,8 +8,8 @@ mod visual;
 
 pub use pose::{pose, AnimInput, Pose, Xform};
 pub use preview::{
-    missing_glow_keys, painted_pixels, raster, raster_bug, raster_crown, raster_viewmodel, still, still_open,
-    ViewmodelFrame,
+    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_top, raster_viewmodel, still,
+    still_open, still_top, ViewmodelFrame,
 };
 pub use visual::{bug, catalog, flat_shaded, EnemyVisual, Gate, Joint, Part, ShotCamera};
 
@@ -76,7 +76,14 @@ impl Viewmodel {
 
 /// Barrel tip in viewmodel mesh space, before the screen offset from characters.toml.
 pub fn muzzle_local() -> [f32; 3] {
-    [0.02, -0.005, -1.30]
+    [0.03, -0.005, -1.28]
+}
+
+/// Round muzzle glow, centered on the origin. `radius` comes from characters.toml.
+pub fn muzzle_glow(radius: f32) -> MeshData {
+    let mut mesh = MeshData::new();
+    geom::gem(&mut mesh, [0.0, 0.0, 0.0], [radius, radius, radius], 16, 10, [1.0, 1.0, 1.0, 1.0]);
+    mesh
 }
 
 pub fn viewmodel() -> Viewmodel {
@@ -117,42 +124,32 @@ fn recolor(src: &MeshData, color: [f32; 4]) -> MeshData {
 }
 
 fn glove(vm: &mut Viewmodel, anchor: [f32; 3], side: f32, ink: [f32; 4]) {
+    // Cobalt sleeve. Teal plates sit on the forearm; the glove and fingers are teal.
     geom::gem(
         &mut vm.cobalt,
-        [anchor[0], anchor[1] + 0.01, anchor[2] + 0.07],
-        [0.075, 0.06, 0.09],
-        8,
-        6,
-        ink,
-    );
-    geom::gem(
-        &mut vm.teal,
-        [anchor[0] - side * 0.01, anchor[1] - 0.015, anchor[2] - 0.05],
-        [0.06, 0.045, 0.075],
+        [anchor[0], anchor[1] + 0.01, anchor[2] + 0.08],
+        [0.08, 0.055, 0.13],
         8,
         6,
         ink,
     );
     geom::plate(
-        &mut vm.white,
-        [anchor[0], anchor[1] + 0.04, anchor[2] - 0.03],
+        &mut vm.teal,
+        [anchor[0], anchor[1] + 0.045, anchor[2] + 0.02],
+        0.12,
         0.11,
-        0.1,
-        0.028,
+        0.02,
         8,
         5,
         ink,
     );
-    spoke(
-        &mut vm.accent,
-        0.03,
-        0.09,
-        0.09,
+    geom::gem(
+        &mut vm.teal,
+        [anchor[0] - side * 0.01, anchor[1] - 0.015, anchor[2] - 0.05],
+        [0.065, 0.048, 0.08],
         8,
+        6,
         ink,
-        [anchor[0], anchor[1], anchor[2] + 0.01],
-        std::f32::consts::FRAC_PI_2,
-        0.0,
     );
     for i in 0..4 {
         let spread = (i as f32 - 1.5) * 0.03;
@@ -182,53 +179,55 @@ fn glove(vm: &mut Viewmodel, anchor: [f32; 3], side: f32, ink: [f32; 4]) {
 }
 
 fn rifle(vm: &mut Viewmodel, ink: [f32; 4]) {
-    geom::gem(&mut vm.cobalt, [0.02, -0.02, -0.3], [0.075, 0.08, 0.2], 12, 8, ink);
-    geom::plate(&mut vm.cobalt, [0.02, 0.045, -0.3], 0.38, 0.13, 0.035, 10, 6, ink);
-    geom::plate(&mut vm.cobalt, [0.09, -0.01, -0.3], 0.34, 0.1, 0.03, 8, 5, ink);
-    geom::plate(&mut vm.white, [0.02, 0.08, -0.32], 0.52, 0.055, 0.02, 14, 4, ink);
+    // Chunkier receiver, a magazine under it, and a teal strip along the side.
+    geom::gem(&mut vm.cobalt, [0.03, -0.02, -0.28], [0.12, 0.11, 0.28], 12, 8, ink);
+    geom::plate(&mut vm.cobalt, [0.03, 0.07, -0.28], 0.5, 0.18, 0.04, 10, 6, ink);
+    geom::plate(&mut vm.cobalt, [0.12, -0.01, -0.28], 0.46, 0.12, 0.035, 8, 5, ink);
+    geom::box_mesh(&mut vm.cobalt, [0.03, -0.15, -0.26], [0.07, 0.15, 0.09], ink);
+    // On the top face, toward the camera, so the strip is not buried in the receiver.
+    geom::box_mesh(&mut vm.core, [0.03, 0.14, -0.24], [0.14, 0.02, 0.2], ink);
+    geom::gem(&mut vm.core, [0.03, 0.15, -0.12], [0.04, 0.016, 0.05], 6, 4, ink);
+    for i in 0..3 {
+        let z = -0.18 - i as f32 * 0.12;
+        geom::plate(&mut vm.cobalt, [0.03, 0.02, z], 0.12, 0.2, 0.04, 8, 6, ink);
+    }
     spoke(
         &mut vm.barrel,
-        0.46,
-        0.042,
-        0.03,
+        0.52,
+        0.048,
+        0.034,
         10,
         ink,
-        [0.02, -0.005, -0.5],
+        [0.03, -0.005, -0.52],
+        std::f32::consts::FRAC_PI_2,
+        0.0,
+    );
+    // Orange stripe along the top of the cobalt tube.
+    spoke(
+        &mut vm.accent,
+        0.48,
+        0.016,
+        0.012,
+        6,
+        ink,
+        [0.03, 0.028, -0.54],
         std::f32::consts::FRAC_PI_2,
         0.0,
     );
     spoke(
         &mut vm.cobalt,
-        0.14,
-        0.045,
-        0.03,
+        0.16,
+        0.05,
+        0.032,
         8,
         ink,
-        [0.02, -0.05, -0.16],
+        [0.03, -0.06, -0.14],
         2.35,
         0.15,
     );
-    spoke(
-        &mut vm.accent,
-        0.045,
-        0.055,
-        0.055,
-        10,
-        ink,
-        [0.02, -0.005, -0.94],
-        std::f32::consts::FRAC_PI_2,
-        0.0,
-    );
-    geom::gem(&mut vm.accent, [0.1, -0.01, -0.26], [0.03, 0.025, 0.07], 8, 6, ink);
-    geom::gem(&mut vm.core, [0.075, 0.01, -0.22], [0.035, 0.04, 0.06], 8, 6, ink);
-    geom::box_mesh(&mut vm.core, [0.02, -0.005, -1.12], [0.018, 0.018, 0.32], ink);
-    for i in 0..5 {
-        let z = -0.16 - i as f32 * 0.08;
-        geom::plate(&mut vm.cobalt, [0.02, 0.03, z], 0.1, 0.15, 0.045, 8, 6, ink);
-        geom::plate(&mut vm.cobalt, [0.08, -0.035, z], 0.08, 0.09, 0.03, 6, 5, ink);
-    }
     for i in 0..4 {
-        geom::plate(&mut vm.white, [0.02, 0.095, -0.18 - i as f32 * 0.12], 0.1, 0.07, 0.022, 8, 5, ink);
+        let z = -0.16 - i as f32 * 0.1;
+        geom::plate(&mut vm.accent, [0.03, 0.1, z], 0.07, 0.16, 0.018, 6, 4, ink);
     }
 }
 
@@ -379,6 +378,8 @@ mod tests {
                     frenzy: false,
                     preview_glow: false,
                     regrow: 0,
+                hatch_pod: 255,
+                hatch_charge: 0.0,
                 },
                 &prev,
             );
@@ -403,6 +404,8 @@ mod tests {
                 frenzy: false,
                 preview_glow: false,
                 regrow: 0,
+                hatch_pod: 255,
+                hatch_charge: 0.0,
             },
             &[],
         );
@@ -417,6 +420,8 @@ mod tests {
                 frenzy: false,
                 preview_glow: false,
                 regrow: 0,
+                hatch_pod: 255,
+                hatch_charge: 0.0,
             },
             &[],
         );
@@ -470,6 +475,8 @@ mod tests {
                 frenzy: false,
                 preview_glow: false,
                 regrow: 2,
+                hatch_pod: 255,
+                hatch_charge: 0.0,
             },
             &[],
         );
@@ -482,9 +489,281 @@ mod tests {
     }
 
     #[test]
+    fn open_brute_pods_and_tyrant_spikes() {
+        let brute = bug("brute");
+        let left = brute.parts.iter().position(|p| p.name == "shell_plates_l").unwrap();
+        let right = brute.parts.iter().position(|p| p.name == "shell_plates_r").unwrap();
+        let cracks = brute.parts.iter().position(|p| p.name == "cracks").unwrap();
+        let core = brute.parts.iter().position(|p| p.name == "core").unwrap();
+        let shut = pose(
+            brute,
+            AnimInput {
+                time: 0.2,
+                moving: false,
+                charging: false,
+                vulnerable: false,
+                phase: 0,
+                frenzy: false,
+                preview_glow: false,
+                regrow: 0,
+                hatch_pod: 255,
+                hatch_charge: 0.0,
+            },
+            &[],
+        );
+        let open = pose(
+            brute,
+            AnimInput {
+                time: 0.2,
+                moving: false,
+                charging: false,
+                vulnerable: true,
+                phase: 0,
+                frenzy: false,
+                preview_glow: false,
+                regrow: 0,
+                hatch_pod: 255,
+                hatch_charge: 0.0,
+            },
+            &[],
+        );
+        let shut_gap = shut.xforms[right].pos[0] - shut.xforms[left].pos[0];
+        let open_gap = open.xforms[right].pos[0] - open.xforms[left].pos[0];
+        assert!(shut_gap.abs() < 0.05, "shut plates share an origin, gap {shut_gap}");
+        assert!(open_gap > shut_gap + 0.5, "open gap {open_gap} shut {shut_gap}");
+        assert!(shut.xforms[cracks].visible);
+        assert!(shut.xforms[cracks].glow < 1.0, "shut cracks should stay dim");
+        assert!(!shut.xforms[core].visible);
+        assert!(open.xforms[core].visible);
+        assert!(open.xforms[core].glow > 3.0);
+
+        let brood = bug("brood_mother");
+        assert_eq!(brood.parts.iter().filter(|p| p.name.starts_with("pod")).count(), 6);
+        let pod = brood.parts.iter().find(|p| p.name == "pod0").unwrap();
+        let rad = pod
+            .mesh
+            .positions
+            .iter()
+            .map(|p| p[0].abs().max(p[1].abs()).max(p[2].abs()))
+            .fold(0.0_f32, f32::max);
+        assert!((rad - 0.575).abs() < 0.05, "pod radius {rad}");
+        let posed = pose(
+            brood,
+            AnimInput {
+                time: 0.2,
+                moving: false,
+                charging: false,
+                vulnerable: false,
+                phase: 0,
+                frenzy: false,
+                preview_glow: false,
+                regrow: 0,
+                hatch_pod: 255,
+                hatch_charge: 0.0,
+            },
+            &[],
+        );
+        let p0 = brood.parts.iter().position(|p| p.name == "pod0").unwrap();
+        assert!(posed.xforms[p0].glow > 2.0);
+        let charged = pose(
+            brood,
+            AnimInput {
+                time: 0.2,
+                moving: false,
+                charging: false,
+                vulnerable: false,
+                phase: 0,
+                frenzy: false,
+                preview_glow: false,
+                regrow: 0,
+                hatch_pod: 0,
+                hatch_charge: 1.0,
+            },
+            &[],
+        );
+        assert!(charged.xforms[p0].glow > posed.xforms[p0].glow + 1.0);
+
+        let vein = bug("hive_tyrant").parts.iter().find(|p| p.name == "vein0").unwrap();
+        let thick = vein
+            .mesh
+            .positions
+            .iter()
+            .map(|p| (p[0] * p[0] + p[2] * p[2]).sqrt())
+            .fold(0.0_f32, f32::max);
+        assert!(thick < 0.06, "leg spike thickness {thick}");
+    }
+
+    #[test]
     fn catalog_is_shared() {
         let a = bug("swarmer") as *const EnemyVisual;
         let b = bug("swarmer") as *const EnemyVisual;
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn brood_pods_alternate_with_buds_and_sit_on_hitboxes() {
+        let content = gemini_sim::Content::embedded();
+        let boss = content.boss("brood_mother").expect("brood mother");
+        let visual = bug("brood_mother");
+        let row = content.bug(gemini_sim::content::EnemyKind::BroodMother);
+        let glowing: Vec<_> = visual
+            .parts
+            .iter()
+            .filter(|part| part.emissive && part.name.starts_with("pod"))
+            .collect();
+        assert_eq!(
+            glowing.len() as u32, boss.pod_count,
+            "glowing pod parts must match bosses.toml pod_count"
+        );
+        let authored_buds = row
+            .visual
+            .parts
+            .iter()
+            .find(|part| part.name == "bud")
+            .expect("visual bud row")
+            .count;
+        let buds: Vec<_> = visual.parts.iter().filter(|part| part.name.starts_with("bud")).collect();
+        assert_eq!(buds.len() as u32, authored_buds, "bud parts must match the visual bud count");
+        assert!(buds.iter().all(|part| !part.emissive), "buds stay visual-only");
+
+        assert_eq!(row.hitbox.pods.len(), glowing.len());
+        for (i, place) in row.hitbox.pods.iter().enumerate() {
+            let part = visual
+                .parts
+                .iter()
+                .find(|part| part.name == format!("pod{i}"))
+                .unwrap_or_else(|| panic!("missing pod{i}"));
+            assert_eq!(part.pod_slot, Some(i as u32));
+            let anchor = part.rest_pos;
+            let hit = place.offset;
+            let d = ((anchor[0] - hit[0]).powi(2) + (anchor[1] - hit[1]).powi(2) + (anchor[2] - hit[2]).powi(2)).sqrt();
+            assert!(
+                d < 1e-3,
+                "pod{i} hitbox {hit:?} is off its mesh anchor {anchor:?} by {d}"
+            );
+        }
+
+        let sac = visual.parts.iter().find(|part| part.name == "sac").expect("sac").rest_pos;
+        let mut ring = Vec::new();
+        for part in visual.parts.iter() {
+            let live = part.emissive && part.name.starts_with("pod");
+            let bud = part.name.starts_with("bud");
+            if !live && !bud {
+                continue;
+            }
+            let dx = part.rest_pos[0] - sac[0];
+            let dz = part.rest_pos[2] - sac[2];
+            ring.push((dz.atan2(dx), live));
+        }
+        ring.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        assert_eq!(ring.len(), glowing.len() + buds.len());
+        for pair in ring.windows(2) {
+            assert_ne!(pair[0].1, pair[1].1, "pods and buds must alternate around the sac");
+            assert!(pair[1].0 - pair[0].0 > 0.2, "ring gap {}", pair[1].0 - pair[0].0);
+        }
+        assert_ne!(ring.first().unwrap().1, ring.last().unwrap().1);
+
+        let pod = visual.parts.iter().find(|part| part.name == "pod0").unwrap();
+        let mesh_r = mesh_radius(&pod.mesh);
+        let hit_r = row.hitbox.pod_radius().expect("pod radius");
+        assert!(
+            hit_r + 1e-3 >= mesh_r * content.bugs.hitbox_margin,
+            "pod hitbox {hit_r:.3} < mesh {mesh_r:.3} * {}",
+            content.bugs.hitbox_margin
+        );
+        eprintln!("pod mesh radius {mesh_r:.4} hitbox radius {hit_r:.4}");
+    }
+
+    #[test]
+    fn muzzle_glow_is_a_round_sphere() {
+        let content = gemini_sim::Content::embedded();
+        let radius = content.hero.muzzle_flash_radius;
+        assert!(radius > 0.0, "muzzle glow radius comes from characters.toml");
+        let mesh = muzzle_glow(radius);
+        let mut extent = [0.0f32; 3];
+        for p in &mesh.positions {
+            for axis in 0..3 {
+                extent[axis] = extent[axis].max(p[axis].abs());
+            }
+        }
+        for axis in extent {
+            assert!((axis - radius).abs() < 1e-4, "extent {extent:?} radius {radius}");
+        }
+        let flat = extent[0].max(extent[1]).max(extent[2]) - extent[0].min(extent[1]).min(extent[2]);
+        assert!(flat < 1e-4, "muzzle glow is a flat disc {extent:?}");
+    }
+
+    #[test]
+    fn weakpoint_hitboxes_cover_the_glow_mesh() {
+        let text = include_str!("../../../content/bugs.toml");
+        let root: toml::Value = toml::from_str(text).expect("bugs.toml");
+        let margin = root
+            .get("hitbox_margin")
+            .and_then(|v| v.as_float())
+            .expect("hitbox_margin") as f32;
+        assert!((margin - 1.1).abs() < 1e-6, "hitbox_margin {margin}");
+        for visual in catalog() {
+            let hit = root
+                .get(&visual.id)
+                .and_then(|row| row.get("hitbox"))
+                .unwrap_or_else(|| panic!("{} hitbox", visual.id));
+            for key in ["weakpoint", "core", "cannon", "tail"] {
+                let Some(shape) = hit.get(key) else { continue };
+                let Some(anchor) = shape
+                    .get("anchor")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| shape.get("name").and_then(|v| v.as_str()))
+                else {
+                    continue;
+                };
+                let Some(part) = visual.parts.iter().find(|p| p.name == anchor) else {
+                    continue;
+                };
+                if !part.emissive {
+                    continue;
+                }
+                let mesh_r = mesh_radius(&part.mesh);
+                let hit_r = shape_radius(shape);
+                assert!(
+                    hit_r + 1e-3 >= mesh_r * margin,
+                    "{} {key} hitbox {hit_r:.3} < mesh {mesh_r:.3} * {margin}",
+                    visual.id
+                );
+            }
+            if let Some(shape) = hit.get("pod") {
+                let part = visual
+                    .parts
+                    .iter()
+                    .find(|p| p.name == "pod0")
+                    .unwrap_or_else(|| panic!("{} pod mesh", visual.id));
+                let mesh_r = mesh_radius(&part.mesh);
+                let hit_r = shape_radius(shape);
+                assert!(
+                    hit_r + 1e-3 >= mesh_r * margin,
+                    "{} pod hitbox {hit_r:.3} < mesh {mesh_r:.3} * {margin}",
+                    visual.id
+                );
+            }
+        }
+    }
+
+    fn mesh_radius(mesh: &MeshData) -> f32 {
+    mesh.positions
+        .iter()
+        .map(|p| (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt())
+        .fold(0.0, f32::max)
+}
+
+fn shape_radius(shape: &toml::Value) -> f32 {
+    let kind = shape.get("shape").and_then(|v| v.as_str()).unwrap_or("sphere");
+    if kind == "box" {
+        let halves = shape
+            .get("half_extents")
+            .and_then(|v| v.as_array())
+            .expect("box half_extents");
+        let sum: f64 = halves.iter().map(|v| v.as_float().unwrap_or(0.0).powi(2)).sum();
+        return sum.sqrt() as f32;
+    }
+    shape.get("radius").and_then(|v| v.as_float()).unwrap_or(0.0) as f32
     }
 }

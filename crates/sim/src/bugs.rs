@@ -10,6 +10,8 @@ use crate::math::Vec3;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct BugBook {
+    /// Weak-point hitbox radius must be at least this times the glowing mesh radius.
+    pub hitbox_margin: f32,
     pub feedback: Feedback,
     pub swarmer: BugRow,
     pub spitter: BugRow,
@@ -222,8 +224,10 @@ impl BugHitbox {
         self.weakpoint.as_ref().or(self.core.as_ref())
     }
 
-    pub fn pod_radius(&self) -> f32 {
-        self.pod.as_ref().map(|p| p.radius).unwrap_or(0.35)
+    /// Authored pod radius. `None` when this bug has no pod hitbox.
+    /// A pod row with no positive radius fails load instead of inventing one.
+    pub fn pod_radius(&self) -> Option<f32> {
+        self.pod.as_ref().map(|shape| shape.radius)
     }
 
     /// Weak volumes whose centers must come from a visual part.
@@ -449,8 +453,11 @@ pub fn visual_anchor(visual: &BugVisual, name: &str) -> Option<[f32; 3]> {
 /// Pod centers follow the visual pod ring on its host. The gameplay table
 /// authors a radius only; an offset list is rejected.
 fn bake_pods(bug: &str, visual: &BugVisual, hitbox: &mut BugHitbox) -> Result<(), String> {
-    if hitbox.pod.is_none() {
+    let Some(shape) = hitbox.pod.as_ref() else {
         return Ok(());
+    };
+    if shape.radius <= 0.0 {
+        return Err(format!("{bug} pod radius is missing"));
     }
     if !hitbox.pods.is_empty() {
         return Err(format!("{bug} pod hitboxes must not author offsets"));
@@ -470,8 +477,11 @@ fn bake_pods(bug: &str, visual: &BugVisual, hitbox: &mut BugHitbox) -> Result<()
     let floor = pod.ny_floor.ok_or_else(|| format!("{bug} visual pod is missing ny_floor"))?;
     let radii = [ext[0] * 0.5, ext[1] * 0.5, ext[2] * 0.5];
     let count = pod.count;
+    let phase = pod
+        .ring_phase
+        .ok_or_else(|| format!("{bug} visual pod is missing ring_phase"))?;
     for i in 0..count {
-        let a = i as f32 / count as f32 * std::f32::consts::TAU + turn;
+        let a = (i as f32 + phase) / count as f32 * std::f32::consts::TAU + turn;
         let nx = a.cos() * pod.ring_radius;
         let nz = a.sin() * pod.ring_radius;
         let ny = (1.0 - nx * nx - nz * nz).max(floor).sqrt();

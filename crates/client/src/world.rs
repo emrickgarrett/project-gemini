@@ -60,13 +60,15 @@ pub(crate) struct Pickup {
 #[derive(Component)]
 pub(crate) struct Flash {
     life: f32,
+    /// Seconds the flash fades across. Zero keeps a hard cutoff (hit pings).
+    fade: f32,
 }
 
 /// Overlay camera. Its children are the first-person arms, on their own layer.
 #[derive(Component)]
 pub(crate) struct ViewmodelCamera;
 
-/// Barrel tube, muzzle ring, and core. Overdrive swaps these to an orange glow.
+/// Orange barrel and stripes. Overdrive swaps them to a hotter emissive. The teal strip stays teal.
 #[derive(Component)]
 pub(crate) struct BarrelGlow {
     idle: Handle<StandardMaterial>,
@@ -81,6 +83,8 @@ pub(crate) struct Bank {
     acid: Handle<Mesh>,
     pickup: Handle<Mesh>,
     flash: Handle<Mesh>,
+    /// Round emissive muzzle glow. Hit pings keep `flash`.
+    muzzle: Handle<Mesh>,
     ring: Handle<Mesh>,
     barrel_hot: Handle<StandardMaterial>,
 }
@@ -141,6 +145,7 @@ pub fn scene(
     bank.acid = upload(&mut meshes, &gemini_meshes::tracer(acid));
     bank.pickup = upload(&mut meshes, &gemini_meshes::pickup_beam(accent));
     bank.flash = upload(&mut meshes, &gemini_meshes::gun_core(white));
+    bank.muzzle = upload(&mut meshes, &gemini_meshes::muzzle_glow(content.hero.muzzle_flash_radius));
     let mut ring = MeshData::new();
     // A flat faceted ring: two discs would be solid. A thin torus-like prism reads as a ring.
     for i in 0..10 {
@@ -168,9 +173,10 @@ pub fn scene(
     material(&mut bank, &mut materials, content, "arena_dark", false, false);
     material(&mut bank, &mut materials, content, "arena_light", false, false);
 
+    let arena = &content.arena;
     let ground = upload(
         &mut meshes,
-        &box_at([0.0, -0.08, 0.0], [content.arena.half_extent * 2.0, 0.16, content.arena.half_extent * 2.0]),
+        &box_at([0.0, -0.08, 0.0], [arena.size[0], 0.16, arena.size[1]]),
     );
     commands.spawn((
         Mesh3d(ground),
@@ -178,22 +184,48 @@ pub fn scene(
         Transform::IDENTITY,
         PlayPiece,
     ));
-    for obstacle in &content.arena.obstacles {
-        let size = [
-            obstacle.max.x - obstacle.min.x,
-            obstacle.max.y - obstacle.min.y,
-            obstacle.max.z - obstacle.min.z,
-        ];
-        let center = [
-            (obstacle.min.x + obstacle.max.x) * 0.5,
-            (obstacle.min.y + obstacle.max.y) * 0.5,
-            (obstacle.min.z + obstacle.max.z) * 0.5,
-        ];
-        let mesh = upload(&mut meshes, &box_at([0.0, 0.0, 0.0], size));
+    let deck = upload(
+        &mut meshes,
+        &box_at(
+            [arena.platform.center.x, arena.platform.height * 0.5, arena.platform.center.z],
+            [arena.platform.radius * 2.0, arena.platform.height, arena.platform.radius * 2.0],
+        ),
+    );
+    commands.spawn((
+        Mesh3d(deck),
+        MeshMaterial3d(mat_of(&bank, "arena_light", false, false)),
+        Transform::IDENTITY,
+        PlayPiece,
+    ));
+    for ramp in &arena.platform.ramps {
+        let mid = (ramp.from + ramp.to) * 0.5;
+        let len = SimVec::new(ramp.to.x - ramp.from.x, 0.0, ramp.to.z - ramp.from.z).length().max(0.2);
+        let mesh = upload(
+            &mut meshes,
+            &box_at([mid.x, arena.platform.height * 0.25, mid.z], [len, arena.platform.height * 0.5, ramp.width]),
+        );
         commands.spawn((
             Mesh3d(mesh),
             MeshMaterial3d(mat_of(&bank, "arena_light", false, false)),
-            Transform::from_xyz(center[0], center[1], center[2]),
+            Transform::IDENTITY,
+            PlayPiece,
+        ));
+    }
+    for ledge in &arena.ledges {
+        let mesh = upload(&mut meshes, &box_at([ledge.pos.x, ledge.pos.y, ledge.pos.z], [2.4, 0.3, 2.4]));
+        commands.spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(mat_of(&bank, "arena_light", false, false)),
+            Transform::IDENTITY,
+            PlayPiece,
+        ));
+    }
+    for vent in &arena.vents {
+        let mesh = upload(&mut meshes, &box_at([vent.pos.x, 0.2, vent.pos.z], [1.4, 0.4, 1.4]));
+        commands.spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(mat_of(&bank, "arena_dark", false, false)),
+            Transform::IDENTITY,
             PlayPiece,
         ));
     }
@@ -208,7 +240,7 @@ pub fn scene(
         ..default()
     });
     let trim_idle = trim_handle.clone();
-    let core_idle = mat_of(&bank, "shots_player", true, false);
+    let strip = mat_of(&bank, "hero_teal", true, false);
     let cobalt_idle = mat_of(&bank, "hero_cobalt", false, false);
     // The world camera draws layer 0. The overlay camera draws the arms on
     // layer 1 with its own depth buffer, so the rifle cannot clip into the arena.
@@ -245,6 +277,10 @@ pub fn scene(
                 ..default()
             }),
             RenderLayers::layer(1),
+            // Same HDR bloom path as the world camera, so the muzzle flash and the
+            // teal strip glow instead of sitting as flat unlit color.
+            Hdr,
+            Bloom::NATURAL,
             ChildOf(world_cam),
         ))
         .id();
@@ -257,7 +293,7 @@ pub fn scene(
             upload(&mut meshes, &vm.barrel),
             cobalt_idle.clone(),
             Some(BarrelGlow {
-                idle: cobalt_idle.clone(),
+                idle: cobalt_idle,
                 hot: barrel_hot.clone(),
             }),
         ),
@@ -269,14 +305,7 @@ pub fn scene(
                 hot: barrel_hot.clone(),
             }),
         ),
-        (
-            upload(&mut meshes, &vm.core),
-            core_idle.clone(),
-            Some(BarrelGlow {
-                idle: core_idle,
-                hot: barrel_hot.clone(),
-            }),
-        ),
+        (upload(&mut meshes, &vm.core), strip, None),
     ];
     for (mesh, mat, glow) in pieces {
         let mut entity = commands.spawn((
@@ -305,7 +334,11 @@ pub fn sync(
     mut parts: Query<(&mut BugPart, &mut Transform, &mut Visibility), (Without<BugLod>, Without<BugRoot>, Without<Shot>, Without<Flash>)>,
     mut lods: Query<(&mut Transform, &mut Visibility), (With<BugLod>, Without<BugPart>, Without<BugRoot>, Without<Shot>, Without<Flash>)>,
     mut shots: Query<&mut Transform, (With<Shot>, Without<BugRoot>, Without<BugPart>, Without<BugLod>, Without<Flash>)>,
-    mut flashes: Query<(Entity, &mut Flash, &mut Transform), (Without<Shot>, Without<BugRoot>, Without<BugPart>, Without<BugLod>)>,
+    mut flashes: Query<
+        (Entity, &mut Flash, &mut Transform, &MeshMaterial3d<StandardMaterial>),
+        (Without<Shot>, Without<BugRoot>, Without<BugPart>, Without<BugLod>),
+    >,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     time: Res<Time>,
     assets: Res<AssetServer>,
 ) {
@@ -330,7 +363,7 @@ pub fn sync(
 
     for enemy in game.sim.enemies.iter().filter(|e| e.alive) {
         if !links.bugs.contains_key(&enemy.id) {
-            let link = spawn_bug(&mut commands, &bank, &game, enemy.kind, enemy.id);
+            let link = spawn_bug(&mut commands, &bank, &game, &mut materials, enemy.kind, enemy.id);
             links.bugs.insert(enemy.id, link);
             links.feet.insert(enemy.id, Vec::new());
         }
@@ -350,6 +383,16 @@ pub fn sync(
             _ => false,
         };
         let prev = links.feet.get(&enemy.id).cloned().unwrap_or_default();
+        let (hatch_pod, hatch_charge) = if enemy.kind == EnemyKind::BroodMother && enemy.warn_pod != 255 && enemy.warn_left > 0.0 {
+            let tele = game
+                .content
+                .boss("brood_mother")
+                .expect("brood_mother is missing")
+                .hatch_telegraph;
+            (enemy.warn_pod, hatch_fraction(tele, enemy.warn_left))
+        } else {
+            (255, 0.0)
+        };
         let posed = pose(
             visual,
             AnimInput {
@@ -365,6 +408,8 @@ pub fn sync(
                 } else {
                     0
                 },
+                hatch_pod,
+                hatch_charge,
             },
             &prev,
         );
@@ -398,6 +443,13 @@ pub fn sync(
                     Visibility::Inherited
                 };
                 let want_hot = (part.emissive || part.grows) && xf.glow > 1.5;
+                if part.emissive && part.pod_slot.is_some() {
+                    let rgb = game.content.palette.key("swarmer_glow");
+                    let mul = 2.8 + xf.glow * 1.7;
+                    if let Some(mut material) = materials.get_mut(&part.hot) {
+                        material.emissive = LinearRgba::rgb(rgb[0] * mul, rgb[1] * mul, rgb[2] * mul);
+                    }
+                }
                 if want_hot != part.hot_on {
                     part.hot_on = want_hot;
                     let handle = if want_hot { part.hot.clone() } else { part.rest.clone() };
@@ -484,7 +536,7 @@ pub fn sync(
             Mesh3d(bank.flash.clone()),
             MeshMaterial3d(mat_of(&bank, "hero_white", true, true)),
             Transform::from_xyz(ping.pos.x, ping.pos.y, ping.pos.z).with_scale(bevy::math::Vec3::splat(scale)),
-            Flash { life: if ping.weak { 0.18 } else { 0.1 } },
+            Flash { life: if ping.weak { 0.18 } else { 0.1 }, fade: 0.0 },
             PlayPiece,
         ));
         if ping.weak {
@@ -492,22 +544,38 @@ pub fn sync(
                 Mesh3d(bank.ring.clone()),
                 MeshMaterial3d(mat_of(&bank, "spitter_glow", true, false)),
                 Transform::from_xyz(ping.pos.x, ping.pos.y, ping.pos.z).with_scale(bevy::math::Vec3::splat(1.8)),
-                Flash { life: 0.22 },
+                Flash { life: 0.22, fade: 0.0 },
                 PlayPiece,
             ));
         }
     }
     let dt = time.delta_secs();
-    for (entity, mut flash, mut xf) in &mut flashes {
+    let accent = game.content.palette.key("accent");
+    for (entity, mut flash, mut xf, mat) in &mut flashes {
         flash.life -= dt;
-        xf.scale *= 1.0 + dt * 4.0;
+        if flash.fade > 0.0 {
+            let t = (flash.life / flash.fade).clamp(0.0, 1.0);
+            if let Some(mut material) = materials.get_mut(&mat.0) {
+                material.base_color = Color::srgba(accent[0], accent[1], accent[2], t);
+                material.emissive = LinearRgba::rgb(accent[0] * 8.0 * t, accent[1] * 8.0 * t, accent[2] * 8.0 * t);
+            }
+        } else {
+            xf.scale *= 1.0 + dt * 4.0;
+        }
         if flash.life <= 0.0 {
             commands.entity(entity).despawn();
         }
     }
 }
 
-fn spawn_bug(commands: &mut Commands, bank: &Bank, game: &Game, kind: EnemyKind, id: u32) -> BugLink {
+fn spawn_bug(
+    commands: &mut Commands,
+    bank: &Bank,
+    game: &Game,
+    materials: &mut Assets<StandardMaterial>,
+    kind: EnemyKind,
+    id: u32,
+) -> BugLink {
     let visual = gemini_meshes::bug(kind.name());
     let shell = visual
         .parts
@@ -534,13 +602,18 @@ fn spawn_bug(commands: &mut Commands, bank: &Bank, game: &Game, kind: EnemyKind,
             part.palette.as_str()
         };
         let rest = mat_of(bank, rest_key, part.emissive && !bud, false);
-        let hot = if bud && !colors.grown_color.is_empty() {
+        let mut hot = if bud && !colors.grown_color.is_empty() {
             mat_of(bank, &colors.grown_color, true, true)
         } else if part.emissive {
             mat_of(bank, &part.palette, true, true)
         } else {
             rest.clone()
         };
+        if part.pod_slot.is_some() && part.emissive {
+            if let Some(src) = materials.get(&hot).cloned() {
+                hot = materials.add(src);
+            }
+        }
         let pod_slot = part.pod_slot;
         let entity = commands
             .spawn((
@@ -582,11 +655,7 @@ pub fn camera(
     time: Res<Time>,
 ) {
     let Some(player) = game.sim.players.first() else { return };
-    let eye_y = if player.crouching {
-        game.content.arena.crouch_eye
-    } else {
-        game.content.arena.eye_height
-    };
+    let eye_y = game.content.view_eye(player.crouching);
     let speed = (player.vel.x * player.vel.x + player.vel.z * player.vel.z).sqrt();
     let bob = if game.bob && player.grounded && speed > 0.4 {
         let hz = game.content.presentation.view_bob_hz;
@@ -615,6 +684,7 @@ pub fn sync_viewmodel(
     game: Res<Game>,
     fx: Res<FrameFx>,
     bank: Res<Bank>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     mut barrels: Query<(&BarrelGlow, &mut MeshMaterial3d<StandardMaterial>)>,
     cam: Query<Entity, With<ViewmodelCamera>>,
 ) {
@@ -633,12 +703,21 @@ pub fn sync_viewmodel(
     let Ok(cam) = cam.single() else { return };
     let offset = game.content.hero.viewmodel_offset;
     let tip = gemini_meshes::muzzle_local();
+    let accent = game.content.palette.key("accent");
+    let life = game.content.hero.muzzle_flash_secs;
+    let flash_mat = materials.add(StandardMaterial {
+        base_color: Color::srgba(accent[0], accent[1], accent[2], 1.0),
+        emissive: LinearRgba::rgb(accent[0] * 8.0, accent[1] * 8.0, accent[2] * 8.0),
+        unlit: true,
+        alpha_mode: AlphaMode::Blend,
+        ..default()
+    });
     commands.spawn((
-        Mesh3d(bank.flash.clone()),
-        MeshMaterial3d(bank.barrel_hot.clone()),
-        Transform::from_xyz(offset[0] + tip[0], offset[1] + tip[1], offset[2] + tip[2]).with_scale(Vec3::splat(0.55)),
+        Mesh3d(bank.muzzle.clone()),
+        MeshMaterial3d(flash_mat),
+        Transform::from_xyz(offset[0] + tip[0], offset[1] + tip[1], offset[2] + tip[2]),
         RenderLayers::layer(1),
-        Flash { life: 0.07 },
+        Flash { life, fade: life },
         PlayPiece,
         ChildOf(cam),
     ));
@@ -716,6 +795,15 @@ fn box_at(center: [f32; 3], size: [f32; 3]) -> MeshData {
     mesh
 }
 
+/// Charge 0 at the start of the telegraph, 1 as warn_left hits 0.
+/// A non-positive duration panics.
+fn hatch_fraction(telegraph: f32, warn_left: f32) -> f32 {
+    if telegraph <= 0.0 {
+        panic!("brood_mother hatch_telegraph must be > 0");
+    }
+    (1.0 - warn_left / telegraph).clamp(0.0, 1.0)
+}
+
 fn bevy_ring_box(mesh: &mut MeshData, center: [f32; 3], size: [f32; 3]) {
     let piece = box_at(center, size);
     let base = mesh.positions.len() as u32;
@@ -723,4 +811,23 @@ fn bevy_ring_box(mesh: &mut MeshData, center: [f32; 3], size: [f32; 3]) {
     mesh.normals.extend_from_slice(&piece.normals);
     mesh.colors.extend_from_slice(&piece.colors);
     mesh.indices.extend(piece.indices.iter().map(|i| i + base));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::hatch_fraction;
+
+    #[test]
+    fn hatch_charge_follows_the_loaded_telegraph() {
+        let mid = hatch_fraction(1.5, 0.75);
+        assert!((mid - 0.5).abs() < 1e-4, "{mid}");
+        assert!((hatch_fraction(1.5, 1.5) - 0.0).abs() < 1e-4);
+        assert!((hatch_fraction(1.5, 0.0) - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    #[should_panic(expected = "hatch_telegraph must be > 0")]
+    fn zero_hatch_telegraph_is_a_hard_failure() {
+        hatch_fraction(0.0, 0.4);
+    }
 }

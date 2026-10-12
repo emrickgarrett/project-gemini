@@ -14,6 +14,10 @@ pub struct AnimInput {
     pub preview_glow: bool,
     /// How many brood buds have grown into pods. The sim never reads this.
     pub regrow: u32,
+    /// Pod index about to hatch. 255 means none.
+    pub hatch_pod: u8,
+    /// 0 at the start of the hatch telegraph, 1 as the pod opens.
+    pub hatch_charge: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -95,6 +99,15 @@ pub fn pose(visual: &EnemyVisual, anim: AnimInput, prev_lift: &[f32]) -> Pose {
                 if part.emissive {
                     glow = if anim.charging && visual.sac_charge_glow > 0.0 {
                         visual.sac_charge_glow
+                    } else if part.name.starts_with("pod") {
+                        let slot = part.pod_slot.unwrap_or(0) as f32;
+                        let idle = 2.6 + 0.35 * (anim.time * 2.2 + slot).sin();
+                        if anim.hatch_pod != 255 && part.pod_slot == Some(anim.hatch_pod as u32) {
+                            let pulse = 0.5 + 0.5 * (anim.time * 10.0).sin();
+                            idle + anim.hatch_charge * (2.4 + pulse * 1.6)
+                        } else {
+                            idle
+                        }
                     } else if visual.glow_pulse > 0.0 {
                         1.0 + 0.15 * (anim.time * visual.glow_pulse).sin()
                     } else {
@@ -112,7 +125,21 @@ pub fn pose(visual: &EnemyVisual, anim: AnimInput, prev_lift: &[f32]) -> Pose {
                 euler[0] += (anim.time * part.sway_rate + index as f32 * part.sway_spread).sin() * part.sway_amp;
             }
             Joint::Static => {
-                if part.emissive && visual.glow_pulse > 0.0 {
+                // Shut plates meet on the midline. Open slides each flank out and up
+                // so the magenta core between them is the thing you see.
+                if part.name == "shell_plates_l" || part.name == "shell_plates_r" {
+                    if anim.vulnerable {
+                        let side = if part.name.ends_with('l') { -1.0 } else { 1.0 };
+                        pos[0] += side * 0.42;
+                        pos[1] += 0.18;
+                        euler[2] += side * 0.45;
+                    }
+                }
+                if part.name == "cracks" {
+                    glow = 0.45;
+                } else if part.name == "core" {
+                    glow = 4.0;
+                } else if part.emissive && visual.glow_pulse > 0.0 {
                     glow = 1.0 + 0.12 * (anim.time * visual.glow_pulse).sin();
                 }
             }

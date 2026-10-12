@@ -1,0 +1,99 @@
+# Arena 01. Origin = center of platform, +z = north, +x = east, meters. y = height.
+size = [80, 80]
+shape = "circle"
+radius = 40
+player_spawn = [0, 4.0, 0]
+
+[platform]
+center = [0, 0]
+radius = 8
+height = 4.0
+railing_height = 0.6        # low, so 4 vents stay visible
+ramps = [ { from = [8, 0], to = [16, 0], width = 4 }, { from = [-8, 0], to = [-16, 0], width = 4 } ]   # east + west chokepoints
+
+[boss_area]
+center = [0, -24]           # south, kept clear of boulders
+radius = 12.5
+
+[[vent]]
+id = "vent_1"
+pos = [0.0, 0, 38.0]
+bearing_deg = 0
+telegraph = 1.5
+
+[[vent]]
+id = "vent_2"
+pos = [32.9, 0, 19.0]
+bearing_deg = 60
+telegraph = 1.5
+
+[[vent]]
+id = "vent_3"
+pos = [32.9, 0, -19.0]
+bearing_deg = 120
+telegraph = 1.5
+
+[[vent]]
+id = "vent_4"
+pos = [0.0, 0, -38.0]
+bearing_deg = 180
+telegraph = 1.5
+
+[[vent]]
+id = "vent_5"
+pos = [-32.9, 0, -19.0]
+bearing_deg = 240
+telegraph = 1.5
+
+[[vent]]
+id = "vent_6"
+pos = [-32.9, 0, 19.0]
+bearing_deg = 300
+telegraph = 1.5
+
+[[ledge]]
+id = "tower"
+pos = [22, 12, 22]
+jetpack_only = true
+
+[[ledge]]
+id = "shelf_nw"
+pos = [-26, 7, 18]
+jetpack_only = true
+
+[[ledge]]
+id = "shelf_w"
+pos = [-30, 6, -6]
+jetpack_only = true
+
+[[ledge]]
+id = "shelf_e"
+pos = [30, 6, -4]
+jetpack_only = true
+
+[[pickup]]
+id = "pickup_1"
+pos = [16.0, 0, 27.7]
+spawns_during = "breather"
+
+[[pickup]]
+id = "pickup_2"
+pos = [16.0, 0, -27.7]
+spawns_during = "breather"
+
+[[pickup]]
+id = "pickup_3"
+pos = [-16.0, 0, -27.7]
+spawns_during = "breather"
+
+[[pickup]]
+id = "pickup_4"
+pos = [-16.0, 0, 27.7]
+spawns_during = "breather"
+
+[perch_rules]
+flow_field_targets = "nearest_grounded_player"
+all_perched_grace = 8.0          # seconds before anti-camp kicks in
+climb_speed_mult = 0.5           # swarmers climb resin streaks
+budget_shift_to_spitters = 0.3   # extra share of wave budget to spitters while all perched
+fuel_regen_on_perch = false      # boosting is still allowed; only regen pauses

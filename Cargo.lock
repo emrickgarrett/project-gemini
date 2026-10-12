@@ -2819,6 +2819,7 @@ dependencies = [
 name = "gemini-meshes"
 version = "0.1.0"
 dependencies = [
+ "gemini-sim",
  "serde",
  "toml 0.8.23",
 ]

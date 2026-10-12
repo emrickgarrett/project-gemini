@@ -710,3 +710,28 @@ max_instances = 2
 loop = false
 category = "enemy"
 measured_rms_db = -12.5
+
+# Arena 01. Telegraphs stay fixed-pitch so the 1.5 s warn lines up with the vent and climb windows.
+[vent_warn]
+volume_db = 0.6
+pitch_rand_semitones = 0
+max_instances = 6
+loop = false
+category = "enemy"
+measured_rms_db = -12.0
+
+[vent_burst]
+volume_db = -0.4
+pitch_rand_semitones = 0.4
+max_instances = 6
+loop = false
+category = "enemy"
+measured_rms_db = -10.0
+
+[perch_climb_warn]
+volume_db = 0.2
+pitch_rand_semitones = 0
+max_instances = 4
+loop = false
+category = "enemy"
+measured_rms_db = -12.0
