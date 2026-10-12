@@ -141,6 +141,7 @@ impl Content {
         let bosses = load_bosses(src.bosses).map_err(|err| format!("bosses.toml: {err}"))?;
         require_spawn_clearance(&bosses, &bugs).map_err(|err| format!("bosses.toml: {err}"))?;
         let mut palette: Palette = parse("palette.toml", src.palette)?;
+        validate_lit_keys(&palette).map_err(|err| format!("palette.toml: {err}"))?;
         let heroes_visual = load_heroes_visual(src.heroes_visual, &palette)?;
         let bug_models = load_model_table(
             include_str!("../../../content/bugs_visual.toml"),
@@ -1337,7 +1338,15 @@ pub struct CastModel {
     pub license: String,
     pub task: String,
     pub base: String,
+    /// Mask red. Empty on a bug cast.
+    pub primary: String,
+    /// Mask green. Empty on a bug cast.
+    pub secondary: String,
     pub accent: String,
+    /// Mask alpha, a fourth color. Empty when that channel has no weight.
+    pub fourth: String,
+    /// sRGB shade map under assets/. Empty on a bug cast.
+    pub shade: String,
     pub glow: String,
     pub rim: String,
     pub fit: String,
@@ -1351,10 +1360,10 @@ pub struct CastModel {
 /// Tint scalars and the side-sheet camera. Colors stay palette keys.
 #[derive(Clone, Debug)]
 pub struct CastLook {
-    /// Mid-gray the body is lifted to, before the base palette key.
+    /// Mid-gray a bug body is lifted to, before the base palette key.
     pub base_light: f32,
-    /// Meshy gray that `base_light` replaces. A texel of this value stays at `base_light`.
-    pub base_gray: f32,
+    /// Linear divisor for an sRGB shade map. Albedo is `(shade / shade_mid_lin) * sum(weight * color)`.
+    pub shade_mid_lin: f32,
     pub rim_strength: f32,
     /// Weapon grade. Compared against the cleaned mask, which is 0 or 255.
     pub view_gun_mask_threshold: f32,
@@ -1819,14 +1828,16 @@ fn load_model_rows(
     let mut models: Vec<CastModel> = Vec::new();
     for row in rows {
         let map = row.as_table().ok_or_else(|| format!("{what} model is not a table"))?;
-        expect_keys(
-            map,
-            &[
-                "id", "file", "mask", "triangles", "bytes", "source", "license", "task", "base", "accent", "glow", "rim", "fit",
-                "size", "yaw_deg", "at", "grip", "view",
-            ],
-            &format!("{what} model"),
-        )?;
+        let fit_peek = map.get("fit").and_then(|v| v.as_str()).unwrap_or("");
+        let channeled = matches!(fit_peek, "hero" | "weapon" | "shield");
+        let mut keys = vec![
+            "id", "file", "mask", "triangles", "bytes", "source", "license", "task", "base", "accent", "glow", "rim", "fit",
+            "size", "yaw_deg", "at", "grip", "view",
+        ];
+        if channeled {
+            keys.extend(["primary", "secondary", "fourth", "shade"]);
+        }
+        expect_keys(map, &keys, &format!("{what} model"))?;
         let id = vis_str(map, "id", &format!("{what} model"))?.to_string();
         if id.is_empty() || models.iter().any(|model| model.id == id) {
             return Err(format!("{what} duplicate or empty model id \"{id}\""));
@@ -1837,10 +1848,24 @@ fn load_model_rows(
             return Err(format!("{what} {id} file \"{file}\" is unknown"));
         }
         let mask = vis_str(map, "mask", &format!("{what} {id}"))?.to_string();
-        let expected_mask = format!("masks/{id}_mask.png");
+        let expected_mask = if channeled {
+            format!("masks/{id}_mask_rgba.png")
+        } else {
+            format!("masks/{id}_mask.png")
+        };
         if mask != expected_mask {
             return Err(format!("{what} {id} mask \"{mask}\" is unknown"));
         }
+        let shade = if channeled {
+            let shade = vis_str(map, "shade", &format!("{what} {id}"))?.to_string();
+            let expected_shade = format!("masks/{id}_shade.png");
+            if shade != expected_shade {
+                return Err(format!("{what} {id} shade \"{shade}\" is unknown"));
+            }
+            shade
+        } else {
+            String::new()
+        };
         let fit = vis_str(map, "fit", &format!("{what} {id}"))?.to_string();
         if !matches!(fit.as_str(), "hero" | "hitbox" | "weapon" | "shield") {
             return Err(format!("{what} {id} fit \"{fit}\" is unknown"));
@@ -1853,7 +1878,7 @@ fn load_model_rows(
         let color = |key: &str| -> Result<String, String> {
             let name = vis_str(map, key, &format!("{what} {labeled}"))?.to_string();
             if name.is_empty() {
-                if key == "rim" {
+                if key == "rim" || (channeled && (key == "accent" || key == "fourth")) {
                     return Ok(name);
                 }
                 return Err(format!("{what} {labeled} {key} is empty"));
@@ -1889,7 +1914,11 @@ fn load_model_rows(
             license,
             task,
             base: color("base")?,
+            primary: if channeled { color("primary")? } else { String::new() },
+            secondary: if channeled { color("secondary")? } else { String::new() },
             accent: color("accent")?,
+            fourth: if channeled { color("fourth")? } else { String::new() },
+            shade,
             glow: color("glow")?,
             rim: color("rim")?,
             fit,
@@ -1942,7 +1971,7 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
         table,
         &[
             "base_light",
-            "base_gray",
+            "shade_mid_lin",
             "rim_strength",
             "view_gun_mask_threshold",
             "view_gun_rim_strength",
@@ -1961,13 +1990,13 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
         "cast.toml",
     )?;
     let base_light = vis_f32(table, "base_light", "cast.toml")?;
-    let base_gray = vis_f32(table, "base_gray", "cast.toml")?;
+    let shade_mid_lin = vis_f32(table, "shade_mid_lin", "cast.toml")?;
     let rim_strength = vis_f32(table, "rim_strength", "cast.toml")?;
     if !(base_light > 0.0 && base_light <= 1.0) {
         return Err("cast.toml base_light must be > 0 and <= 1".into());
     }
-    if !(base_gray > 0.0 && base_gray <= 1.0) {
-        return Err("cast.toml base_gray must be > 0 and <= 1".into());
+    if !(shade_mid_lin > 0.0 && shade_mid_lin <= 1.0) {
+        return Err("cast.toml shade_mid_lin must be > 0 and <= 1".into());
     }
     if !(rim_strength >= 0.0 && rim_strength <= 1.0) {
         return Err("cast.toml rim_strength must be between 0 and 1".into());
@@ -2017,7 +2046,7 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
     }
     Ok(CastLook {
         base_light,
-        base_gray,
+        shade_mid_lin,
         rim_strength,
         view_gun_mask_threshold,
         view_gun_rim_strength,
@@ -3687,6 +3716,14 @@ pub struct BugColors {
     pub magenta: String,
 }
 
+/// A palette color that declares whether it is emissive. The name is not the flag.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LitKey {
+    pub hex: String,
+    pub emissive: bool,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct PaletteKeys {
     pub swarmer_amber: String,
@@ -3713,6 +3750,38 @@ pub struct PaletteKeys {
     pub hero_plate: String,
     pub portrait_field: String,
     pub arena_sky: String,
+    pub hero_vex_primary: String,
+    pub hero_vex_secondary: String,
+    pub hero_vex_accent: String,
+    pub hero_vex_glow: String,
+    pub hero_nyra_primary: String,
+    pub hero_nyra_secondary: String,
+    pub hero_nyra_accent: String,
+    pub hero_nyra_glow: String,
+    pub hero_brakk_primary: String,
+    pub hero_brakk_secondary: String,
+    pub hero_brakk_accent: String,
+    pub hero_brakk_glow: String,
+    pub hero_kip_primary: String,
+    pub hero_kip_secondary: String,
+    pub hero_kip_accent: String,
+    pub hero_kip_glow: String,
+    pub gear_vex_gun_primary: String,
+    pub gear_vex_gun_secondary: String,
+    pub gear_vex_gun_accent: String,
+    pub gear_nyra_gun_primary: String,
+    pub gear_nyra_gun_secondary: String,
+    pub gear_nyra_gun_accent: String,
+    pub gear_nyra_gun_glow: LitKey,
+    pub gear_brakk_gun_primary: String,
+    pub gear_brakk_gun_secondary: String,
+    pub gear_brakk_gun_glow: LitKey,
+    pub gear_kip_gun_primary: String,
+    pub gear_kip_gun_secondary: String,
+    pub gear_kip_gun_accent: String,
+    pub gear_brakk_shield_primary: String,
+    pub gear_brakk_shield_secondary: String,
+    pub gear_brakk_shield_accent: String,
 }
 
 impl Palette {
@@ -3743,6 +3812,38 @@ impl Palette {
             "hero_plate" => self.keys.hero_plate.as_str(),
             "portrait_field" => self.keys.portrait_field.as_str(),
             "arena_sky" => self.keys.arena_sky.as_str(),
+            "hero_vex_primary" => self.keys.hero_vex_primary.as_str(),
+            "hero_vex_secondary" => self.keys.hero_vex_secondary.as_str(),
+            "hero_vex_accent" => self.keys.hero_vex_accent.as_str(),
+            "hero_vex_glow" => self.keys.hero_vex_glow.as_str(),
+            "hero_nyra_primary" => self.keys.hero_nyra_primary.as_str(),
+            "hero_nyra_secondary" => self.keys.hero_nyra_secondary.as_str(),
+            "hero_nyra_accent" => self.keys.hero_nyra_accent.as_str(),
+            "hero_nyra_glow" => self.keys.hero_nyra_glow.as_str(),
+            "hero_brakk_primary" => self.keys.hero_brakk_primary.as_str(),
+            "hero_brakk_secondary" => self.keys.hero_brakk_secondary.as_str(),
+            "hero_brakk_accent" => self.keys.hero_brakk_accent.as_str(),
+            "hero_brakk_glow" => self.keys.hero_brakk_glow.as_str(),
+            "hero_kip_primary" => self.keys.hero_kip_primary.as_str(),
+            "hero_kip_secondary" => self.keys.hero_kip_secondary.as_str(),
+            "hero_kip_accent" => self.keys.hero_kip_accent.as_str(),
+            "hero_kip_glow" => self.keys.hero_kip_glow.as_str(),
+            "gear_vex_gun_primary" => self.keys.gear_vex_gun_primary.as_str(),
+            "gear_vex_gun_secondary" => self.keys.gear_vex_gun_secondary.as_str(),
+            "gear_vex_gun_accent" => self.keys.gear_vex_gun_accent.as_str(),
+            "gear_nyra_gun_primary" => self.keys.gear_nyra_gun_primary.as_str(),
+            "gear_nyra_gun_secondary" => self.keys.gear_nyra_gun_secondary.as_str(),
+            "gear_nyra_gun_accent" => self.keys.gear_nyra_gun_accent.as_str(),
+            "gear_nyra_gun_glow" => self.keys.gear_nyra_gun_glow.hex.as_str(),
+            "gear_brakk_gun_primary" => self.keys.gear_brakk_gun_primary.as_str(),
+            "gear_brakk_gun_secondary" => self.keys.gear_brakk_gun_secondary.as_str(),
+            "gear_brakk_gun_glow" => self.keys.gear_brakk_gun_glow.hex.as_str(),
+            "gear_kip_gun_primary" => self.keys.gear_kip_gun_primary.as_str(),
+            "gear_kip_gun_secondary" => self.keys.gear_kip_gun_secondary.as_str(),
+            "gear_kip_gun_accent" => self.keys.gear_kip_gun_accent.as_str(),
+            "gear_brakk_shield_primary" => self.keys.gear_brakk_shield_primary.as_str(),
+            "gear_brakk_shield_secondary" => self.keys.gear_brakk_shield_secondary.as_str(),
+            "gear_brakk_shield_accent" => self.keys.gear_brakk_shield_accent.as_str(),
             "hero_teal" | "teal" => self.hero.teal.as_str(),
             "hero_cobalt" | "cobalt" => self.hero.cobalt.as_str(),
             "hero_white" | "white" => self.hero.white.as_str(),
@@ -3761,6 +3862,30 @@ impl Palette {
     pub fn key(&self, name: &str) -> [f32; 4] {
         hex_srgb(self.hex(name).unwrap_or_else(|| panic!("unknown palette key {name}")))
     }
+
+    /// True only when that entry's `emissive` field is true. A `_glow` suffix is not enough.
+    pub fn emissive(&self, name: &str) -> bool {
+        match name {
+            "gear_nyra_gun_glow" => self.keys.gear_nyra_gun_glow.emissive,
+            "gear_brakk_gun_glow" => self.keys.gear_brakk_gun_glow.emissive,
+            _ => false,
+        }
+    }
+}
+
+fn validate_lit_keys(palette: &Palette) -> Result<(), String> {
+    for (name, lit) in [
+        ("gear_nyra_gun_glow", &palette.keys.gear_nyra_gun_glow),
+        ("gear_brakk_gun_glow", &palette.keys.gear_brakk_gun_glow),
+    ] {
+        if lit.hex.trim().trim_start_matches('#').len() < 6 {
+            return Err(format!("{name} hex does not resolve"));
+        }
+        if !lit.emissive {
+            return Err(format!("{name} emissive must be true"));
+        }
+    }
+    Ok(())
 }
 
 fn require_palette_keys(

@@ -982,11 +982,6 @@ mod tests {
         for hit in hits.iter().filter(|hit| hit.id.starts_with("hero:") && hit.id != "hero:vex") {
             let id = hit.id.trim_start_matches("hero:");
             let hero = content.heroes.iter().find(|hero| hero.id == id).unwrap();
-            let accent = round_bytes(&content, &hero.accent_key);
-            let away = &content.presentation.hud.away;
-            let graded = crate::away_still::grade(accent[0], accent[1], accent[2], away.away_dim, away.away_desaturation, away.dim_floor);
-            let mixed = lift(graded, accent, content.ui.layout.locked_accent_mix);
-            let mut glow = 0u32;
             let mut colored = 0u32;
             let inset = ((content.ui.layout.border_px * (720.0 / content.ui.layout.fit_height)).round() as i32).max(1);
             let top = hit.y + inset;
@@ -997,15 +992,13 @@ mod tests {
                     if px == panel {
                         continue;
                     }
-                    if px == mixed {
-                        glow += 1;
-                    } else if px[0] != px[1] || px[1] != px[2] {
+                    if px[0] != px[1] || px[1] != px[2] {
                         colored += 1;
                     }
                 }
             }
-            assert!(glow > 8, "{id} keeps a mixed accent glow");
-            assert_eq!(colored, 0, "{id} locked portrait is grayscale aside from the accent mix");
+            // The cast does not paint the UI accent, so a locked body stays gray.
+            assert_eq!(colored, 0, "{id} locked portrait is grayscale");
         }
     }
 

@@ -445,9 +445,6 @@ fn anchor_name(shape: &ShapeDef) -> Option<&str> {
     }
 }
 
-/// 5 cm. Every hit-center surface check uses this one bar.
-pub const HIT_SURFACE_GAP_M: f32 = 0.05;
-
 /// Hitbox anchor that follows the procedural tail chain, not the cast mesh.
 pub const PROCEDURAL_TAIL_ANCHOR: &str = "procedural_tail";
 
@@ -503,10 +500,15 @@ fn bake_pods(bug: &str, visual: &BugVisual, hitbox: &mut BugHitbox) -> Result<()
     let phase = pod
         .ring_phase
         .ok_or_else(|| format!("{bug} visual pod is missing ring_phase"))?;
+    let mut seen = vec![false; count as usize];
     for seat in &pod.seats {
         if seat.index >= count {
             return Err(format!("{bug} pod seat {} is outside the ring", seat.index));
         }
+        if seen[seat.index as usize] {
+            return Err(format!("{bug} pod seat {} is duplicated", seat.index));
+        }
+        seen[seat.index as usize] = true;
     }
     for i in 0..count {
         let a = (i as f32 + phase) / count as f32 * std::f32::consts::TAU + turn;

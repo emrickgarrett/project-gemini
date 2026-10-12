@@ -1,11 +1,12 @@
 # Cast tint and the review orbit. The mesh crate and the client read these.
 # They do not keep a second copy of the numbers.
 #
-# The cleaned mask PNGs are solid. Red is the accent palette key.
-# Green is the glow palette key, unlit. There is no noise threshold.
-# A texel with an empty mask is flat mid-gray (`base_light`) times the base
-# palette key. The albedo is not a color. Mask red and green are region weights.
-# `rim_strength` scales the fresnel on unmasked texels when a model has a rim key.
+# Bug masks stay binary. Red is the accent palette key. Green is the glow key.
+# A bug texel with an empty mask is `base_light` times the base palette key.
+# Heroes, guns, and the shield use a four-channel mask and an sRGB shade map.
+# In linear color, albedo = (shade / shade_mid_lin) * sum(weight * palette).
+# `shade_mid_lin` is that divisor. The painter reads it from here.
+# `rim_strength` scales the fresnel on an unmasked bug texel when a model has a rim key.
 # A weapon (`fit = "weapon"`) uses the cleaned mask as stored. Green or red at
 # or above `view_gun_mask_threshold` is the glow or the accent. The cleaned
 # PNGs are 0 or 255, so this does not pick up glb noise.
@@ -19,7 +20,7 @@
 # (distance is radii, vertical field of view in degrees).
 
 base_light = 0.5
-base_gray = 0.25
+shade_mid_lin = 0.2623
 rim_strength = 1.0
 view_gun_mask_threshold = 0.45
 view_gun_rim_strength = 0.35

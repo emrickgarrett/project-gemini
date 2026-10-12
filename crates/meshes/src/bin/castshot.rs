@@ -11,7 +11,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-use gemini_meshes::raster_model;
+use gemini_meshes::{raster_heroes_at_15m, raster_in_arena, raster_model};
 
 const IDS: &[&str] = &[
     "vex_body",
@@ -59,6 +59,21 @@ fn main() {
         };
         let path = out.join(format!("{id}.png"));
         sheet.save(&path).expect("write png");
+        println!("wrote {}", path.display());
+    }
+    let arena = 1024u32;
+    let party = raster_heroes_at_15m(arena, arena);
+    let party_img = image::RgbImage::from_raw(arena, arena, party).expect("party");
+    let party_path = out.join("heroes_at_15m.png");
+    party_img.save(&party_path).expect("write party");
+    println!("wrote {}", party_path.display());
+    let far = PathBuf::from("art/bugs/at_15m");
+    fs::create_dir_all(&far).expect("15m dir");
+    for id in ["spitter", "hive_tyrant"] {
+        let rgb = raster_in_arena(id, arena, arena);
+        let img = image::RgbImage::from_raw(arena, arena, rgb).expect(id);
+        let path = far.join(format!("{id}.png"));
+        img.save(&path).expect("write 15m");
         println!("wrote {}", path.display());
     }
 }

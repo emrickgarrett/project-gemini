@@ -26,7 +26,7 @@ pub use reveal_still::{paint_reveal, reveal_still_is_flat, still_color_stats};
 
 pub use pose::{pose, root_motion, AnimInput, Pose, Xform};
 pub use preview::{
-    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_in_arena, raster_model, raster_rail_edge, raster_top,
+    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_heroes_at_15m, raster_in_arena, raster_model, raster_rail_edge, raster_top,
     raster_crowd, raster_viewmodel, still,
     still_open, still_top, ViewmodelFrame,
 };

@@ -707,6 +707,100 @@ fn paint_hero_figure(color: &mut [u8], depth: &mut [f32], cam: &crate::PaintCam,
     }
 }
 
+/// Four heroes on the deck, `review_distance` meters from a teammate's eye, with `arena_sky` behind them.
+pub fn raster_heroes_at_15m(width: u32, height: u32) -> Vec<u8> {
+    use gemini_sim::content::Content;
+    let content = Content::embedded();
+    let dress = &content.arena_dressing;
+    let platform = &content.arena.platform;
+    let deck = platform.height;
+    let eye_y = deck + content.controller.camera.eye_height;
+    let cam_z = platform.radius - 0.5;
+    let hero_z = cam_z - dress.review_distance;
+    let eye = [platform.center.x, eye_y, platform.center.z + cam_z];
+    let look = [platform.center.x, deck + 1.05, platform.center.z + hero_z];
+    let sky = content.palette.key("arena_sky");
+    let bg = [byte(sky[0]), byte(sky[1]), byte(sky[2])];
+    let w = width.max(8);
+    let h = height.max(8);
+    let mut color = Vec::with_capacity((w * h * 3) as usize);
+    for _ in 0..(w * h) {
+        color.extend_from_slice(&bg);
+    }
+    let mut depth = vec![f32::INFINITY; (w * h) as usize];
+    let forward = norm(sub(look, eye));
+    let right = norm(cross(forward, [0.0, 1.0, 0.0]));
+    let up = cross(right, forward);
+    let fov = content.controller.camera.fov_default.to_radians();
+    let cam = crate::PaintCam {
+        eye,
+        right,
+        up,
+        forward,
+        focal: 1.0 / (fov * 0.5).tan(),
+        aspect: w as f32 / h as f32,
+        w,
+        h,
+        key: norm([-0.2, 0.92, 0.28]),
+        fill: norm([0.55, 0.35, -0.45]),
+    };
+    let palette = |name: &str| content.palette.key(name);
+    let ground = crate::review_ground(&content);
+    paint_flat(&mut color, &mut depth, &ground, palette("arena_dark"), &cam);
+    for piece in crate::arena_pieces(&content) {
+        paint_flat(&mut color, &mut depth, &piece.mesh, palette(&piece.palette), &cam);
+    }
+    let spacing = 1.15_f32;
+    let ids = ["vex", "nyra", "brakk", "kip"];
+    for (i, id) in ids.iter().enumerate() {
+        let x = (i as f32 - 1.5) * spacing;
+        let at = [platform.center.x + x, deck, platform.center.z + hero_z];
+        paint_named_hero(&mut color, &mut depth, &cam, id, at, eye);
+    }
+    color
+}
+
+fn paint_named_hero(color: &mut [u8], depth: &mut [f32], cam: &crate::PaintCam, hero_id: &str, at: [f32; 3], eye: [f32; 3]) {
+    let content = gemini_sim::content::Content::embedded();
+    let fx = eye[0] - at[0];
+    let fz = eye[2] - at[2];
+    let yaw = (-fx).atan2(-fz).to_degrees();
+    let pivot = crate::body_pivot(&content, hero_id);
+    let palette = |name: &str| content.palette.key(name);
+    for mesh in crate::hero_pieces(hero_id) {
+        let place = crate::hero_placement(&content, mesh, at, pivot, yaw, 0.0);
+        crate::cast::paint(color, depth, mesh, place, &palette, cam, false);
+    }
+}
+
+fn paint_flat(color: &mut [u8], depth: &mut [f32], mesh: &crate::MeshData, albedo: [f32; 4], cam: &crate::PaintCam) {
+    let key = cam.key;
+    let fill = cam.fill;
+    for tri in mesh.indices.chunks(3) {
+        if tri.len() < 3 {
+            continue;
+        }
+        let ia = tri[0] as usize;
+        let ib = tri[1] as usize;
+        let ic = tri[2] as usize;
+        let nw = mesh.normals[ia];
+        let ndot = (nw[0] * key[0] + nw[1] * key[1] + nw[2] * key[2]).clamp(0.0, 1.0);
+        let ndot2 = (nw[0] * fill[0] + nw[1] * fill[1] + nw[2] * fill[2]).clamp(0.0, 1.0);
+        let shade = (0.62 + 0.40 * ndot + 0.22 * ndot2).clamp(0.0, 1.0);
+        let rgb = [albedo[0] * shade, albedo[1] * shade, albedo[2] * shade];
+        let Some(a) = project(mesh.positions[ia], cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
+            continue;
+        };
+        let Some(b) = project(mesh.positions[ib], cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
+            continue;
+        };
+        let Some(c) = project(mesh.positions[ic], cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
+            continue;
+        };
+        fill_tri(color, depth, cam.w, cam.h, a, b, c, rgb);
+    }
+}
+
 /// In-arena color still. The eye stands on the deck, `review_distance` meters from the bug.
 pub fn raster_in_arena(id: &str, width: u32, height: u32) -> Vec<u8> {
     use gemini_sim::content::Content;

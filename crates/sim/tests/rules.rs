@@ -1058,6 +1058,69 @@ fn missing_weakpoint_anchor_fails_content_load() {
     let no_radius = bugs.replacen("pod = { shape = \"sphere\", radius = 0.65 }", "pod = { shape = \"sphere\" }", 1);
     let err = load(&no_radius).expect_err("a pod hitbox without a radius must fail load");
     assert!(err.contains("pod radius"), "{err}");
+
+    let duplicated = bugs.replacen(
+        "seats=[{index=1, offset=[0.07553730, 2.29495382, 0.61697435]}, {index=4, offset=[-0.08838622, 2.43034029, -0.95747310]}]",
+        "seats=[{index=1, offset=[0.07553730, 2.29495382, 0.61697435]}, {index=1, offset=[-0.08838622, 2.43034029, -0.95747310]}]",
+        1,
+    );
+    assert_ne!(duplicated, bugs, "the duplicate seat must change the table");
+    let err = load(&duplicated).expect_err("a duplicated pod seat must fail load");
+    assert!(err.contains("duplicated"), "{err}");
+}
+
+#[test]
+fn emissive_is_a_palette_field_not_a_name_suffix() {
+    let content = Content::embedded();
+    assert!(content.palette.emissive("gear_nyra_gun_glow"));
+    assert!(content.palette.emissive("gear_brakk_gun_glow"));
+    assert!(!content.palette.emissive("hero_vex_glow"), "body A is a fourth color");
+    assert!(!content.palette.emissive("hero_nyra_glow"));
+    assert!(!content.palette.emissive("swarmer_glow"), "a _glow suffix is not emissive");
+    assert!((content.cast.shade_mid_lin - 0.2623).abs() < 1.0e-4);
+
+    let base = gemini_sim::content::embedded_sources();
+    let palette = include_str!("../../../content/palette.toml");
+    let bugs = include_str!("../../../content/bugs.toml");
+    let load = |palette: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            waves: base.waves,
+            difficulty: base.difficulty,
+            controller: base.controller,
+            run_upgrades: base.run_upgrades,
+            endless: base.endless,
+            currency: base.currency,
+            banners: base.banners,
+            duplicate_ranks: base.duplicate_ranks,
+            bosses: base.bosses,
+            weapons: base.weapons,
+            hero: base.hero,
+            arena: base.arena,
+            presentation: base.presentation,
+            combat: base.combat,
+            palette,
+            music: base.music,
+            audio: base.audio,
+            bugs,
+            crate_reveal: base.crate_reveal,
+            coop: base.coop,
+            cosmetics: base.cosmetics,
+            ui: base.ui,
+            heroes_visual: base.heroes_visual,
+            arena_visual: base.arena_visual,
+        })
+    };
+    let missing = palette.replacen("gear_nyra_gun_glow = { hex = \"#62E3F7\", emissive = true }", "gear_nyra_gun_glow = \"#62E3F7\"", 1);
+    assert_ne!(missing, palette);
+    let err = load(&missing).expect_err("a glow key without emissive must fail load");
+    assert!(err.contains("emissive") || err.contains("gear_nyra_gun_glow"), "{err}");
+    let off = palette.replacen(
+        "gear_brakk_gun_glow = { hex = \"#39673D\", emissive = true }",
+        "gear_brakk_gun_glow = { hex = \"#39673D\", emissive = false }",
+        1,
+    );
+    let err = load(&off).expect_err("emissive = false must fail load");
+    assert!(err.contains("emissive must be true"), "{err}");
 }
 
 #[test]
