@@ -1260,7 +1260,20 @@ pub struct HeroCard {
     pub ability_cooldown: f32,
     /// True while the ability is running means the magazine does not empty.
     pub infinite_magazine: bool,
+    pub portrait: HeroPortrait,
 }
+
+/// Hero-card portrait. `mesh` must be one of the known portrait meshes.
+#[derive(Clone, Debug)]
+pub struct HeroPortrait {
+    pub mesh: String,
+    pub yaw_deg: f32,
+    pub pitch_deg: f32,
+    pub fit: f32,
+}
+
+/// Meshes a hero portrait may name. `portrait::build` follows this list.
+pub const PORTRAIT_MESHES: &[&str] = &["pulse_rifle", "gauntlet", "slab_shield", "marker_pistol"];
 
 /// One hero's ability, as the act-now cues read it. No hero or ability id.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1341,6 +1354,7 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>, Vec
             Some(toml::Value::Boolean(value)) => *value,
             Some(_) => return Err(format!("characters.toml {id} ability infinite_magazine must be a bool")),
         };
+        let portrait = load_portrait(row, id)?;
         let card = HeroCard {
             id: id.to_string(),
             name: req_str(row, "name", id)?.to_string(),
@@ -1352,6 +1366,7 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>, Vec
             owned: owned.iter().any(|have| have == id),
             ability_cooldown,
             infinite_magazine,
+            portrait,
         };
         if !(card.max_hp > 0.0) {
             return Err(format!("characters.toml {id} max_hp must be > 0"));
@@ -1507,6 +1522,36 @@ fn unit_fraction(value: f32, what: &str) -> Result<f32, String> {
     } else {
         Err(format!("{what} must be in (0, 1)"))
     }
+}
+
+fn load_portrait(row: &toml::map::Map<String, toml::Value>, id: &str) -> Result<HeroPortrait, String> {
+    let table = row
+        .get("portrait")
+        .and_then(|value| value.as_table())
+        .ok_or_else(|| format!("characters.toml {id} is missing portrait"))?;
+    expect_keys(
+        table,
+        &["mesh", "yaw_deg", "pitch_deg", "fit"],
+        &format!("characters.toml {id} portrait"),
+    )?;
+    let mesh = req_str(table, "mesh", &format!("{id} portrait"))?.to_string();
+    if mesh.is_empty() || !PORTRAIT_MESHES.contains(&mesh.as_str()) {
+        return Err(format!("characters.toml {id} portrait mesh \"{mesh}\" is unknown"));
+    }
+    let yaw_deg = req_f32(table, "yaw_deg", &format!("{id} portrait"))?;
+    let pitch_deg = req_f32(table, "pitch_deg", &format!("{id} portrait"))?;
+    let fit = req_f32(table, "fit", &format!("{id} portrait"))?;
+    if !yaw_deg.is_finite() {
+        return Err(format!("characters.toml {id} portrait yaw_deg must be finite"));
+    }
+    // Pitch past a quarter turn flips the portrait. That is the out-of-range case.
+    if !pitch_deg.is_finite() || pitch_deg.abs() > 90.0 {
+        return Err(format!("characters.toml {id} portrait pitch_deg must be in [-90, 90]"));
+    }
+    if !(fit > 0.0 && fit <= 1.0) {
+        return Err(format!("characters.toml {id} portrait fit must be in (0, 1]"));
+    }
+    Ok(HeroPortrait { mesh, yaw_deg, pitch_deg, fit })
 }
 
 fn load_cosmetics(text: &str) -> Result<Cosmetics, String> {
@@ -2774,6 +2819,8 @@ pub struct Palette {
 pub struct HeroColors {
     pub teal: String,
     pub cobalt: String,
+    /// Empty when the line is left out, so `require_palette_keys` can name `hero_white`.
+    #[serde(default)]
     pub white: String,
     /// Filled at load from the starter hero's `accent_key`. Not a palette.toml entry.
     #[serde(default)]
@@ -2897,11 +2944,14 @@ fn require_palette_keys(
     heroes: &[HeroCard],
 ) -> Result<(), String> {
     let check = |owner: &str, name: &str| -> Result<(), String> {
-        if palette.hex(name).is_some() {
+        let hex = palette.hex(name).unwrap_or("");
+        if hex.trim().trim_start_matches('#').len() >= 6 {
             return Ok(());
         }
         Err(format!("{owner} color \"{name}\" does not resolve"))
     };
+    // Locked portraits paint the lit body with this key. Fail here, not in the painter.
+    check("portrait", "hero_white")?;
     for (bug, row) in bugs.rows() {
         if !row.visual.bud_color.is_empty() {
             check(bug, &row.visual.bud_color)?;
@@ -3426,6 +3476,8 @@ pub struct UiLayout {
     pub card_gap: f32,
     /// Portrait height as a fraction of the card. Centered in the top half.
     pub portrait_fraction: f32,
+    /// Locked portrait glow mixes this far from grayscale back toward the accent.
+    pub locked_accent_mix: f32,
     pub card_pad: f32,
     pub pause_keep: f32,
     pub pause_panel_width: f32,
@@ -3473,8 +3525,6 @@ pub struct UiPortrait {
     pub fov_step: f32,
     /// Vertices closer than this, in viewmodel depth, do not fit.
     pub near: f32,
-    /// NDC limit the FOV search uses. A vertex past this is outside the frame.
-    pub fit: f32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -3627,8 +3677,8 @@ fn validate_ui(
     if !(portrait.near > 0.0) {
         return Err("ui.toml portrait.near must be > 0".into());
     }
-    if !(portrait.fit > 0.0 && portrait.fit <= 1.0) {
-        return Err("ui.toml portrait.fit must be in (0, 1]".into());
+    if !(layout.locked_accent_mix > 0.0 && layout.locked_accent_mix < 1.0) {
+        return Err("ui.toml layout.locked_accent_mix must be in (0, 1)".into());
     }
     check_range("sensitivity", settings.sensitivity, settings.sensitivity_min, settings.sensitivity_max, settings.sensitivity_step)?;
     check_range("fov", settings.fov, settings.fov_min, settings.fov_max, settings.fov_step)?;

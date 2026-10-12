@@ -74,6 +74,8 @@ card_height = 500.0
 card_gap = 16.0
 # Portrait height as a fraction of the card. It is centered in the top half, above the name.
 portrait_fraction = 0.40
+# Locked cards stay grayscale. Glowing portrait pixels mix this far back toward the accent.
+locked_accent_mix = 0.35
 card_pad = 12.0
 pause_keep = 0.60
 pause_panel_width = 480.0
@@ -105,7 +107,7 @@ inset_portrait = 4.0
 inset_min = 1.0
 
 # Hero-card portrait framing. bg is a palette.toml key. The FOV search starts at
-# max(viewmodel fov, fov_floor) and steps until every vertex is inside `fit`.
+# max(viewmodel fov, fov_floor) and steps until every vertex is inside that hero's portrait.fit.
 [portrait]
 bg = "portrait_field"
 raster = 320
@@ -113,7 +115,6 @@ fov_floor = 10.0
 fov_limit = 150.0
 fov_step = 4.0
 near = 0.08
-fit = 0.78
 
 [settings]
 sensitivity = 1.0

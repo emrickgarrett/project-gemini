@@ -159,11 +159,12 @@ fn blit_bug(rgb: &mut [u8], width: u32, height: u32, id: &str, origin_x: u32, or
     }
 }
 
-fn grade(r: u8, g: u8, b: u8, dim: f32, desat: f32, floor: f32) -> [u8; 3] {
+/// Away-screen grade. Locked hero cards use this same function so they share its gray.
+pub(crate) fn grade(r: u8, g: u8, b: u8, dim: f32, desat: f32, floor: f32) -> [u8; 3] {
     let rf = r as f32;
     let gf = g as f32;
     let bf = b as f32;
-    let luma = 0.2126 * rf + 0.7152 * gf + 0.0722 * bf;
+    let luma = crate::luma(rf, gf, bf);
     let sat = (1.0 - desat).clamp(0.0, 1.0);
     let keep = (1.0 - dim).clamp(floor, 1.0);
     let mix = |channel: f32| ((luma + (channel - luma) * sat) * keep).round().clamp(0.0, 255.0) as u8;
@@ -314,6 +315,9 @@ mod tests {
         assert!(glow[1] > gray[1], "60% desat is greener than grayscale");
         let clear = grade(0x7C, 0xFF, 0x3A, 0.0, 0.0, hud.dim_floor);
         assert_eq!(clear, [0x7C, 0xFF, 0x3A]);
+        let flat = grade(0x7C, 0xFF, 0x3A, 0.0, 1.0, 0.0);
+        let y = crate::luma(0x7C as f32, 0xFF as f32, 0x3A as f32).round() as u8;
+        assert_eq!(flat, [y, y, y]);
     }
 
     #[test]
