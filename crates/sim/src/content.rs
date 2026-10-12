@@ -128,7 +128,6 @@ impl Content {
         let crate_reveal: CrateReveal = parse("crate_reveal.toml", src.crate_reveal)?;
         validate_reveal_cues(&crate_reveal, &audio)?;
         validate_reveal_layout(&crate_reveal)?;
-        validate_reveal_layout(&crate_reveal.layout)?;
         let palette: Palette = parse("palette.toml", src.palette)?;
         let presentation: Presentation = parse("presentation.toml", src.presentation)?;
         validate_away_hud(&presentation.hud.away)?;
@@ -467,7 +466,7 @@ fn validate_reveal_layout(reveal: &CrateReveal) -> Result<(), String> {
     if !(card.legendary_title_max_scale > card.title_max_scale) {
         return Err("crate_reveal.toml card.legendary_title_max_scale must exceed title_max_scale".into());
     }
-    Ok(())
+    validate_reveal_panel(&reveal.layout)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -2639,7 +2638,7 @@ pub struct RevealLayout {
     pub stage_vignette: [f32; 3],
 }
 
-fn validate_reveal_layout(layout: &RevealLayout) -> Result<(), String> {
+fn validate_reveal_panel(layout: &RevealLayout) -> Result<(), String> {
     if !(layout.panel_width > 0.0) || !(layout.panel_height > 0.0) {
         return Err("crate_reveal.toml layout panel_width and panel_height must be positive".into());
     }
