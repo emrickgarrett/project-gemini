@@ -1,6 +1,8 @@
 # Arena meshes. Collision stays in arena_01.toml. These numbers are visual only.
 # rail_height is a curb, knee or below, so it does not read as the 0.6 collision wall.
-# The still looks at the rim from outside. angle 0 is +X. 90 is the north edge, off the ramps.
+# The rail still stands on the deck at player eye height. angle 0 is +X. 90 is north, off the ramps.
+# inset is how far inside the rim the eye stands. side is arc length along that ring to the scale figure.
+# back is how far past the rim the look sits (negative stays on the deck). up is look height above the deck.
 
 deck_sides = 24
 rail_posts = 48
@@ -12,8 +14,8 @@ review_distance = 15.0
 review_look_height = 0.45
 review_ground_y = 0.02
 rail_still_angle_deg = 90.0
-rail_still_back = 2.4
-rail_still_up = 0.55
-rail_still_side = 1.8
-rail_still_fov = 32.0
-rail_still_inset = 1.2
+rail_still_back = -0.70
+rail_still_up = 0.40
+rail_still_side = 3.20
+rail_still_fov = 72.0
+rail_still_inset = 1.40
