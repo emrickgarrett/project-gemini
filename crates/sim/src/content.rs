@@ -1329,6 +1329,8 @@ pub struct HeroesVisual {
 pub struct CastModel {
     pub id: String,
     pub file: String,
+    /// Cleaned mask PNG under assets/. Red is accent, green is glow.
+    pub mask: String,
     pub triangles: u32,
     pub bytes: u32,
     pub source: String,
@@ -1349,7 +1351,10 @@ pub struct CastModel {
 /// Tint scalars and the side-sheet camera. Colors stay palette keys.
 #[derive(Clone, Debug)]
 pub struct CastLook {
-    pub mask_threshold: f32,
+    /// Mid-gray the body is lifted to, before the base palette key.
+    pub base_light: f32,
+    /// Meshy gray that `base_light` replaces. A texel of this value stays at `base_light`.
+    pub base_gray: f32,
     pub rim_strength: f32,
     /// Palette key. Overdrive multiplies this color by `overdrive_emissive_gain`.
     pub overdrive_emissive_key: String,
@@ -1809,7 +1814,7 @@ fn load_model_rows(
         expect_keys(
             map,
             &[
-                "id", "file", "triangles", "bytes", "source", "license", "task", "base", "accent", "glow", "rim", "fit",
+                "id", "file", "mask", "triangles", "bytes", "source", "license", "task", "base", "accent", "glow", "rim", "fit",
                 "size", "yaw_deg", "at", "grip", "view",
             ],
             &format!("{what} model"),
@@ -1822,6 +1827,11 @@ fn load_model_rows(
         let expected = format!("models/{id}.glb");
         if file != expected {
             return Err(format!("{what} {id} file \"{file}\" is unknown"));
+        }
+        let mask = vis_str(map, "mask", &format!("{what} {id}"))?.to_string();
+        let expected_mask = format!("masks/{id}_mask.png");
+        if mask != expected_mask {
+            return Err(format!("{what} {id} mask \"{mask}\" is unknown"));
         }
         let fit = vis_str(map, "fit", &format!("{what} {id}"))?.to_string();
         if !matches!(fit.as_str(), "hero" | "hitbox" | "weapon" | "shield") {
@@ -1864,6 +1874,7 @@ fn load_model_rows(
         models.push(CastModel {
             id,
             file,
+            mask,
             triangles: vis_u32(map, "triangles", &format!("{what} model"))?,
             bytes: vis_u32(map, "bytes", &format!("{what} model"))?,
             source,
@@ -1922,7 +1933,8 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
     expect_keys(
         table,
         &[
-            "mask_threshold",
+            "base_light",
+            "base_gray",
             "rim_strength",
             "overdrive_emissive_key",
             "overdrive_emissive_gain",
@@ -1936,10 +1948,14 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
         ],
         "cast.toml",
     )?;
-    let mask_threshold = vis_f32(table, "mask_threshold", "cast.toml")?;
+    let base_light = vis_f32(table, "base_light", "cast.toml")?;
+    let base_gray = vis_f32(table, "base_gray", "cast.toml")?;
     let rim_strength = vis_f32(table, "rim_strength", "cast.toml")?;
-    if !(mask_threshold > 0.0 && mask_threshold < 1.0) {
-        return Err("cast.toml mask_threshold must be between 0 and 1".into());
+    if !(base_light > 0.0 && base_light <= 1.0) {
+        return Err("cast.toml base_light must be > 0 and <= 1".into());
+    }
+    if !(base_gray > 0.0 && base_gray <= 1.0) {
+        return Err("cast.toml base_gray must be > 0 and <= 1".into());
     }
     if !(rim_strength >= 0.0 && rim_strength <= 1.0) {
         return Err("cast.toml rim_strength must be between 0 and 1".into());
@@ -1972,7 +1988,8 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
         return Err("cast.toml review camera is out of range".into());
     }
     Ok(CastLook {
-        mask_threshold,
+        base_light,
+        base_gray,
         rim_strength,
         overdrive_emissive_key,
         overdrive_emissive_gain,

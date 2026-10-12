@@ -882,9 +882,10 @@ fn material(
 
 fn mat_of(bank: &Bank, key: &str, emissive: bool, hot: bool) -> Handle<StandardMaterial> {
     let id = format!("{key}:{emissive}:{hot}");
-    bank.mats.get(&id).cloned().unwrap_or_else(|| {
-        bank.mats.values().next().cloned().unwrap_or_default()
-    })
+    bank.mats
+        .get(&id)
+        .cloned()
+        .unwrap_or_else(|| panic!("no material for {id}"))
 }
 
 fn rgba(content: &gemini_sim::content::Content, key: &str) -> Rgba {

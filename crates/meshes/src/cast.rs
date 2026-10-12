@@ -23,6 +23,8 @@ pub struct CastMesh {
     pub indices: Vec<u32>,
     pub base: Tex,
     pub mask: Tex,
+    /// Glb mask. The approved first-person gun still uses this, not the cleaned PNG.
+    source_mask: Tex,
     pub base_key: String,
     pub accent_key: String,
     pub glow_key: String,
@@ -103,6 +105,36 @@ pub fn model_bytes(id: &str) -> Result<&'static [u8], String> {
     })
 }
 
+fn mask_png(id: &str) -> Result<&'static [u8], String> {
+    Ok(match id {
+        "vex_body" => include_bytes!("../../../assets/masks/vex_body_mask.png"),
+        "vex_gun" => include_bytes!("../../../assets/masks/vex_gun_mask.png"),
+        "nyra_body" => include_bytes!("../../../assets/masks/nyra_body_mask.png"),
+        "nyra_gun" => include_bytes!("../../../assets/masks/nyra_gun_mask.png"),
+        "brakk_body" => include_bytes!("../../../assets/masks/brakk_body_mask.png"),
+        "brakk_gun" => include_bytes!("../../../assets/masks/brakk_gun_mask.png"),
+        "brakk_shield" => include_bytes!("../../../assets/masks/brakk_shield_mask.png"),
+        "kip_body" => include_bytes!("../../../assets/masks/kip_body_mask.png"),
+        "kip_gun" => include_bytes!("../../../assets/masks/kip_gun_mask.png"),
+        "swarmer" => include_bytes!("../../../assets/masks/swarmer_mask.png"),
+        "spitter" => include_bytes!("../../../assets/masks/spitter_mask.png"),
+        "brute" => include_bytes!("../../../assets/masks/brute_mask.png"),
+        "brood_mother" => include_bytes!("../../../assets/masks/brood_mother_mask.png"),
+        "hive_tyrant" => include_bytes!("../../../assets/masks/hive_tyrant_mask.png"),
+        other => return Err(format!("unknown mask file \"{other}\"")),
+    })
+}
+
+fn decode_mask(bytes: &[u8], id: &str) -> Result<Tex, String> {
+    let image = image::load_from_memory(bytes).map_err(|err| format!("{id} mask: {err}"))?;
+    let rgba = image.to_rgba8();
+    Ok(Tex {
+        w: rgba.width(),
+        h: rgba.height(),
+        rgba: rgba.into_raw(),
+    })
+}
+
 pub fn check_budget(id: &str, tris: usize, file_len: usize, tri_budget: u32, byte_budget: u32) -> Result<(), String> {
     if file_len > byte_budget as usize {
         return Err(format!("{id} is {file_len} bytes, budget {byte_budget}"));
@@ -127,6 +159,12 @@ fn fit_model(bytes: &[u8], spec: &CastModel, content: &Content) -> Result<CastMe
     if spec.yaw_deg != 0.0 && spec.fit != "weapon" {
         yaw_about_center(&mut decoded.positions, &mut decoded.normals, spec.yaw_deg);
     }
+    let source_mask = Tex {
+        w: decoded.mask.w,
+        h: decoded.mask.h,
+        rgba: decoded.mask.rgba.clone(),
+    };
+    decoded.mask = decode_mask(mask_png(&spec.id)?, &spec.id)?;
     Ok(CastMesh {
         id: spec.id.clone(),
         positions: decoded.positions,
@@ -135,6 +173,7 @@ fn fit_model(bytes: &[u8], spec: &CastModel, content: &Content) -> Result<CastMe
         indices: decoded.indices,
         base: decoded.base,
         mask: decoded.mask,
+        source_mask,
         base_key: spec.base.clone(),
         accent_key: spec.accent.clone(),
         glow_key: spec.glow.clone(),
@@ -497,8 +536,11 @@ pub fn bake_textures(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> (u3
         let c = palette(&mesh.rim_key);
         [c[0], c[1], c[2], 1.0]
     };
-    let (mask_threshold, rim_strength) = tint_constants();
-    let fresnel = if mesh.rim_key.is_empty() { 0.0 } else { 1.0 };
+    let (base_light, base_gray, rim_strength) = tint_constants();
+    // The baked albedo has no view. Rim is the fresnel in the still raster.
+    // First-person guns keep the approved grade so the Vex still does not move.
+    let view_gun = mesh.id.ends_with("_gun");
+    let fresnel = 0.0;
     let mut albedo = vec![0u8; (w * h * 4) as usize];
     let mut emit = vec![0u8; (w * h * 4) as usize];
     for y in 0..h {
@@ -506,14 +548,18 @@ pub fn bake_textures(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> (u3
             let u = if w > 1 { x as f32 / (w as f32 - 1.0) } else { 0.0 };
             let v = if h > 1 { 1.0 - (y as f32 / (h as f32 - 1.0)) } else { 0.0 };
             let base = sample(&mesh.base, [u, v]);
-            let mask = sample(&mesh.mask, [u, v]);
-            let color = tint_texel(base, mask, base_c, accent, glow, rim, 1.0, fresnel, mask_threshold, rim_strength);
+            let mask = sample(if view_gun { &mesh.source_mask } else { &mesh.mask }, [u, v]);
+            let color = if view_gun {
+                tint_view_gun(base, mask, base_c, accent, glow, rim, 1.0, fresnel)
+            } else {
+                tint_texel(base, mask, base_c, accent, glow, rim, 1.0, fresnel, base_light, base_gray, rim_strength)
+            };
             let i = ((y * w + x) * 4) as usize;
             albedo[i] = (color[0].clamp(0.0, 1.0) * 255.0).round() as u8;
             albedo[i + 1] = (color[1].clamp(0.0, 1.0) * 255.0).round() as u8;
             albedo[i + 2] = (color[2].clamp(0.0, 1.0) * 255.0).round() as u8;
             albedo[i + 3] = 255;
-            if mask[1] >= mask_threshold {
+            if (!view_gun && mask[1] > 0.0) || (view_gun && mask[1] >= VIEW_MASK_THRESHOLD) {
                 emit[i] = (glow[0].clamp(0.0, 1.0) * 255.0).round() as u8;
                 emit[i + 1] = (glow[1].clamp(0.0, 1.0) * 255.0).round() as u8;
                 emit[i + 2] = (glow[2].clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -524,8 +570,8 @@ pub fn bake_textures(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> (u3
     (w, h, albedo, emit)
 }
 
-/// Sample the mask and the gray base. Red is accent or magenta. Green is the acid glow.
-/// The unmasked gray is multiplied by `base`. Empty rim skips the fresnel.
+/// The cleaned mask is applied as stored. Green is the glow. Red is the accent.
+/// An empty mask lifts the gray base from `base_gray` to `base_light`. There is no noise threshold.
 pub fn tint_texel(
     base: [f32; 3],
     mask: [f32; 3],
@@ -535,32 +581,61 @@ pub fn tint_texel(
     rim: [f32; 4],
     shade: f32,
     fresnel: f32,
-    mask_threshold: f32,
+    base_light: f32,
+    base_gray: f32,
     rim_strength: f32,
+) -> [f32; 3] {
+    if mask[1] > 0.0 {
+        return [glow[0], glow[1], glow[2]];
+    }
+    if mask[0] > 0.0 {
+        return [accent[0], accent[1], accent[2]];
+    }
+    let lift = base_light / base_gray.max(1.0e-4);
+    let mut color = [
+        base[0] * lift * base_c[0] * shade,
+        base[1] * lift * base_c[1] * shade,
+        base[2] * lift * base_c[2] * shade,
+    ];
+    if rim[3] > 0.0 || rim[0] + rim[1] + rim[2] > 0.0 {
+        let k = fresnel * rim_strength;
+        color[0] += rim[0] * k;
+        color[1] += rim[1] * k;
+        color[2] += rim[2] * k;
+    }
+    color
+}
+
+/// Approved first-person gun grade. Not a cast.toml key. The #12 still was painted this way.
+const VIEW_MASK_THRESHOLD: f32 = 0.45;
+const VIEW_RIM_STRENGTH: f32 = 0.35;
+
+fn tint_view_gun(
+    base: [f32; 3],
+    mask: [f32; 3],
+    base_c: [f32; 4],
+    accent: [f32; 4],
+    glow: [f32; 4],
+    rim: [f32; 4],
+    shade: f32,
+    fresnel: f32,
 ) -> [f32; 3] {
     let r = mask[0];
     let g = mask[1];
-    if g >= mask_threshold {
+    if g >= VIEW_MASK_THRESHOLD {
         return [glow[0], glow[1], glow[2]];
     }
-    if r >= mask_threshold {
+    if r >= VIEW_MASK_THRESHOLD {
         return [accent[0], accent[1], accent[2]];
     }
     let unmasked = (1.0 - r - g).clamp(0.0, 1.0);
-    let gray = [
-        base[0] * base_c[0] * shade,
-        base[1] * base_c[1] * shade,
-        base[2] * base_c[2] * shade,
-    ];
-    let accented = [base[0] * accent[0], base[1] * accent[1], base[2] * accent[2]];
-    let acid = [glow[0], glow[1], glow[2]];
     let mut color = [
-        gray[0] * unmasked + accented[0] * r + acid[0] * g,
-        gray[1] * unmasked + accented[1] * r + acid[1] * g,
-        gray[2] * unmasked + accented[2] * r + acid[2] * g,
+        base[0] * base_c[0] * shade * unmasked + base[0] * accent[0] * r + glow[0] * g,
+        base[1] * base_c[1] * shade * unmasked + base[1] * accent[1] * r + glow[1] * g,
+        base[2] * base_c[2] * shade * unmasked + base[2] * accent[2] * r + glow[2] * g,
     ];
     if rim[3] > 0.0 || rim[0] + rim[1] + rim[2] > 0.0 {
-        let k = fresnel * rim_strength * unmasked;
+        let k = fresnel * VIEW_RIM_STRENGTH * unmasked;
         color[0] += rim[0] * k;
         color[1] += rim[1] * k;
         color[2] += rim[2] * k;
@@ -602,9 +677,131 @@ pub fn paint(
         let c = palette(&mesh.rim_key);
         [c[0], c[1], c[2], 1.0]
     };
-    let (mask_threshold, rim_strength) = tint_constants();
+    let (base_light, base_gray, rim_strength) = tint_constants();
     let xform = |p: [f32; 3]| place_point(p, &place);
     let rotate_n = |n: [f32; 3]| place_normal(n, &place);
+    paint_tris(
+        color,
+        depth,
+        None,
+        mesh,
+        &xform,
+        &rotate_n,
+        cam,
+        base_c,
+        accent,
+        glow,
+        rim,
+        silhouette,
+        base_light,
+        base_gray,
+        rim_strength,
+        false,
+    );
+}
+
+/// First-person gun. Uses the glb mask and the approved grade, not the cleaned review tint.
+pub fn paint_approved_gun(
+    color: &mut [u8],
+    depth: &mut [f32],
+    mesh: &CastMesh,
+    place: Placement,
+    palette: &dyn Fn(&str) -> [f32; 4],
+    cam: &PaintCam,
+) {
+    let base_c = palette(&mesh.base_key);
+    let accent = palette(&mesh.accent_key);
+    let glow = palette(&mesh.glow_key);
+    let rim = if mesh.rim_key.is_empty() {
+        [0.0, 0.0, 0.0, 0.0]
+    } else {
+        let c = palette(&mesh.rim_key);
+        [c[0], c[1], c[2], 1.0]
+    };
+    let (base_light, base_gray, rim_strength) = tint_constants();
+    let xform = |p: [f32; 3]| place_point(p, &place);
+    let rotate_n = |n: [f32; 3]| place_normal(n, &place);
+    paint_tris(
+        color,
+        depth,
+        None,
+        mesh,
+        &xform,
+        &rotate_n,
+        cam,
+        base_c,
+        accent,
+        glow,
+        rim,
+        false,
+        base_light,
+        base_gray,
+        rim_strength,
+        true,
+    );
+}
+
+/// Same raster as `paint`, plus a per-pixel tag: 1 when the winning fragment's mask is on.
+#[cfg(test)]
+fn paint_tagged(
+    color: &mut [u8],
+    depth: &mut [f32],
+    tags: &mut [u8],
+    mesh: &CastMesh,
+    place: Placement,
+    palette: &dyn Fn(&str) -> [f32; 4],
+    cam: &PaintCam,
+) {
+    let base_c = palette(&mesh.base_key);
+    let accent = palette(&mesh.accent_key);
+    let glow = palette(&mesh.glow_key);
+    let rim = if mesh.rim_key.is_empty() {
+        [0.0, 0.0, 0.0, 0.0]
+    } else {
+        let c = palette(&mesh.rim_key);
+        [c[0], c[1], c[2], 1.0]
+    };
+    let (base_light, base_gray, rim_strength) = tint_constants();
+    let xform = |p: [f32; 3]| place_point(p, &place);
+    let rotate_n = |n: [f32; 3]| place_normal(n, &place);
+    paint_tris(
+        color,
+        depth,
+        Some(tags),
+        mesh,
+        &xform,
+        &rotate_n,
+        cam,
+        base_c,
+        accent,
+        glow,
+        rim,
+        false,
+        base_light,
+        base_gray,
+        rim_strength,
+        false,
+    );
+}
+
+fn paint_tris(
+    color: &mut [u8],
+    depth: &mut [f32],
+    mut tags: Option<&mut [u8]>,
+    mesh: &CastMesh,
+    xform: &dyn Fn([f32; 3]) -> [f32; 3],
+    rotate_n: &dyn Fn([f32; 3]) -> [f32; 3],
+    cam: &PaintCam,
+    base_c: [f32; 4],
+    accent: [f32; 4],
+    glow: [f32; 4],
+    rim: [f32; 4],
+    silhouette: bool,
+    base_light: f32,
+    base_gray: f32,
+    rim_strength: f32,
+    view_gun: bool,
+) {
     for tri in mesh.indices.chunks(3) {
         if tri.len() < 3 {
             continue;
@@ -617,6 +814,7 @@ pub fn paint(
         fill_textured(
             color,
             depth,
+            tags.as_deref_mut(),
             cam,
             mesh,
             ids,
@@ -624,29 +822,32 @@ pub fn paint(
             b,
             c,
             world,
-            &rotate_n,
+            rotate_n,
             base_c,
             accent,
             glow,
             rim,
             silhouette,
-            mask_threshold,
+            base_light,
+            base_gray,
             rim_strength,
+            view_gun,
         );
     }
 }
 
-fn tint_constants() -> (f32, f32) {
-    static CELL: OnceLock<(f32, f32)> = OnceLock::new();
+fn tint_constants() -> (f32, f32, f32) {
+    static CELL: OnceLock<(f32, f32, f32)> = OnceLock::new();
     *CELL.get_or_init(|| {
         let look = &Content::embedded().cast;
-        (look.mask_threshold, look.rim_strength)
+        (look.base_light, look.base_gray, look.rim_strength)
     })
 }
 
 fn fill_textured(
     color: &mut [u8],
     depth: &mut [f32],
+    mut tags: Option<&mut [u8]>,
     cam: &PaintCam,
     mesh: &CastMesh,
     ids: [usize; 3],
@@ -660,8 +861,10 @@ fn fill_textured(
     glow: [f32; 4],
     rim: [f32; 4],
     silhouette: bool,
-    mask_threshold: f32,
+    base_light: f32,
+    base_gray: f32,
     rim_strength: f32,
+    view_gun: bool,
 ) {
     let min_x = a[0].min(b[0]).min(c[0]).floor().max(0.0) as i32;
     let max_x = a[0].max(b[0]).max(c[0]).ceil().min(cam.w as f32 - 1.0) as i32;
@@ -688,13 +891,17 @@ fn fill_textured(
                 continue;
             }
             depth[idx] = z;
+            let uv = [
+                uvs[0][0] * w0 + uvs[1][0] * w1 + uvs[2][0] * w2,
+                uvs[0][1] * w0 + uvs[1][1] * w1 + uvs[2][1] * w2,
+            ];
+            let mask = sample(if view_gun { &mesh.source_mask } else { &mesh.mask }, uv);
+            if let Some(tags) = tags.as_deref_mut() {
+                tags[idx] = if mask[0] > 0.0 || mask[1] > 0.0 { 1 } else { 0 };
+            }
             let rgb = if silhouette {
                 [0x29, 0x29, 0x29]
             } else {
-                let uv = [
-                    uvs[0][0] * w0 + uvs[1][0] * w1 + uvs[2][0] * w2,
-                    uvs[0][1] * w0 + uvs[1][1] * w1 + uvs[2][1] * w2,
-                ];
                 let n = [
                     normals[0][0] * w0 + normals[1][0] * w1 + normals[2][0] * w2,
                     normals[0][1] * w0 + normals[1][1] * w1 + normals[2][1] * w2,
@@ -712,18 +919,24 @@ fn fill_textured(
                 let nd = norm(n);
                 let facing = (nd[0] * view[0] + nd[1] * view[1] + nd[2] * view[2]).clamp(0.0, 1.0);
                 let fresnel = (1.0 - facing).powf(2.0);
-                let texel = tint_texel(
-                    sample(&mesh.base, uv),
-                    sample(&mesh.mask, uv),
-                    base_c,
-                    accent,
-                    glow,
-                    rim,
-                    shade,
-                    fresnel,
-                    mask_threshold,
-                    rim_strength,
-                );
+                let sampled = sample(if view_gun { &mesh.source_mask } else { &mesh.mask }, uv);
+                let texel = if view_gun {
+                    tint_view_gun(sample(&mesh.base, uv), sampled, base_c, accent, glow, rim, shade, fresnel)
+                } else {
+                    tint_texel(
+                        sample(&mesh.base, uv),
+                        sampled,
+                        base_c,
+                        accent,
+                        glow,
+                        rim,
+                        shade,
+                        fresnel,
+                        base_light,
+                        base_gray,
+                        rim_strength,
+                    )
+                };
                 [
                     (texel[0].clamp(0.0, 1.0) * 255.0).round() as u8,
                     (texel[1].clamp(0.0, 1.0) * 255.0).round() as u8,
@@ -918,6 +1131,12 @@ mod tests {
                     let gap = dist(center, place.offset);
                     assert!(gap < 1.0e-3, "{id} {name} center is {gap} off the pod hit");
                     let mesh_r = local_radius(&part.mesh.positions);
+                    let authored = content_visual_radius(id, "pod");
+                    assert!(authored > 0.0, "{id} pod glow is missing visual_radius");
+                    assert!(
+                        (mesh_r - authored).abs() < 1.0e-2,
+                        "{id} {name} mesh radius {mesh_r:.3} is not the content visual radius {authored:.3}"
+                    );
                     assert!(
                         mesh_r <= radius + 1.0e-3,
                         "{id} {name} glow radius {mesh_r:.3} is outside the pod hit {radius:.3}"
@@ -1029,6 +1248,23 @@ mod tests {
         }
         let glow = PartBounds { min: glow_min, max: glow_max };
         assert!(hit.overlaps(glow), "{id} {slot} glow {glow:?} misses the hit {hit:?}");
+        let authored = content_visual_radius(id, name);
+        assert!(authored > 0.0, "{id} {name} glow is missing visual_radius");
+        assert!(
+            authored <= shape.bounding_radius() + 1.0e-3,
+            "{id} {slot} visual radius {authored:.3} is larger than the hit {}",
+            shape.bounding_radius()
+        );
+        for p in &part.mesh.positions {
+            let p = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
+            let p = crate::pose::rotate_vec(xf.rot, p);
+            let world = [p[0] + xf.pos[0], p[1] + xf.pos[1], p[2] + xf.pos[2]];
+            assert!(
+                point_in_shape(shape, world),
+                "{id} {slot} glow vertex {world:?} is outside the hit at {:?}",
+                shape.offset
+            );
+        }
         assert!(
             point_in_shape(shape, centroid),
             "{id} {slot} glow center {centroid:?} is outside the hit at {:?} r {}",
@@ -1055,6 +1291,17 @@ mod tests {
             }
             _ => (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() <= shape.radius + 1.0e-3,
         }
+    }
+
+    fn content_visual_radius(id: &str, name: &str) -> f32 {
+        let content = Content::embedded();
+        let (_, row) = content.bugs.rows().into_iter().find(|(bug, _)| *bug == id).unwrap();
+        row.visual
+            .parts
+            .iter()
+            .find(|part| part.name == name)
+            .map(|part| part.visual_radius)
+            .unwrap_or(0.0)
     }
 
     fn local_radius(positions: &[[f32; 3]]) -> f32 {
@@ -1089,19 +1336,230 @@ mod tests {
     #[test]
     fn tint_honors_the_content_mask_and_rim() {
         let look = &Content::embedded().cast;
-        assert!((look.mask_threshold - 0.45).abs() < 1.0e-6);
-        assert!((look.rim_strength - 0.35).abs() < 1.0e-6);
-        let base = [0.5, 0.5, 0.5];
-        let mask = [0.46, 0.0, 0.0];
+        assert!((look.base_light - 0.5).abs() < 1.0e-6);
+        assert!((look.base_gray - 0.25).abs() < 1.0e-6);
+        assert!((look.rim_strength - 1.0).abs() < 1.0e-6);
+        let text = include_str!("../../../content/cast.toml");
+        assert!(!text.contains("mask_threshold"), "mask_threshold is not a cast key");
+        let base = [look.base_gray, look.base_gray, look.base_gray];
         let accent = [1.0, 0.0, 0.0, 1.0];
         let glow = [0.0, 1.0, 0.0, 1.0];
         let rim = [1.0, 1.0, 1.0, 1.0];
-        let base_c = [0.0, 0.0, 0.0, 1.0];
-        let hit = tint_texel(base, mask, base_c, accent, glow, rim, 1.0, 0.0, look.mask_threshold, look.rim_strength);
-        assert_eq!(hit, [1.0, 0.0, 0.0]);
-        let miss = tint_texel(base, mask, base_c, accent, glow, rim, 1.0, 0.0, 0.50, look.rim_strength);
-        assert!(miss[0] < 0.9, "a higher threshold must leave the texel unmasked");
-        let edged = tint_texel(base, [0.0, 0.0, 0.0], base_c, accent, glow, rim, 1.0, 1.0, look.mask_threshold, look.rim_strength);
-        assert!((edged[0] - look.rim_strength).abs() < 1.0e-4, "rim strength {edged:?}");
+        let base_c = [0.2, 0.4, 0.6, 1.0];
+        let painted = tint_texel(base, [1.0, 0.0, 0.0], base_c, accent, glow, rim, 1.0, 0.0, look.base_light, look.base_gray, look.rim_strength);
+        assert_eq!(painted, [1.0, 0.0, 0.0]);
+        let acid = tint_texel(base, [0.0, 1.0, 0.0], base_c, accent, glow, rim, 1.0, 0.0, look.base_light, look.base_gray, look.rim_strength);
+        assert_eq!(acid, [0.0, 1.0, 0.0]);
+        let body = tint_texel(base, [0.0, 0.0, 0.0], base_c, accent, glow, rim, 1.0, 0.0, look.base_light, look.base_gray, look.rim_strength);
+        assert!((body[0] - look.base_light * base_c[0]).abs() < 1.0e-4, "mid-gray lift {body:?}");
+        let edged = tint_texel(base, [0.0, 0.0, 0.0], base_c, accent, glow, rim, 1.0, 1.0, look.base_light, look.base_gray, look.rim_strength);
+        assert!((edged[0] - (body[0] + look.rim_strength)).abs() < 1.0e-4, "rim {edged:?}");
     }
+
+    #[test]
+    fn an_unmasked_body_texel_is_not_the_weak_color() {
+        let content = Content::embedded();
+        let look = &content.cast;
+        for id in ["swarmer", "spitter", "brute", "brood_mother", "hive_tyrant"] {
+            let mesh = cast(id);
+            let weak = content.palette.key(&mesh.accent_key);
+            let acid = content.palette.key(&mesh.glow_key);
+            let base_c = content.palette.key(&mesh.base_key);
+            let rim = if mesh.rim_key.is_empty() {
+                [0.0, 0.0, 0.0, 0.0]
+            } else {
+                let c = content.palette.key(&mesh.rim_key);
+                [c[0], c[1], c[2], 1.0]
+            };
+            let mut off = 0usize;
+            for i in (0..mesh.mask.rgba.len()).step_by(4) {
+                let mask = [
+                    mesh.mask.rgba[i] as f32 / 255.0,
+                    mesh.mask.rgba[i + 1] as f32 / 255.0,
+                    mesh.mask.rgba[i + 2] as f32 / 255.0,
+                ];
+                if mask[0] > 0.0 || mask[1] > 0.0 {
+                    continue;
+                }
+                off += 1;
+                let u = ((i / 4) % mesh.mask.w as usize) as f32 / (mesh.mask.w.max(2) - 1) as f32;
+                let v = ((i / 4) / mesh.mask.w as usize) as f32 / (mesh.mask.h.max(2) - 1) as f32;
+                let base = sample(&mesh.base, [u, 1.0 - v]);
+                for shade in [0.6_f32, 1.0] {
+                    let color = tint_texel(
+                        base,
+                        mask,
+                        base_c,
+                        weak,
+                        acid,
+                        rim,
+                        shade,
+                        0.0,
+                        look.base_light,
+                        look.base_gray,
+                        look.rim_strength,
+                    );
+                    assert!(
+                        away(color, weak) && away(color, acid),
+                        "{id} unmasked texel {color:?} is a weak-point color"
+                    );
+                }
+            }
+            assert!(off > 0, "{id} mask has no empty texels");
+            for px in mesh.mask.rgba.chunks_exact(4) {
+                for channel in &px[..3] {
+                    assert!(
+                        *channel == 0 || *channel == 255,
+                        "{id} mask is not the cleaned binary PNG"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rendered_body_pixels_away_from_the_glow_are_not_the_weak_color() {
+        let content = Content::embedded();
+        let w = 96u32;
+        let h = 96u32;
+        let bg = [0x11u8, 0x13, 0x18];
+        for id in ["swarmer", "spitter", "brute", "brood_mother", "hive_tyrant"] {
+            let mesh = cast(id);
+            let (mn, mx) = bounds(&mesh.positions);
+            let center = [(mn[0] + mx[0]) * 0.5, (mn[1] + mx[1]) * 0.5, (mn[2] + mx[2]) * 0.5];
+            let ext = [mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]];
+            let radius = (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt() * 0.5;
+            let eye = [
+                center[0] + radius * 1.7,
+                center[1] + radius * 0.45,
+                center[2] + radius * 1.9,
+            ];
+            let cam = look_cam(eye, center, 32.0, w, h);
+            let mut color = Vec::with_capacity((w * h * 3) as usize);
+            for _ in 0..(w * h) {
+                color.extend_from_slice(&bg);
+            }
+            let mut depth = vec![f32::INFINITY; (w * h) as usize];
+            let mut tags = vec![0u8; (w * h) as usize];
+            let palette = |name: &str| content.palette.key(name);
+            paint_tagged(
+                &mut color,
+                &mut depth,
+                &mut tags,
+                mesh,
+                Placement {
+                    pre_yaw: 0.0,
+                    pre_shift: [0.0, 0.0, 0.0],
+                    yaw_deg: 0.0,
+                    lean: 0.0,
+                    pivot: [0.0, 0.0, 0.0],
+                    shift: [0.0, 0.0, 0.0],
+                },
+                &palette,
+                &cam,
+            );
+            let weak = [
+                content.palette.key(&mesh.accent_key),
+                content.palette.key(&mesh.glow_key),
+            ];
+            let (_, row) = content.bugs.rows().into_iter().find(|(bug, _)| *bug == id).unwrap();
+            let mut discs = Vec::new();
+            for (_, shape) in row.hitbox.anchored() {
+                if let Some(disc) = glow_disc(shape, &cam) {
+                    discs.push(disc);
+                }
+            }
+            for place in &row.hitbox.pods {
+                if let Some(disc) = glow_disc_at(place.offset, row.hitbox.pod_radius().unwrap_or(0.0), &cam) {
+                    discs.push(disc);
+                }
+            }
+            let mut body = 0u32;
+            let mut bad = 0u32;
+            for i in 0..(w * h) as usize {
+                let px = [color[i * 3], color[i * 3 + 1], color[i * 3 + 2]];
+                if px == bg {
+                    continue;
+                }
+                let x = (i as u32 % w) as f32 + 0.5;
+                let y = (i as u32 / w) as f32 + 0.5;
+                let on_glow = discs.iter().any(|(cx, cy, r)| {
+                    let dx = x - cx;
+                    let dy = y - cy;
+                    dx * dx + dy * dy <= r * r
+                });
+                if on_glow || tags[i] != 0 {
+                    continue;
+                }
+                body += 1;
+                if weak.iter().any(|key| !byte_away(px, *key)) {
+                    bad += 1;
+                }
+            }
+            assert!(body > 30, "{id} rendered almost no body away from the glow ({body} px)");
+            assert_eq!(bad, 0, "{id} has {bad} body pixels away from the glow in a weak-point color");
+        }
+    }
+}
+
+#[cfg(test)]
+fn byte_away(px: [u8; 3], key: [f32; 4]) -> bool {
+    let want = [
+        (key[0].clamp(0.0, 1.0) * 255.0).round() as i32,
+        (key[1].clamp(0.0, 1.0) * 255.0).round() as i32,
+        (key[2].clamp(0.0, 1.0) * 255.0).round() as i32,
+    ];
+    (px[0] as i32 - want[0]).abs() > 20 || (px[1] as i32 - want[1]).abs() > 20 || (px[2] as i32 - want[2]).abs() > 20
+}
+
+#[cfg(test)]
+fn look_cam(eye: [f32; 3], target: [f32; 3], fov_deg: f32, w: u32, h: u32) -> PaintCam {
+    let forward = norm(sub(target, eye));
+    let hint = if forward[1].abs() > 0.92 { [0.0, 0.0, 1.0] } else { [0.0, 1.0, 0.0] };
+    let right = norm(cross(forward, hint));
+    let up = cross(right, forward);
+    let fov = fov_deg.to_radians();
+    PaintCam {
+        eye,
+        right,
+        up,
+        forward,
+        focal: 1.0 / (fov * 0.5).tan(),
+        aspect: w as f32 / h as f32,
+        w,
+        h,
+        key: norm([-0.2, 0.92, 0.28]),
+        fill: norm([0.55, 0.35, -0.45]),
+    }
+}
+
+#[cfg(test)]
+fn glow_disc(shape: &gemini_sim::bugs::ShapeDef, cam: &PaintCam) -> Option<(f32, f32, f32)> {
+    glow_disc_at(shape.offset, shape.bounding_radius(), cam)
+}
+
+#[cfg(test)]
+fn glow_disc_at(center: [f32; 3], radius: f32, cam: &PaintCam) -> Option<(f32, f32, f32)> {
+    let screen = project(center, cam)?;
+    let edge = project(
+        [
+            center[0] + cam.right[0] * radius,
+            center[1] + cam.right[1] * radius,
+            center[2] + cam.right[2] * radius,
+        ],
+        cam,
+    )?;
+    let dx = screen[0] - edge[0];
+    let dy = screen[1] - edge[1];
+    Some((screen[0], screen[1], (dx * dx + dy * dy).sqrt() + 2.0))
+}
+
+#[cfg(test)]
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+#[cfg(test)]
+fn away(color: [f32; 3], key: [f32; 4]) -> bool {
+    (color[0] - key[0]).abs() > 0.08 || (color[1] - key[1]).abs() > 0.08 || (color[2] - key[2]).abs() > 0.08
 }

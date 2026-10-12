@@ -7,6 +7,7 @@
 [[model]]
 id = "swarmer"
 file = "models/swarmer.glb"
+mask = "masks/swarmer_mask.png"
 triangles = 7200
 bytes = 1100000
 source = "Meshy"
@@ -26,6 +27,7 @@ view = [0.0, 0.0, 0.0]
 [[model]]
 id = "spitter"
 file = "models/spitter.glb"
+mask = "masks/spitter_mask.png"
 triangles = 8000
 bytes = 1100000
 source = "Meshy"
@@ -45,6 +47,7 @@ view = [0.0, 0.0, 0.0]
 [[model]]
 id = "brute"
 file = "models/brute.glb"
+mask = "masks/brute_mask.png"
 triangles = 16500
 bytes = 1100000
 source = "Meshy"
@@ -64,6 +67,7 @@ view = [0.0, 0.0, 0.0]
 [[model]]
 id = "brood_mother"
 file = "models/brood_mother.glb"
+mask = "masks/brood_mother_mask.png"
 triangles = 16000
 bytes = 1100000
 source = "Meshy"
@@ -83,6 +87,7 @@ view = [0.0, 0.0, 0.0]
 [[model]]
 id = "hive_tyrant"
 file = "models/hive_tyrant.glb"
+mask = "masks/hive_tyrant_mask.png"
 triangles = 16500
 bytes = 1100000
 source = "Meshy"

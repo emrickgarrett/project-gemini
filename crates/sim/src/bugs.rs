@@ -93,6 +93,9 @@ pub struct VisualPart {
     pub color: String,
     #[serde(default)]
     pub emissive: bool,
+    /// Glow mesh radius. Separate from the hitbox radius. Zero on parts that are not a glow.
+    #[serde(default)]
+    pub visual_radius: f32,
     #[serde(default)]
     pub mirror: bool,
     #[serde(default)]

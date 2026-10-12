@@ -14,7 +14,7 @@ mod reveal_still;
 mod visual;
 
 pub use cast::{
-    bake_textures, body_pivot, cast, casts, hero_pieces, hero_placement, load_catalog, model_bytes, muzzle_tip, place_point, read_model_file,
+    bake_textures, body_pivot, cast, casts, hero_pieces, hero_placement, load_catalog, model_bytes, muzzle_tip, paint_approved_gun, place_point, read_model_file,
     CastMesh, PaintCam, Placement,
 };
 
@@ -27,7 +27,7 @@ pub use reveal_still::{paint_reveal, reveal_still_is_flat, still_color_stats};
 pub use pose::{pose, root_motion, AnimInput, Pose, Xform};
 pub use preview::{
     missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_in_arena, raster_model, raster_rail_edge, raster_top,
-    raster_viewmodel, still,
+    raster_crowd, raster_viewmodel, still,
     still_open, still_top, ViewmodelFrame,
 };
 pub use visual::{bug, catalog, flat_shaded, EnemyVisual, Gate, Joint, Part, ShotCamera};
@@ -428,10 +428,10 @@ mod tests {
     fn anchors_follow_the_visual_table() {
         let sp = bug("spitter");
         let sac = sp.parts.iter().find(|p| p.name == "sac").expect("sac");
-        assert!(near(sac.rest_pos, [0.0, 1.02, -0.02], 0.02), "{:?}", sac.rest_pos);
+        assert!(near(sac.rest_pos, [0.0, 0.74, -0.22], 0.02), "{:?}", sac.rest_pos);
         assert!(sac.emissive);
         let gland = bug("brood_mother").parts.iter().find(|p| p.name == "gland").expect("gland");
-        assert!(near(gland.rest_pos, [0.0, 0.9, 2.0], 0.02));
+        assert!(near(gland.rest_pos, [0.0, 1.50, 1.20], 0.02));
         assert!(gland.emissive);
         let core = bug("hive_tyrant").parts.iter().find(|p| p.name == "core").expect("core");
         assert!(near(core.rest_pos, [0.0, 3.4, 1.0], 0.02));
@@ -627,7 +627,7 @@ mod tests {
             .iter()
             .map(|p| p[0].abs().max(p[1].abs()).max(p[2].abs()))
             .fold(0.0_f32, f32::max);
-        assert!((rad - 0.575).abs() < 0.05, "pod radius {rad}");
+        assert!((rad - 0.22).abs() < 0.02, "pod radius {rad}");
         let posed = pose(
             brood,
             AnimInput {
@@ -920,6 +920,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Wall clock for one software raster of 300 swarmers. That is the headless
+    /// stand-in for a client frame. It is not run in CI.
+    /// `cargo test -p gemini-meshes --release -- --ignored --nocapture crowd_frame`
+    #[test]
+    #[ignore = "one-time release measurement of a software frame with 300 bugs"]
+    fn crowd_frame_time_release_at_three_hundred_bugs() {
+        use std::time::Instant;
+        let cap = gemini_sim::content::Content::embedded().waves.budget.live_enemy_cap as usize;
+        assert_eq!(cap, 300);
+        let start = Instant::now();
+        let rgb = raster_crowd(cap, 960, 540);
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        let painted = painted_pixels(&rgb);
+        eprintln!("release software frame, 300 swarmers, 960x540: {ms:.1} ms, {painted} painted px");
+        assert!(painted > 1000, "the crowd frame is blank ({painted} px)");
     }
 
     fn mesh_radius(mesh: &MeshData) -> f32 {

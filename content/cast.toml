@@ -1,8 +1,10 @@
 # Cast tint and the review orbit. The mesh crate and the client read these.
 # They do not keep a second copy of the numbers.
 #
-# Mask red at or above `mask_threshold` is the accent palette key.
-# Mask green at or above it is the glow palette key, unlit.
+# The cleaned mask PNGs are solid. Red is the accent palette key.
+# Green is the glow palette key, unlit. There is no noise threshold.
+# A texel at `base_gray` is lifted to `base_light` (mid-gray) before the
+# model's base palette key. Hero dark tones are the hero_*_base keys.
 # `rim_strength` scales the fresnel on unmasked texels when a model has a rim key.
 # Overdrive gun emissive is `overdrive_emissive_key` scaled per channel.
 # The gains are HDR, so they are not hex colors.
@@ -10,8 +12,9 @@
 # The review orbit is the camera from the approved side_<id>.png sheets
 # (distance is radii, vertical field of view in degrees).
 
-mask_threshold = 0.45
-rim_strength = 0.35
+base_light = 0.5
+base_gray = 0.25
+rim_strength = 1.0
 overdrive_emissive_key = "accent"
 overdrive_emissive_gain = [5.0, 2.2, 0.4]
 pod_glow_key = "swarmer_glow"

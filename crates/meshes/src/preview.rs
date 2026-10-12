@@ -373,7 +373,7 @@ fn paint_view_gun(color: &mut [u8], depth: &mut [f32], frame: &ViewmodelFrame, y
         fill: norm([0.6, 0.25, -0.35]),
     };
     let palette = palette_of();
-    crate::cast::paint(color, depth, gun, place, &palette, &cam, false);
+    crate::cast::paint_approved_gun(color, depth, gun, place, &palette, &cam);
 }
 
 fn draw_parts(
@@ -787,6 +787,75 @@ pub fn raster_rail_edge(width: u32, height: u32) -> Vec<u8> {
         &extras,
         Some(stand),
     )
+}
+
+/// One software frame of `count` swarmers on the deck. Used to time a client-style
+/// raster with the live-enemy cap on screen. Not a GPU frame.
+pub fn raster_crowd(count: usize, width: u32, height: u32) -> Vec<u8> {
+    use gemini_sim::content::Content;
+    let content = Content::embedded();
+    let visual = bug("swarmer");
+    let palette = palette_of();
+    let w = width.max(8);
+    let h = height.max(8);
+    let sky = content.palette.key("arena_sky");
+    let bg = [byte(sky[0]), byte(sky[1]), byte(sky[2])];
+    let mut color = Vec::with_capacity((w * h * 3) as usize);
+    for _ in 0..(w * h) {
+        color.extend_from_slice(&bg);
+    }
+    let mut depth = vec![f32::INFINITY; (w * h) as usize];
+    let cols = (count as f32).sqrt().ceil().max(1.0) as usize;
+    let rows = count.div_ceil(cols).max(1);
+    let spacing = 1.4f32;
+    let span_x = (cols.saturating_sub(1) as f32) * spacing;
+    let span_z = (rows.saturating_sub(1) as f32) * spacing;
+    let eye = [span_x * 0.5, 8.0, -18.0];
+    let target = [span_x * 0.5, 0.4, span_z * 0.35];
+    let forward = norm(sub(target, eye));
+    let right = norm(cross(forward, [0.0, 1.0, 0.0]));
+    let up = cross(right, forward);
+    let fov = 55.0_f32.to_radians();
+    let cam = crate::PaintCam {
+        eye,
+        right,
+        up,
+        forward,
+        focal: 1.0 / (fov * 0.5).tan(),
+        aspect: w as f32 / h as f32,
+        w,
+        h,
+        key: norm([-0.2, 0.92, 0.28]),
+        fill: norm([0.55, 0.35, -0.45]),
+    };
+    let mut anim = still_anim();
+    anim.vulnerable = false;
+    let posed = pose(visual, anim, &[]);
+    let (bob, lean) = crate::root_motion(visual, anim);
+    let cast_mesh = crate::cast(&visual.id);
+    for index in 0..count {
+        let col = index % cols;
+        let row = index / cols;
+        let shift = [col as f32 * spacing, 0.0, row as f32 * spacing];
+        crate::cast::paint(
+            &mut color,
+            &mut depth,
+            cast_mesh,
+            crate::Placement {
+                pre_yaw: 0.0,
+                pre_shift: [0.0, 0.0, 0.0],
+                yaw_deg: 0.0,
+                lean,
+                pivot: [0.0, 0.0, 0.0],
+                shift: [shift[0], shift[1] + bob, shift[2]],
+            },
+            &palette,
+            &cam,
+            false,
+        );
+        paint_feedback_parts(&mut color, &mut depth, visual, &posed, &palette, &cam, shift, bob, lean);
+    }
+    color
 }
 
 pub fn palette_of() -> impl Fn(&str) -> [f32; 4] {
