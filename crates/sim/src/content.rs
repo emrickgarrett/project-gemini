@@ -43,6 +43,8 @@ pub struct Content {
     pub models: Vec<CastModel>,
     /// Deck, low rim, and the review camera. Not a collider.
     pub arena_dressing: ArenaDressing,
+    /// Mask threshold, rim strength, overdrive emissive, and the side-sheet orbit.
+    pub cast: CastLook,
 }
 
 pub struct Sources<'a> {
@@ -154,7 +156,8 @@ impl Content {
         }
         let mesh_ids: Vec<String> = heroes_visual.meshes.iter().map(|mesh| mesh.id.clone()).collect();
         let (mut hero, guns, roster, heroes, warnings) = load_characters(src.hero, &mesh_ids)?;
-        require_cast_roster(&models, &heroes)?;
+        require_cast_roster(&models, &heroes, &bugs)?;
+        let cast = load_cast_look(include_str!("../../../content/cast.toml"), &palette)?;
         for mesh in &heroes_visual.meshes {
             if !heroes.iter().any(|card| card.portrait.mesh == mesh.id) {
                 return Err(format!(
@@ -250,6 +253,7 @@ impl Content {
             heroes_visual,
             models,
             arena_dressing,
+            cast,
         })
     }
 
@@ -1342,6 +1346,20 @@ pub struct CastModel {
     pub view: [f32; 3],
 }
 
+/// Tint scalars and the side-sheet camera. Colors stay palette keys.
+#[derive(Clone, Debug)]
+pub struct CastLook {
+    pub mask_threshold: f32,
+    pub rim_strength: f32,
+    /// Palette key. Overdrive multiplies this color by `overdrive_emissive_gain`.
+    pub overdrive_emissive_key: String,
+    pub overdrive_emissive_gain: [f32; 3],
+    pub review_yaw_deg: f32,
+    pub review_elev_deg: f32,
+    pub review_distance: f32,
+    pub review_fov_deg: f32,
+}
+
 /// One hero's ability, as the act-now cues read it. No hero or ability id.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlayedAbility {
@@ -1826,8 +1844,13 @@ fn load_model_rows(
         let source = vis_str(map, "source", &format!("{what} {id}"))?.to_string();
         let license = vis_str(map, "license", &format!("{what} {id}"))?.to_string();
         let task = vis_str(map, "task", &format!("{what} {id}"))?.to_string();
-        if source.is_empty() || license.is_empty() || task.is_empty() {
-            return Err(format!("{what} {id} source, license, and task are required"));
+        if source.is_empty() || license.is_empty() {
+            return Err(format!("{what} {id} source and license are required"));
+        }
+        if task == "not-in-handoff" {
+            return Err(format!(
+                "{what} {id} has no task id; leave task empty instead of a placeholder"
+            ));
         }
         let yaw_deg = vis_f32(map, "yaw_deg", &format!("{what} {id}"))?;
         if !yaw_deg.is_finite() {
@@ -1856,38 +1879,91 @@ fn load_model_rows(
     Ok(models)
 }
 
-fn require_cast_roster(models: &[CastModel], heroes: &[HeroCard]) -> Result<(), String> {
-    let need = [
-        "vex_body",
-        "vex_gun",
-        "nyra_body",
-        "nyra_gun",
-        "brakk_body",
-        "brakk_gun",
-        "brakk_shield",
-        "kip_body",
-        "kip_gun",
-        "swarmer",
-        "spitter",
-        "brute",
-        "brood_mother",
-        "hive_tyrant",
-    ];
-    for id in need {
-        if !models.iter().any(|model| model.id == id) {
+fn require_cast_roster(models: &[CastModel], heroes: &[HeroCard], bugs: &crate::bugs::BugBook) -> Result<(), String> {
+    let mut need = Vec::new();
+    for hero in heroes {
+        need.push(format!("{}_body", hero.id));
+        need.push(format!("{}_gun", hero.id));
+        if hero.id == "brakk" {
+            need.push("brakk_shield".to_string());
+        }
+    }
+    for (id, _) in bugs.rows() {
+        need.push(id.to_string());
+    }
+    for id in &need {
+        if !models.iter().any(|model| model.id == *id) {
             return Err(format!("cast model \"{id}\" is missing"));
         }
     }
-    for hero in heroes {
-        let body = format!("{}_body", hero.id);
-        if !models.iter().any(|model| model.id == body) {
-            return Err(format!("cast model \"{body}\" is missing"));
-        }
-    }
     if models.len() != need.len() {
-        return Err(format!("cast roster has {} models, expected {}", models.len(), need.len()));
+        let extra: Vec<&str> = models
+            .iter()
+            .filter(|model| !need.iter().any(|id| id == &model.id))
+            .map(|model| model.id.as_str())
+            .collect();
+        return Err(format!(
+            "cast roster has {} models, expected {} (extra {extra:?})",
+            models.len(),
+            need.len()
+        ));
     }
     Ok(())
+}
+
+fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
+    let root: toml::Value = toml::from_str(text).map_err(|err| format!("cast.toml: {err}"))?;
+    let table = root.as_table().ok_or_else(|| "cast.toml is not a table".to_string())?;
+    expect_keys(
+        table,
+        &[
+            "mask_threshold",
+            "rim_strength",
+            "overdrive_emissive_key",
+            "overdrive_emissive_gain",
+            "review_yaw_deg",
+            "review_elev_deg",
+            "review_distance",
+            "review_fov_deg",
+        ],
+        "cast.toml",
+    )?;
+    let mask_threshold = vis_f32(table, "mask_threshold", "cast.toml")?;
+    let rim_strength = vis_f32(table, "rim_strength", "cast.toml")?;
+    if !(mask_threshold > 0.0 && mask_threshold < 1.0) {
+        return Err("cast.toml mask_threshold must be between 0 and 1".into());
+    }
+    if !(rim_strength >= 0.0 && rim_strength <= 1.0) {
+        return Err("cast.toml rim_strength must be between 0 and 1".into());
+    }
+    let overdrive_emissive_key = vis_str(table, "overdrive_emissive_key", "cast.toml")?.to_string();
+    if palette.hex(&overdrive_emissive_key).is_none() {
+        return Err(format!("cast.toml overdrive_emissive_key \"{overdrive_emissive_key}\" does not resolve"));
+    }
+    let gain_value = table
+        .get("overdrive_emissive_gain")
+        .ok_or_else(|| "cast.toml is missing overdrive_emissive_gain".to_string())?;
+    let overdrive_emissive_gain = nums3(gain_value, "cast.toml overdrive_emissive_gain")?;
+    if overdrive_emissive_gain.iter().any(|n| !n.is_finite() || *n < 0.0) {
+        return Err("cast.toml overdrive_emissive_gain must be finite and >= 0".into());
+    }
+    let review_yaw_deg = vis_f32(table, "review_yaw_deg", "cast.toml")?;
+    let review_elev_deg = vis_f32(table, "review_elev_deg", "cast.toml")?;
+    let review_distance = vis_f32(table, "review_distance", "cast.toml")?;
+    let review_fov_deg = vis_f32(table, "review_fov_deg", "cast.toml")?;
+    if !(review_distance > 0.0) || !(review_fov_deg > 0.0 && review_fov_deg < 180.0) {
+        return Err("cast.toml review camera is out of range".into());
+    }
+    Ok(CastLook {
+        mask_threshold,
+        rim_strength,
+        overdrive_emissive_key,
+        overdrive_emissive_gain,
+        review_yaw_deg,
+        review_elev_deg,
+        review_distance,
+        review_fov_deg,
+    })
 }
 
 fn load_hero_part(value: &toml::Value, id: &str, palette: &Palette) -> Result<HeroPart, String> {

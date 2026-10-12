@@ -373,11 +373,11 @@ fn decode_glb(bytes: &[u8], id: &str) -> Result<RawMesh, String> {
         .ok_or_else(|| format!("{id} has no primitive"))?;
     let attrs = prim["attributes"].as_object().ok_or_else(|| format!("{id} has no attributes"))?;
     let positions = read_vec3(&doc, bin, attrs["POSITION"].as_u64().ok_or("POSITION")? as usize, id)?;
-    let normals = if let Some(n) = attrs.get("NORMAL").and_then(|v| v.as_u64()) {
-        read_vec3(&doc, bin, n as usize, id)?
-    } else {
-        vec![[0.0, 1.0, 0.0]; positions.len()]
-    };
+    let normal_acc = attrs
+        .get("NORMAL")
+        .and_then(|v| v.as_u64())
+        .ok_or_else(|| format!("{id} has no NORMAL"))? as usize;
+    let normals = read_vec3(&doc, bin, normal_acc, id)?;
     let uvs = read_vec2(&doc, bin, attrs["TEXCOORD_0"].as_u64().ok_or("TEXCOORD_0")? as usize, id)?;
     let index_acc = prim["indices"].as_u64().ok_or_else(|| format!("{id} has no indices"))? as usize;
     let indices = read_indices(&doc, bin, index_acc, id)?;
@@ -497,7 +497,8 @@ pub fn bake_textures(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> (u3
         let c = palette(&mesh.rim_key);
         [c[0], c[1], c[2], 1.0]
     };
-    let fresnel = if mesh.rim_key.is_empty() { 0.0 } else { 0.35 };
+    let (mask_threshold, rim_strength) = tint_constants();
+    let fresnel = if mesh.rim_key.is_empty() { 0.0 } else { 1.0 };
     let mut albedo = vec![0u8; (w * h * 4) as usize];
     let mut emit = vec![0u8; (w * h * 4) as usize];
     for y in 0..h {
@@ -506,13 +507,13 @@ pub fn bake_textures(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> (u3
             let v = if h > 1 { 1.0 - (y as f32 / (h as f32 - 1.0)) } else { 0.0 };
             let base = sample(&mesh.base, [u, v]);
             let mask = sample(&mesh.mask, [u, v]);
-            let color = tint_texel(base, mask, base_c, accent, glow, rim, 1.0, fresnel);
+            let color = tint_texel(base, mask, base_c, accent, glow, rim, 1.0, fresnel, mask_threshold, rim_strength);
             let i = ((y * w + x) * 4) as usize;
             albedo[i] = (color[0].clamp(0.0, 1.0) * 255.0).round() as u8;
             albedo[i + 1] = (color[1].clamp(0.0, 1.0) * 255.0).round() as u8;
             albedo[i + 2] = (color[2].clamp(0.0, 1.0) * 255.0).round() as u8;
             albedo[i + 3] = 255;
-            if mask[1] >= 0.45 {
+            if mask[1] >= mask_threshold {
                 emit[i] = (glow[0].clamp(0.0, 1.0) * 255.0).round() as u8;
                 emit[i + 1] = (glow[1].clamp(0.0, 1.0) * 255.0).round() as u8;
                 emit[i + 2] = (glow[2].clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -525,13 +526,24 @@ pub fn bake_textures(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> (u3
 
 /// Sample the mask and the gray base. Red is accent or magenta. Green is the acid glow.
 /// The unmasked gray is multiplied by `base`. Empty rim skips the fresnel.
-pub fn tint_texel(base: [f32; 3], mask: [f32; 3], base_c: [f32; 4], accent: [f32; 4], glow: [f32; 4], rim: [f32; 4], shade: f32, fresnel: f32) -> [f32; 3] {
+pub fn tint_texel(
+    base: [f32; 3],
+    mask: [f32; 3],
+    base_c: [f32; 4],
+    accent: [f32; 4],
+    glow: [f32; 4],
+    rim: [f32; 4],
+    shade: f32,
+    fresnel: f32,
+    mask_threshold: f32,
+    rim_strength: f32,
+) -> [f32; 3] {
     let r = mask[0];
     let g = mask[1];
-    if g >= 0.45 {
+    if g >= mask_threshold {
         return [glow[0], glow[1], glow[2]];
     }
-    if r >= 0.45 {
+    if r >= mask_threshold {
         return [accent[0], accent[1], accent[2]];
     }
     let unmasked = (1.0 - r - g).clamp(0.0, 1.0);
@@ -548,7 +560,7 @@ pub fn tint_texel(base: [f32; 3], mask: [f32; 3], base_c: [f32; 4], accent: [f32
         gray[2] * unmasked + accented[2] * r + acid[2] * g,
     ];
     if rim[3] > 0.0 || rim[0] + rim[1] + rim[2] > 0.0 {
-        let k = fresnel * unmasked;
+        let k = fresnel * rim_strength * unmasked;
         color[0] += rim[0] * k;
         color[1] += rim[1] * k;
         color[2] += rim[2] * k;
@@ -590,6 +602,7 @@ pub fn paint(
         let c = palette(&mesh.rim_key);
         [c[0], c[1], c[2], 1.0]
     };
+    let (mask_threshold, rim_strength) = tint_constants();
     let xform = |p: [f32; 3]| place_point(p, &place);
     let rotate_n = |n: [f32; 3]| place_normal(n, &place);
     for tri in mesh.indices.chunks(3) {
@@ -601,8 +614,34 @@ pub fn paint(
         let Some(a) = project(world[0], cam) else { continue };
         let Some(b) = project(world[1], cam) else { continue };
         let Some(c) = project(world[2], cam) else { continue };
-        fill_textured(color, depth, cam, mesh, ids, a, b, c, world, &rotate_n, base_c, accent, glow, rim, silhouette);
+        fill_textured(
+            color,
+            depth,
+            cam,
+            mesh,
+            ids,
+            a,
+            b,
+            c,
+            world,
+            &rotate_n,
+            base_c,
+            accent,
+            glow,
+            rim,
+            silhouette,
+            mask_threshold,
+            rim_strength,
+        );
     }
+}
+
+fn tint_constants() -> (f32, f32) {
+    static CELL: OnceLock<(f32, f32)> = OnceLock::new();
+    *CELL.get_or_init(|| {
+        let look = &Content::embedded().cast;
+        (look.mask_threshold, look.rim_strength)
+    })
 }
 
 fn fill_textured(
@@ -621,6 +660,8 @@ fn fill_textured(
     glow: [f32; 4],
     rim: [f32; 4],
     silhouette: bool,
+    mask_threshold: f32,
+    rim_strength: f32,
 ) {
     let min_x = a[0].min(b[0]).min(c[0]).floor().max(0.0) as i32;
     let max_x = a[0].max(b[0]).max(c[0]).ceil().min(cam.w as f32 - 1.0) as i32;
@@ -671,7 +712,18 @@ fn fill_textured(
                 let nd = norm(n);
                 let facing = (nd[0] * view[0] + nd[1] * view[1] + nd[2] * view[2]).clamp(0.0, 1.0);
                 let fresnel = (1.0 - facing).powf(2.0);
-                let texel = tint_texel(sample(&mesh.base, uv), sample(&mesh.mask, uv), base_c, accent, glow, rim, shade, fresnel);
+                let texel = tint_texel(
+                    sample(&mesh.base, uv),
+                    sample(&mesh.mask, uv),
+                    base_c,
+                    accent,
+                    glow,
+                    rim,
+                    shade,
+                    fresnel,
+                    mask_threshold,
+                    rim_strength,
+                );
                 [
                     (texel[0].clamp(0.0, 1.0) * 255.0).round() as u8,
                     (texel[1].clamp(0.0, 1.0) * 255.0).round() as u8,
@@ -716,12 +768,21 @@ pub fn hero_pieces(hero_id: &str) -> Vec<&'static CastMesh> {
 }
 
 pub fn hero_placement(content: &Content, mesh: &CastMesh, body_at: [f32; 3], pivot: [f32; 3], yaw_deg: f32, pitch_deg: f32) -> Placement {
-    let spec = content.models.iter().find(|model| model.id == mesh.id);
-    let weapon = spec.map(|model| model.fit == "weapon").unwrap_or(false);
-    let at = spec.map(|model| model.at).unwrap_or([0.0, 0.0, 0.0]);
+    let spec = content
+        .models
+        .iter()
+        .find(|model| model.id == mesh.id)
+        .unwrap_or_else(|| panic!("{} has no cast record", mesh.id));
+    match spec.fit.as_str() {
+        "weapon" | "hero" | "shield" => {}
+        other => panic!("{} fit {other} is not a hero piece", mesh.id),
+    }
+    if spec.fit != "hero" && spec.at == [0.0, 0.0, 0.0] {
+        panic!("{} at is zero", mesh.id);
+    }
     Placement {
-        pre_yaw: if weapon { spec.map(|model| model.yaw_deg).unwrap_or(0.0) } else { 0.0 },
-        pre_shift: if mesh.id.ends_with("_body") { [0.0, 0.0, 0.0] } else { at },
+        pre_yaw: if spec.fit == "weapon" { spec.yaw_deg } else { 0.0 },
+        pre_shift: if spec.fit == "hero" { [0.0, 0.0, 0.0] } else { spec.at },
         yaw_deg,
         lean: pitch_deg.to_radians(),
         pivot,
@@ -768,7 +829,7 @@ pub fn muzzle_tip(mesh: &CastMesh) -> [f32; 3] {
         .iter()
         .copied()
         .min_by(|a, b| a[2].partial_cmp(&b[2]).unwrap_or(std::cmp::Ordering::Equal))
-        .unwrap_or([0.0, 0.0, -0.4])
+        .unwrap_or_else(|| panic!("{} has no vertices", mesh.id))
 }
 
 pub fn body_pivot(content: &Content, hero_id: &str) -> [f32; 3] {
@@ -824,5 +885,44 @@ mod tests {
             assert!(mx[2] > -0.02 && mx[2] < 0.2, "{id} butt stays on +z, max z {}", mx[2]);
             assert!(mn[2] < -0.2, "{id} muzzle points down -z, min z {}", mn[2]);
         }
+    }
+
+    #[test]
+    fn cast_mesh_bounds_fit_inside_the_existing_hitbox() {
+        let content = Content::embedded();
+        for (id, row) in content.bugs.rows() {
+            let mesh = cast(id);
+            let hit = hit_bounds(&row.hitbox.body);
+            let (mn, mx) = bounds(&mesh.positions);
+            assert!(
+                outside_hitbox(&mesh.positions, hit).is_none(),
+                "{id} leaves the hitbox"
+            );
+            for axis in 0..3 {
+                assert!(mn[axis] >= hit.min[axis] - 1.0e-3, "{id} min axis {axis}");
+                assert!(mx[axis] <= hit.max[axis] + 1.0e-3, "{id} max axis {axis}");
+            }
+            let authored = content.models.iter().find(|model| model.id == id).unwrap();
+            assert_eq!(authored.fit, "hitbox", "{id}");
+        }
+    }
+
+    #[test]
+    fn tint_honors_the_content_mask_and_rim() {
+        let look = &Content::embedded().cast;
+        assert!((look.mask_threshold - 0.45).abs() < 1.0e-6);
+        assert!((look.rim_strength - 0.35).abs() < 1.0e-6);
+        let base = [0.5, 0.5, 0.5];
+        let mask = [0.46, 0.0, 0.0];
+        let accent = [1.0, 0.0, 0.0, 1.0];
+        let glow = [0.0, 1.0, 0.0, 1.0];
+        let rim = [1.0, 1.0, 1.0, 1.0];
+        let base_c = [0.0, 0.0, 0.0, 1.0];
+        let hit = tint_texel(base, mask, base_c, accent, glow, rim, 1.0, 0.0, look.mask_threshold, look.rim_strength);
+        assert_eq!(hit, [1.0, 0.0, 0.0]);
+        let miss = tint_texel(base, mask, base_c, accent, glow, rim, 1.0, 0.0, 0.50, look.rim_strength);
+        assert!(miss[0] < 0.9, "a higher threshold must leave the texel unmasked");
+        let edged = tint_texel(base, [0.0, 0.0, 0.0], base_c, accent, glow, rim, 1.0, 1.0, look.mask_threshold, look.rim_strength);
+        assert!((edged[0] - look.rim_strength).abs() < 1.0e-4, "rim strength {edged:?}");
     }
 }

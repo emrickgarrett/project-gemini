@@ -1,4 +1,5 @@
-//! One Meshy cast per bug. Root bob and charge lean are the motion. The same mesh is used up close and far.
+//! One Meshy cast per bug, plus the glow, pod, and bud parts at their hitboxes.
+//! Root bob and charge lean are the motion. The same cast is used up close and far.
 
 use std::collections::HashMap;
 
@@ -299,11 +300,16 @@ pub fn scene(
         .models
         .iter()
         .find(|model| model.id == gun_id)
-        .map(|model| model.view)
-        .unwrap_or([0.0, 0.0, 0.0]);
+        .unwrap_or_else(|| panic!("{gun_id} has no cast record"))
+        .view;
     let grip = Transform::from_xyz(offset[0] + gun_view[0], offset[1] + gun_view[1], offset[2] + gun_view[2]);
-    let mut gun_hot_src = materials.get(&gun_idle).cloned().unwrap_or_default();
-    gun_hot_src.emissive = LinearRgba::rgb(trim[0] * 5.0, trim[1] * 2.2, trim[2] * 0.4);
+    let mut gun_hot_src = materials
+        .get(&gun_idle)
+        .cloned()
+        .unwrap_or_else(|| panic!("{gun_id} material is not loaded"));
+    let gain = content.cast.overdrive_emissive_gain;
+    let hot = content.palette.key(&content.cast.overdrive_emissive_key);
+    gun_hot_src.emissive = LinearRgba::rgb(hot[0] * gain[0], hot[1] * gain[1], hot[2] * gain[2]);
     let gun_hot = materials.add(gun_hot_src);
     let pieces = [
         (upload(&mut meshes, &vm.teal), mat_of(&bank, "hero_teal", false, false), hands, None),
@@ -451,8 +457,12 @@ pub fn sync(
             }
         }
         let _ = eye;
-        for (entity, xf) in part_ids.iter().zip(posed.xforms.iter()) {
+        for entity in &part_ids {
             if let Ok((mut part, mut local, mut vis)) = parts.get_mut(*entity) {
+                let xf = posed
+                    .xforms
+                    .get(part.index)
+                    .unwrap_or_else(|| panic!("bug part {} is outside the pose", part.index));
                 local.translation = bevy::math::Vec3::new(xf.pos[0], xf.pos[1], xf.pos[2]);
                 local.rotation = Quat::from_xyzw(xf.rot[0], xf.rot[1], xf.rot[2], xf.rot[3]);
                 local.scale = bevy::math::Vec3::new(xf.scale[0], xf.scale[1], xf.scale[2]);
@@ -469,9 +479,10 @@ pub fn sync(
                 if part.emissive && part.pod_slot.is_some() {
                     let rgb = game.content.palette.key("swarmer_glow");
                     let mul = 2.8 + xf.glow * 1.7;
-                    if let Some(mut material) = materials.get_mut(&part.hot) {
-                        material.emissive = LinearRgba::rgb(rgb[0] * mul, rgb[1] * mul, rgb[2] * mul);
-                    }
+                    let mut material = materials
+                        .get_mut(&part.hot)
+                        .unwrap_or_else(|| panic!("missing pod material for enemy {}", enemy.id));
+                    material.emissive = LinearRgba::rgb(rgb[0] * mul, rgb[1] * mul, rgb[2] * mul);
                 }
                 if want_hot != part.hot_on {
                     part.hot_on = want_hot;
@@ -594,8 +605,8 @@ pub fn sync(
 fn spawn_bug(
     commands: &mut Commands,
     bank: &Bank,
-    _game: &Game,
-    _materials: &mut Assets<StandardMaterial>,
+    game: &Game,
+    materials: &mut Assets<StandardMaterial>,
     kind: EnemyKind,
     id: u32,
 ) -> BugLink {
@@ -618,6 +629,61 @@ fn spawn_bug(
         ChildOf(root),
         PlayPiece,
     ));
+    // Glow, dead pods, and bud regrow stay on the cast. Their pose is the hitbox anchor.
+    // The shell stays the Meshy mesh. Only those feedback parts are spawned.
+    let visual = gemini_meshes::bug(name);
+    let colors = &game.content.bug(kind).visual;
+    let mut parts = Vec::new();
+    for (index, part) in visual.parts.iter().enumerate() {
+        if !(part.emissive || part.grows || part.pod_slot.is_some()) {
+            continue;
+        }
+        let mesh = bank
+            .meshes
+            .get(&part.mesh_key)
+            .cloned()
+            .unwrap_or_else(|| panic!("missing bug part {}", part.mesh_key));
+        let bud = part.grows;
+        let rest_key = if bud && !colors.bud_color.is_empty() {
+            colors.bud_color.as_str()
+        } else {
+            part.palette.as_str()
+        };
+        let rest = mat_of(bank, rest_key, part.emissive && !bud, false);
+        let mut hot = if bud && !colors.grown_color.is_empty() {
+            mat_of(bank, &colors.grown_color, true, true)
+        } else if part.emissive {
+            mat_of(bank, &part.palette, true, true)
+        } else {
+            rest.clone()
+        };
+        if part.pod_slot.is_some() && part.emissive {
+            let src = materials
+                .get(&hot)
+                .cloned()
+                .unwrap_or_else(|| panic!("missing pod material {}", part.palette));
+            hot = materials.add(src);
+        }
+        let entity = commands
+            .spawn((
+                Mesh3d(mesh),
+                MeshMaterial3d(rest.clone()),
+                Transform::from_xyz(part.rest_pos[0], part.rest_pos[1], part.rest_pos[2]),
+                Visibility::Inherited,
+                BugPart {
+                    index,
+                    emissive: part.emissive,
+                    grows: part.grows,
+                    pod_slot: part.pod_slot,
+                    rest,
+                    hot,
+                    hot_on: false,
+                },
+                ChildOf(root),
+            ))
+            .id();
+        parts.push(entity);
+    }
     let lod = commands
         .spawn((
             Mesh3d(bank.tracer.clone()),
@@ -628,7 +694,7 @@ fn spawn_bug(
             ChildOf(root),
         ))
         .id();
-    BugLink { root, parts: Vec::new(), lod }
+    BugLink { root, parts, lod }
 }
 
 pub fn grade(

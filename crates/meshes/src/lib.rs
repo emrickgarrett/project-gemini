@@ -109,8 +109,8 @@ pub fn muzzle_local() -> [f32; 3] {
         .models
         .iter()
         .find(|model| model.id == "vex_gun")
-        .map(|model| model.view)
-        .unwrap_or([0.0, 0.0, 0.0]);
+        .unwrap_or_else(|| panic!("vex_gun has no cast record"))
+        .view;
     [view[0] + tip[0], view[1] + tip[1], view[2] + tip[2]]
 }
 

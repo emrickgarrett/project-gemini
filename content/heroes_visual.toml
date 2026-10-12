@@ -158,6 +158,8 @@ thumb_yaw = 0.9
 # `view` is the grip in viewmodel space, before characters.toml viewmodel_offset.
 # Gun grips sit on the +X butt. Brakk's shield grip is the handle.
 # Colors are palette.toml keys. Empty `rim` means no rim light.
+# vex_body, vex_gun, and swarmer are in the handoff. Their task JSON was not,
+# so `task` is empty and the source line records Meshy from Gorkasso's concepts.
 
 [[model]]
 id = "vex_body"
@@ -166,7 +168,7 @@ triangles = 14000
 bytes = 1100000
 source = "Meshy"
 license = "Generated from Gorkasso's concepts"
-task = "not-in-handoff"
+task = ""
 base = "hero_vex_base"
 accent = "hero_vex"
 glow = "swarmer_glow"
@@ -185,7 +187,7 @@ triangles = 3400
 bytes = 1100000
 source = "Meshy"
 license = "Generated from Gorkasso's concepts"
-task = "not-in-handoff"
+task = ""
 base = "hero_vex_base"
 accent = "hero_vex"
 glow = "swarmer_glow"

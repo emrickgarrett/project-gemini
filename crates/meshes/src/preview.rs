@@ -25,25 +25,56 @@ pub fn still_anim() -> AnimInput {
     }
 }
 
-/// One fitted cast. Bugs use the concept-sheet camera. Heroes, guns, and the shield use the same three-quarter orbit.
+/// Fitted cast at the side-sheet orbit (`cast.toml` review yaw, elevation, and distance).
+/// Bugs use `arena_sky` so the spitter rim can be checked against it. Feedback parts glow at the hitbox.
 pub fn raster_model(id: &str, width: u32, height: u32) -> Vec<u8> {
-    if matches!(id, "swarmer" | "spitter" | "brute" | "brood_mother" | "hive_tyrant") {
-        return raster_bug(id, width, height);
-    }
+    let content = gemini_sim::content::Content::embedded();
+    let look = &content.cast;
     let mesh = crate::cast(id);
-    let (mn, mx) = mesh_bounds(&mesh.positions);
+    // fit_weapon yaws a gun -90° about Y. The sheet rendered the raw gun, so the camera follows that yaw.
+    let yaw = if mesh.id.ends_with("_gun") {
+        look.review_yaw_deg - 90.0
+    } else {
+        look.review_yaw_deg
+    };
+    let (eye, target) = review_eye(&mesh.positions, yaw, look.review_elev_deg, look.review_distance);
+    if matches!(id, "swarmer" | "spitter" | "brute" | "brood_mother" | "hive_tyrant") {
+        let sky = content.palette.key("arena_sky");
+        let bg = [byte(sky[0]), byte(sky[1]), byte(sky[2])];
+        let palette = |name: &str| content.palette.key(name);
+        return draw_scene(
+            bug(id),
+            &palette,
+            width,
+            height,
+            false,
+            false,
+            Some((eye, target, look.review_fov_deg)),
+            [0.0, 0.0, 0.0],
+            bg,
+            &[],
+            None,
+        );
+    }
+    let palette = palette_of();
+    draw_model(mesh, &palette, width, height, eye, target, look.review_fov_deg, BG)
+}
+
+/// Same orbit as `render.py`: eye sits `distance` radii from the bounds center.
+fn review_eye(positions: &[[f32; 3]], yaw_deg: f32, elev_deg: f32, distance: f32) -> ([f32; 3], [f32; 3]) {
+    let (mn, mx) = mesh_bounds(positions);
     let center = [(mn[0] + mx[0]) * 0.5, (mn[1] + mx[1]) * 0.5, (mn[2] + mx[2]) * 0.5];
-    let extent = (mx[0] - mn[0]).max(mx[1] - mn[1]).max(mx[2] - mn[2]).max(0.2);
-    let yaw = 38.0_f32.to_radians();
-    let elev = 16.0_f32.to_radians();
-    let dist = extent * 1.7;
+    let ext = [mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]];
+    let radius = (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt() * 0.5;
+    let yaw = yaw_deg.to_radians();
+    let elev = elev_deg.to_radians();
+    let dist = radius.max(0.05) * distance;
     let eye = [
         center[0] + dist * yaw.sin() * elev.cos(),
         center[1] + dist * elev.sin(),
         center[2] + dist * yaw.cos() * elev.cos(),
     ];
-    let palette = palette_of();
-    draw_model(mesh, &palette, width, height, eye, center, 40.0, BG)
+    (eye, center)
 }
 
 fn mesh_bounds(positions: &[[f32; 3]]) -> ([f32; 3], [f32; 3]) {
@@ -312,8 +343,8 @@ fn paint_view_gun(color: &mut [u8], depth: &mut [f32], frame: &ViewmodelFrame, y
         .models
         .iter()
         .find(|model| model.id == gun.id)
-        .map(|model| model.view)
-        .unwrap_or([0.0, 0.0, 0.0]);
+        .unwrap_or_else(|| panic!("{} has no cast record", gun.id))
+        .view;
     let shift = frame.offset;
     let place = crate::Placement {
         pre_yaw: 0.0,
@@ -552,7 +583,7 @@ fn draw_scene(
         silhouette,
     );
     if !silhouette {
-        paint_glow_markers(&mut color, &mut depth, visual, &posed, palette, &cam, shift, bob, lean);
+        paint_feedback_parts(&mut color, &mut depth, visual, &posed, palette, &cam, shift, bob, lean);
     }
     if !silhouette {
         for (mesh, albedo) in extras {
@@ -587,7 +618,9 @@ fn draw_scene(
     color
 }
 
-fn paint_glow_markers(
+/// Glow, pods, and buds. Same parent as the live game: pose, then the root lean and bob.
+/// Emissive parts use their palette key with no shade, so a missing weak point fails the still.
+fn paint_feedback_parts(
     color: &mut [u8],
     depth: &mut [f32],
     visual: &EnemyVisual,
@@ -600,52 +633,35 @@ fn paint_glow_markers(
 ) {
     let (ls, lc) = lean.sin_cos();
     for (part, xf) in visual.parts.iter().zip(posed.xforms.iter()) {
-        if !part.emissive || !xf.visible {
+        if !(part.emissive || part.grows || part.pod_slot.is_some()) || !xf.visible {
             continue;
         }
         let albedo = palette(part.palette.as_str());
-        let p = xf.pos;
-        let y2 = lc * p[1] - ls * p[2];
-        let z2 = ls * p[1] + lc * p[2];
-        let center = [p[0] + shift[0], y2 + shift[1] + bob, z2 + shift[2]];
-        let to_eye = norm(sub(cam.eye, center));
-        let center = [center[0] + to_eye[0] * 0.06, center[1] + to_eye[1] * 0.06, center[2] + to_eye[2] * 0.06];
-        paint_octahedron(color, depth, cam, center, 0.1, [albedo[0], albedo[1], albedo[2]]);
-    }
-}
-
-fn paint_octahedron(color: &mut [u8], depth: &mut [f32], cam: &crate::PaintCam, center: [f32; 3], radius: f32, rgb: [f32; 3]) {
-    let r = radius;
-    let c = center;
-    let verts = [
-        [c[0] + r, c[1], c[2]],
-        [c[0] - r, c[1], c[2]],
-        [c[0], c[1] + r, c[2]],
-        [c[0], c[1] - r, c[2]],
-        [c[0], c[1], c[2] + r],
-        [c[0], c[1], c[2] - r],
-    ];
-    let tris = [
-        [0, 2, 4],
-        [2, 1, 4],
-        [1, 3, 4],
-        [3, 0, 4],
-        [2, 0, 5],
-        [1, 2, 5],
-        [3, 1, 5],
-        [0, 3, 5],
-    ];
-    for tri in tris {
-        let Some(a) = project(verts[tri[0]], cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
-            continue;
-        };
-        let Some(b) = project(verts[tri[1]], cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
-            continue;
-        };
-        let Some(c) = project(verts[tri[2]], cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
-            continue;
-        };
-        fill_tri(color, depth, cam.w, cam.h, a, b, c, rgb);
+        let rgb = [albedo[0], albedo[1], albedo[2]];
+        for tri in part.mesh.indices.chunks(3) {
+            if tri.len() < 3 {
+                continue;
+            }
+            let mut projected = [[0.0; 3]; 3];
+            let mut ok = true;
+            for (slot, index) in tri.iter().enumerate() {
+                let p = part.mesh.positions[*index as usize];
+                let p = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
+                let p = crate::pose::rotate_vec(xf.rot, p);
+                let p = [p[0] + xf.pos[0], p[1] + xf.pos[1], p[2] + xf.pos[2]];
+                let y2 = lc * p[1] - ls * p[2];
+                let z2 = ls * p[1] + lc * p[2];
+                let world = [p[0] + shift[0], y2 + shift[1] + bob, z2 + shift[2]];
+                let Some(screen) = project(world, cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
+                    ok = false;
+                    break;
+                };
+                projected[slot] = screen;
+            }
+            if ok {
+                fill_tri(color, depth, cam.w, cam.h, projected[0], projected[1], projected[2], rgb);
+            }
+        }
     }
 }
 
@@ -800,7 +816,7 @@ pub fn palette_of() -> impl Fn(&str) -> [f32; 4] {
         map
     };
     move |name: &str| {
-        let hex = keys.get(name).map(|s| s.as_str()).unwrap_or("#C67A2E");
+        let hex = keys.get(name).unwrap_or_else(|| panic!("unknown palette key {name}"));
         hex_rgb(hex)
     }
 }

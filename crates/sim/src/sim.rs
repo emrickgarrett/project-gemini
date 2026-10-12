@@ -3372,3 +3372,45 @@ pub fn launch_pending_shots(sim: &mut Sim, content: &Content) {
         sim.projectiles.push(shot);
     }
 }
+
+#[cfg(test)]
+mod frame_time {
+    use std::time::Instant;
+
+    use super::*;
+
+    /// 60 fps with the live-enemy cap. Debug builds are slower than a playtest,
+    /// so the budget is the measured step, not a release-only 16 ms.
+    #[test]
+    fn three_hundred_live_enemies_step_inside_a_frame() {
+        let content = Content::embedded();
+        let cap = content.waves.budget.live_enemy_cap;
+        assert_eq!(cap, 300, "the check is the live-enemy cap");
+        let mut sim = Sim::new(&content, "normal", 7);
+        sim.enemies.clear();
+        sim.director.pool = 0.0;
+        sim.director.parked = true;
+        for i in 0..cap {
+            let x = (i % 20) as f32 * 1.6 - 15.0;
+            let z = (i / 20) as f32 * 1.6 - 10.0;
+            sim.spawn_trash(&content, EnemyKind::Swarmer, Vec3::new(x, 0.0, z));
+        }
+        let live = sim.enemies.iter().filter(|enemy| enemy.alive).count();
+        assert_eq!(live, cap as usize);
+        sim.step(&content, PlayerInput::default());
+        let frames = 6u32;
+        let start = Instant::now();
+        for _ in 0..frames {
+            sim.step(&content, PlayerInput::default());
+        }
+        let per = start.elapsed().as_secs_f64() / f64::from(frames);
+        // One sim tick. The playtest target is a 60 fps frame with this many enemies.
+        let budget = SIM_DT as f64;
+        assert!(
+            per < budget,
+            "300 live enemies stepped in {per:.4}s; budget is one {SIM_HZ} Hz tick ({budget:.4}s)"
+        );
+        let live = sim.enemies.iter().filter(|enemy| enemy.alive).count();
+        assert_eq!(live, cap as usize, "the director must not add or drop enemies during the check");
+    }
+}
