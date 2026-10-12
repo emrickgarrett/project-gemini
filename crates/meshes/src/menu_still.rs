@@ -5,7 +5,6 @@ use gemini_sim::content::{format_fixed, Content};
 
 use crate::away_still::paint_arena;
 use crate::glyph::{blit, measure};
-use crate::preview::raster_parts;
 use crate::reveal_still::paint_stage;
 
 #[derive(Clone, Debug)]
@@ -677,20 +676,58 @@ pub fn raster_hero_portrait(content: &Content, hero_id: &str, raster: u32) -> Ve
 }
 
 fn portrait_raster(content: &Content, hero: &gemini_sim::content::HeroCard, raster: u32) -> Vec<u8> {
-    let built = crate::portrait::build(&content.heroes_visual, &hero.portrait.mesh)
-        .unwrap_or_else(|| panic!("unknown portrait mesh {}", hero.portrait.mesh));
-    let turned = crate::portrait::turn(&built, hero.portrait.yaw_deg, hero.portrait.pitch_deg);
-    let positions: Vec<[f32; 3]> = turned.iter().flat_map(|part| part.mesh.positions.iter().copied()).collect();
-    let fov = mesh_fov(content, &positions, hero.portrait.fit);
-    let parts: Vec<(crate::MeshData, [f32; 4], bool)> = turned
+    let pieces = crate::hero_pieces(&hero.id);
+    let pivot = crate::body_pivot(content, &hero.id);
+    let body = content
+        .models
         .iter()
-        .map(|part| {
-            let key = if part.palette == "accent" { hero.accent_key.as_str() } else { part.palette.as_str() };
-            let c = content.palette.key(key);
-            (part.mesh.clone(), [c[0], c[1], c[2], 1.0], part.glow)
-        })
+        .find(|model| model.id == format!("{}_body", hero.id))
+        .unwrap_or_else(|| panic!("missing cast {}", hero.id));
+    let mut positions = Vec::new();
+    let places: Vec<crate::Placement> = pieces
+        .iter()
+        .map(|mesh| crate::hero_placement(content, mesh, body.at, pivot, hero.portrait.yaw_deg, hero.portrait.pitch_deg))
         .collect();
-    raster_parts(raster, raster, &parts, fov)
+    for (mesh, place) in pieces.iter().zip(places.iter()) {
+        for p in &mesh.positions {
+            positions.push(crate::place_point(*p, place));
+        }
+    }
+    let fov = mesh_fov(content, &positions, hero.portrait.fit);
+    let w = raster.max(8);
+    let h = raster.max(8);
+    let bg = portrait_bg(content);
+    let mut color = Vec::with_capacity((w * h * 3) as usize);
+    for _ in 0..(w * h) {
+        color.extend_from_slice(&bg);
+    }
+    let mut depth = vec![f32::INFINITY; (w * h) as usize];
+    let fov_rad = fov.to_radians();
+    let cam = crate::PaintCam {
+        eye: [0.0, 0.0, 0.0],
+        right: [1.0, 0.0, 0.0],
+        up: [0.0, 1.0, 0.0],
+        forward: [0.0, 0.0, -1.0],
+        focal: 1.0 / (fov_rad * 0.5).tan(),
+        aspect: w as f32 / h as f32,
+        w,
+        h,
+        key: [0.0_f32, 0.92, 0.28],
+        fill: [0.55, 0.35, -0.45],
+    };
+    let key = norm3(cam.key);
+    let fill = norm3(cam.fill);
+    let cam = crate::PaintCam { key, fill, ..cam };
+    let palette = |name: &str| content.palette.key(name);
+    for (mesh, place) in pieces.iter().zip(places.into_iter()) {
+        crate::cast::paint(&mut color, &mut depth, mesh, place, &palette, &cam, false);
+    }
+    color
+}
+
+fn norm3(v: [f32; 3]) -> [f32; 3] {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
+    [v[0] / len, v[1] / len, v[2] / len]
 }
 
 fn mesh_fov(content: &Content, positions: &[[f32; 3]], fit: f32) -> f32 {

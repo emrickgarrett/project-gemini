@@ -53,6 +53,13 @@ hero_vex = "#F97316"
 hero_nyra = "#7DD3FC"
 hero_brakk = "#DC2626"
 hero_kip = "#FDE047"
+# Dark armor tones. The gray Meshy base is multiplied by these so a hero reads as that color.
+hero_vex_base = "#6B3010"
+hero_nyra_base = "#163E52"
+hero_brakk_base = "#6E1212"
+hero_kip_base = "#6A5810"
+# Spitter rim. The carapace is too dark against arena_sky without it.
+spitter_rim = "#E6D3C2"
 # Brakk's plates. hero_cobalt shades to near-black on a lit facet.
 hero_plate = "#5B8DEF"
 # Menu portrait field. The viewmodel raster treats this grey as empty.

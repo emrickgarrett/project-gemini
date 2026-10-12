@@ -25,6 +25,92 @@ pub fn still_anim() -> AnimInput {
     }
 }
 
+/// One fitted cast. Bugs use the concept-sheet camera. Heroes, guns, and the shield use the same three-quarter orbit.
+pub fn raster_model(id: &str, width: u32, height: u32) -> Vec<u8> {
+    if matches!(id, "swarmer" | "spitter" | "brute" | "brood_mother" | "hive_tyrant") {
+        return raster_bug(id, width, height);
+    }
+    let mesh = crate::cast(id);
+    let (mn, mx) = mesh_bounds(&mesh.positions);
+    let center = [(mn[0] + mx[0]) * 0.5, (mn[1] + mx[1]) * 0.5, (mn[2] + mx[2]) * 0.5];
+    let extent = (mx[0] - mn[0]).max(mx[1] - mn[1]).max(mx[2] - mn[2]).max(0.2);
+    let yaw = 38.0_f32.to_radians();
+    let elev = 16.0_f32.to_radians();
+    let dist = extent * 1.7;
+    let eye = [
+        center[0] + dist * yaw.sin() * elev.cos(),
+        center[1] + dist * elev.sin(),
+        center[2] + dist * yaw.cos() * elev.cos(),
+    ];
+    let palette = palette_of();
+    draw_model(mesh, &palette, width, height, eye, center, 40.0, BG)
+}
+
+fn mesh_bounds(positions: &[[f32; 3]]) -> ([f32; 3], [f32; 3]) {
+    let mut mn = [f32::MAX; 3];
+    let mut mx = [f32::MIN; 3];
+    for p in positions {
+        for i in 0..3 {
+            mn[i] = mn[i].min(p[i]);
+            mx[i] = mx[i].max(p[i]);
+        }
+    }
+    (mn, mx)
+}
+
+fn draw_model(
+    mesh: &crate::CastMesh,
+    palette: &dyn Fn(&str) -> [f32; 4],
+    width: u32,
+    height: u32,
+    eye: [f32; 3],
+    target: [f32; 3],
+    fov_deg: f32,
+    bg: [u8; 3],
+) -> Vec<u8> {
+    let w = width.max(8);
+    let h = height.max(8);
+    let mut color = Vec::with_capacity((w * h * 3) as usize);
+    for _ in 0..(w * h) {
+        color.extend_from_slice(&bg);
+    }
+    let mut depth = vec![f32::INFINITY; (w * h) as usize];
+    let forward = norm(sub(target, eye));
+    let hint = if forward[1].abs() > 0.92 { [0.0, 0.0, 1.0] } else { [0.0, 1.0, 0.0] };
+    let right = norm(cross(forward, hint));
+    let up = cross(right, forward);
+    let fov = fov_deg.to_radians();
+    let cam = crate::PaintCam {
+        eye,
+        right,
+        up,
+        forward,
+        focal: 1.0 / (fov * 0.5).tan(),
+        aspect: w as f32 / h as f32,
+        w,
+        h,
+        key: norm([-0.2, 0.92, 0.28]),
+        fill: norm([0.55, 0.35, -0.45]),
+    };
+    crate::cast::paint(
+        &mut color,
+        &mut depth,
+        mesh,
+        crate::Placement {
+            pre_yaw: 0.0,
+            pre_shift: [0.0, 0.0, 0.0],
+            yaw_deg: 0.0,
+            lean: 0.0,
+            pivot: [0.0, 0.0, 0.0],
+            shift: [0.0, 0.0, 0.0],
+        },
+        palette,
+        &cam,
+        false,
+    );
+    color
+}
+
 pub fn raster_bug(id: &str, width: u32, height: u32) -> Vec<u8> {
     let visual = bug(id);
     let palette = palette_of();
@@ -107,16 +193,12 @@ pub fn raster_viewmodel_yaw(width: u32, height: u32, frame: &ViewmodelFrame, yaw
     let palette = palette_of();
     let shift = frame.offset;
     let orange = frame.accent;
+    // Gloves stay procedural. The rifle is the fitted cast, grip at the origin, muzzle down -Z.
     let mut parts = vec![
         (shifted(&vm.teal, shift), palette("hero_teal"), false),
         (shifted(&vm.cobalt, shift), palette("hero_cobalt"), false),
         (shifted(&vm.white, shift), palette("hero_white"), false),
     ];
-    // Idle barrel is cobalt. Overdrive turns the whole tube orange. The stripe stays accent.
-    let barrel_color = if frame.overdrive { orange } else { palette("hero_cobalt") };
-    parts.push((shifted(&vm.barrel, shift), barrel_color, frame.overdrive));
-    parts.push((shifted(&vm.accent, shift), orange, true));
-    parts.push((shifted(&vm.core, shift), palette("hero_teal"), true));
     if yaw_deg != 0.0 || pitch_deg != 0.0 {
         for (mesh, _, _) in &mut parts {
             *mesh = crate::portrait::turn_mesh(mesh, yaw_deg, pitch_deg);
@@ -124,7 +206,14 @@ pub fn raster_viewmodel_yaw(width: u32, height: u32, frame: &ViewmodelFrame, yaw
     }
     let w = width.max(8);
     let h = height.max(8);
-    let mut rgb = draw_parts(&parts, [0.0, 0.0, 0.0], [0.0, 0.0, -1.0], frame.fov, w, h);
+    let mut color = Vec::with_capacity((w * h * 3) as usize);
+    for _ in 0..(w * h) {
+        color.extend_from_slice(&BG);
+    }
+    let mut depth = vec![f32::INFINITY; (w * h) as usize];
+    draw_parts_into(&mut color, &mut depth, &parts, [0.0, 0.0, 0.0], [0.0, 0.0, -1.0], frame.fov, w, h);
+    paint_view_gun(&mut color, &mut depth, frame, yaw_deg, pitch_deg, w, h);
+    let mut rgb = color;
     if frame.overdrive {
         edge_tint(&mut rgb, w, h, orange);
         let local = crate::muzzle_local();
@@ -215,6 +304,47 @@ fn shifted(mesh: &crate::MeshData, by: [f32; 3]) -> crate::MeshData {
     copy
 }
 
+fn paint_view_gun(color: &mut [u8], depth: &mut [f32], frame: &ViewmodelFrame, yaw_deg: f32, pitch_deg: f32, w: u32, h: u32) {
+    let content = gemini_sim::content::Content::embedded();
+    let hero = content.hero.id.as_str();
+    let gun = crate::cast(&format!("{hero}_gun"));
+    let view = content
+        .models
+        .iter()
+        .find(|model| model.id == gun.id)
+        .map(|model| model.view)
+        .unwrap_or([0.0, 0.0, 0.0]);
+    let shift = frame.offset;
+    let place = crate::Placement {
+        pre_yaw: 0.0,
+        pre_shift: [view[0] + shift[0], view[1] + shift[1], view[2] + shift[2]],
+        yaw_deg,
+        lean: pitch_deg.to_radians(),
+        pivot: [0.0, 0.0, 0.0],
+        shift: [0.0, 0.0, 0.0],
+    };
+    let eye = [0.0, 0.0, 0.0];
+    let forward = [0.0, 0.0, -1.0];
+    let right = [1.0, 0.0, 0.0];
+    let up = [0.0, 1.0, 0.0];
+    let fov = frame.fov.to_radians();
+    let aspect = w as f32 / h as f32;
+    let cam = crate::PaintCam {
+        eye,
+        right,
+        up,
+        forward,
+        focal: 1.0 / (fov * 0.5).tan(),
+        aspect,
+        w,
+        h,
+        key: norm([-0.35, 0.86, 0.4]),
+        fill: norm([0.6, 0.25, -0.35]),
+    };
+    let palette = palette_of();
+    crate::cast::paint(color, depth, gun, place, &palette, &cam, false);
+}
+
 fn draw_parts(
     parts: &[(crate::MeshData, [f32; 4], bool)],
     eye: [f32; 3],
@@ -230,6 +360,22 @@ fn draw_parts(
         color.extend_from_slice(&BG);
     }
     let mut depth = vec![f32::INFINITY; (w * h) as usize];
+    draw_parts_into(&mut color, &mut depth, parts, eye, target, fov_deg, w, h);
+    color
+}
+
+fn draw_parts_into(
+    color: &mut [u8],
+    depth: &mut [f32],
+    parts: &[(crate::MeshData, [f32; 4], bool)],
+    eye: [f32; 3],
+    target: [f32; 3],
+    fov_deg: f32,
+    width: u32,
+    height: u32,
+) {
+    let w = width.max(8);
+    let h = height.max(8);
     let forward = norm(sub(target, eye));
     let right = norm(cross(forward, [0.0, 1.0, 0.0]));
     let up = cross(right, forward);
@@ -264,10 +410,9 @@ fn draw_parts(
             let Some(c) = project(mesh.positions[ic], eye, right, up, forward, focal, aspect, w, h) else {
                 continue;
             };
-            fill_tri(&mut color, &mut depth, w, h, a, b, c, rgb);
+            fill_tri(color, depth, w, h, a, b, c, rgb);
         }
     }
-    color
 }
 
 fn compose(id: &str, panel: u32, open_shell: bool, camera: Option<([f32; 3], [f32; 3], f32)>) -> (u32, u32, Vec<u8>) {
@@ -333,7 +478,7 @@ fn draw(
     open_shell: bool,
     camera: Option<([f32; 3], [f32; 3], f32)>,
 ) -> Vec<u8> {
-    draw_scene(visual, palette, width, height, silhouette, open_shell, camera, [0.0, 0.0, 0.0], BG, &[])
+    draw_scene(visual, palette, width, height, silhouette, open_shell, camera, [0.0, 0.0, 0.0], BG, &[], None)
 }
 
 /// Bug at `shift`, plus optional world meshes (the arena), on `bg`.
@@ -348,6 +493,7 @@ fn draw_scene(
     shift: [f32; 3],
     bg: [u8; 3],
     extras: &[(&crate::MeshData, [f32; 4])],
+    hero_at: Option<[f32; 3]>,
 ) -> Vec<u8> {
     let w = width.max(8);
     let h = height.max(8);
@@ -375,48 +521,38 @@ fn draw_scene(
     let aspect = w as f32 / h as f32;
     let focal = 1.0 / (fov * 0.5).tan();
 
-    for (part, xf) in visual.parts.iter().zip(posed.xforms.iter()) {
-        if !xf.visible {
-            continue;
-        }
-        let albedo = palette(part.palette.as_str());
-        let mesh = &part.mesh;
-        let mut verts = Vec::with_capacity(mesh.positions.len());
-        for p in &mesh.positions {
-            let scaled = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
-            let r = crate::pose::rotate_vec(xf.rot, scaled);
-            verts.push([r[0] + xf.pos[0] + shift[0], r[1] + xf.pos[1] + shift[1], r[2] + xf.pos[2] + shift[2]]);
-        }
-        for tri in mesh.indices.chunks(3) {
-            if tri.len() < 3 {
-                continue;
-            }
-            let ia = tri[0] as usize;
-            let ib = tri[1] as usize;
-            let ic = tri[2] as usize;
-            let nw = crate::pose::rotate_vec(xf.rot, mesh.normals[ia]);
-            let ndot = (nw[0] * key[0] + nw[1] * key[1] + nw[2] * key[2]).clamp(0.0, 1.0);
-            let ndot2 = (nw[0] * fill[0] + nw[1] * fill[1] + nw[2] * fill[2]).clamp(0.0, 1.0);
-            let shade = (0.62 + 0.40 * ndot + 0.22 * ndot2).clamp(0.0, 1.0);
-            let rgb = if silhouette {
-                [SILHOUETTE[0] as f32 / 255.0, SILHOUETTE[1] as f32 / 255.0, SILHOUETTE[2] as f32 / 255.0]
-            } else if part.emissive {
-                // Exact palette RGB. Unlit, so the color survives with bloom disabled.
-                [albedo[0], albedo[1], albedo[2]]
-            } else {
-                [albedo[0] * shade, albedo[1] * shade, albedo[2] * shade]
-            };
-            let Some(a) = project(verts[ia], eye, right, up, forward, focal, aspect, w, h) else {
-                continue;
-            };
-            let Some(b) = project(verts[ib], eye, right, up, forward, focal, aspect, w, h) else {
-                continue;
-            };
-            let Some(c) = project(verts[ic], eye, right, up, forward, focal, aspect, w, h) else {
-                continue;
-            };
-            fill_tri(&mut color, &mut depth, w, h, a, b, c, rgb);
-        }
+    let (bob, lean) = crate::root_motion(visual, anim);
+    let cam = crate::PaintCam {
+        eye,
+        right,
+        up,
+        forward,
+        focal,
+        aspect,
+        w,
+        h,
+        key,
+        fill,
+    };
+    let cast_mesh = crate::cast(&visual.id);
+    crate::cast::paint(
+        &mut color,
+        &mut depth,
+        cast_mesh,
+        crate::Placement {
+            pre_yaw: 0.0,
+            pre_shift: [0.0, 0.0, 0.0],
+            yaw_deg: 0.0,
+            lean,
+            pivot: [0.0, 0.0, 0.0],
+            shift: [shift[0], shift[1] + bob, shift[2]],
+        },
+        palette,
+        &cam,
+        silhouette,
+    );
+    if !silhouette {
+        paint_glow_markers(&mut color, &mut depth, visual, &posed, palette, &cam, shift, bob, lean);
     }
     if !silhouette {
         for (mesh, albedo) in extras {
@@ -445,7 +581,86 @@ fn draw_scene(
             }
         }
     }
+    if let Some(at) = hero_at {
+        paint_hero_figure(&mut color, &mut depth, &cam, at, eye);
+    }
     color
+}
+
+fn paint_glow_markers(
+    color: &mut [u8],
+    depth: &mut [f32],
+    visual: &EnemyVisual,
+    posed: &crate::Pose,
+    palette: &dyn Fn(&str) -> [f32; 4],
+    cam: &crate::PaintCam,
+    shift: [f32; 3],
+    bob: f32,
+    lean: f32,
+) {
+    let (ls, lc) = lean.sin_cos();
+    for (part, xf) in visual.parts.iter().zip(posed.xforms.iter()) {
+        if !part.emissive || !xf.visible {
+            continue;
+        }
+        let albedo = palette(part.palette.as_str());
+        let p = xf.pos;
+        let y2 = lc * p[1] - ls * p[2];
+        let z2 = ls * p[1] + lc * p[2];
+        let center = [p[0] + shift[0], y2 + shift[1] + bob, z2 + shift[2]];
+        let to_eye = norm(sub(cam.eye, center));
+        let center = [center[0] + to_eye[0] * 0.06, center[1] + to_eye[1] * 0.06, center[2] + to_eye[2] * 0.06];
+        paint_octahedron(color, depth, cam, center, 0.1, [albedo[0], albedo[1], albedo[2]]);
+    }
+}
+
+fn paint_octahedron(color: &mut [u8], depth: &mut [f32], cam: &crate::PaintCam, center: [f32; 3], radius: f32, rgb: [f32; 3]) {
+    let r = radius;
+    let c = center;
+    let verts = [
+        [c[0] + r, c[1], c[2]],
+        [c[0] - r, c[1], c[2]],
+        [c[0], c[1] + r, c[2]],
+        [c[0], c[1] - r, c[2]],
+        [c[0], c[1], c[2] + r],
+        [c[0], c[1], c[2] - r],
+    ];
+    let tris = [
+        [0, 2, 4],
+        [2, 1, 4],
+        [1, 3, 4],
+        [3, 0, 4],
+        [2, 0, 5],
+        [1, 2, 5],
+        [3, 1, 5],
+        [0, 3, 5],
+    ];
+    for tri in tris {
+        let Some(a) = project(verts[tri[0]], cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
+            continue;
+        };
+        let Some(b) = project(verts[tri[1]], cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
+            continue;
+        };
+        let Some(c) = project(verts[tri[2]], cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
+            continue;
+        };
+        fill_tri(color, depth, cam.w, cam.h, a, b, c, rgb);
+    }
+}
+
+fn paint_hero_figure(color: &mut [u8], depth: &mut [f32], cam: &crate::PaintCam, at: [f32; 3], eye: [f32; 3]) {
+    let content = gemini_sim::content::Content::embedded();
+    let id = content.hero.id.as_str();
+    let fx = eye[0] - at[0];
+    let fz = eye[2] - at[2];
+    let yaw = (-fx).atan2(-fz).to_degrees();
+    let pivot = crate::body_pivot(&content, id);
+    let palette = |name: &str| content.palette.key(name);
+    for mesh in crate::hero_pieces(id) {
+        let place = crate::hero_placement(&content, mesh, at, pivot, yaw, 0.0);
+        crate::cast::paint(color, depth, mesh, place, &palette, cam, false);
+    }
 }
 
 /// In-arena color still. The eye stands on the deck, `review_distance` meters from the bug.
@@ -499,6 +714,7 @@ pub fn raster_in_arena(id: &str, width: u32, height: u32) -> Vec<u8> {
         bug_at,
         bg,
         &extras,
+        None,
     )
 }
 
@@ -540,9 +756,8 @@ pub fn raster_rail_edge(width: u32, height: u32) -> Vec<u8> {
     for piece in &pieces {
         owned.push((piece.mesh.clone(), palette(&piece.palette)));
     }
-    owned.extend(player_reference(&content, stand));
     let extras: Vec<(&crate::MeshData, [f32; 4])> = owned.iter().map(|(mesh, color)| (mesh, *color)).collect();
-    // The hero is the scale figure. The swarmer stays at the deck center, outside this rim view.
+    // The cast hero is the scale figure. The swarmer stays at the deck center, outside this rim view.
     draw_scene(
         bug("swarmer"),
         &palette,
@@ -554,36 +769,8 @@ pub fn raster_rail_edge(width: u32, height: u32) -> Vec<u8> {
         [platform.center.x, deck, platform.center.z],
         bg,
         &extras,
+        Some(stand),
     )
-}
-
-/// Starter hero, feet on `at`, as a scale figure. Portrait framing is removed.
-fn player_reference(content: &gemini_sim::content::Content, at: [f32; 3]) -> Vec<(crate::MeshData, [f32; 4])> {
-    let id = content.hero.id.as_str();
-    let hero = content.heroes.iter().find(|hero| hero.id == id).expect("starter hero");
-    let parts = crate::portrait::build(&content.heroes_visual, id).expect("starter body");
-    let mut min_y = f32::MAX;
-    let mut cx = 0.0;
-    let mut cz = 0.0;
-    let mut count = 0.0;
-    for part in &parts {
-        for p in &part.mesh.positions {
-            min_y = min_y.min(p[1]);
-            cx += p[0];
-            cz += p[2];
-            count += 1.0;
-        }
-    }
-    let shift = [at[0] - cx / count, at[1] - min_y, at[2] - cz / count];
-    parts
-        .into_iter()
-        .map(|part| {
-            let mut mesh = part.mesh;
-            crate::geom::translate(&mut mesh, shift);
-            let key = if part.palette == "accent" { hero.accent_key.as_str() } else { part.palette.as_str() };
-            (mesh, content.palette.key(key))
-        })
-        .collect()
 }
 
 pub fn palette_of() -> impl Fn(&str) -> [f32; 4] {

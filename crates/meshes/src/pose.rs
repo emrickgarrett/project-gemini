@@ -38,6 +38,18 @@ pub struct Pose {
     pub planted: Vec<u32>,
 }
 
+/// Whole-body bob and charge lean. Static casts have no skeleton, so this is the motion they keep.
+pub fn root_motion(visual: &EnemyVisual, anim: AnimInput) -> (f32, f32) {
+    let move_amt = if anim.moving { 1.0 } else { 0.0 };
+    let bob = (anim.time * visual.bob_hz * std::f32::consts::TAU).sin() * visual.bob_amp * (0.35 + 0.65 * move_amt);
+    let lean = if anim.charging {
+        -visual.charge_lean_deg.to_radians()
+    } else {
+        0.0
+    };
+    (bob, lean)
+}
+
 pub fn pose(visual: &EnemyVisual, anim: AnimInput, prev_lift: &[f32]) -> Pose {
     let n = visual.parts.len();
     let mut locals: Vec<([f32; 3], [f32; 4], [f32; 3], bool, f32)> = Vec::with_capacity(n);
@@ -47,13 +59,8 @@ pub fn pose(visual: &EnemyVisual, anim: AnimInput, prev_lift: &[f32]) -> Pose {
     } else {
         1.0
     };
+    let (bob, lean) = root_motion(visual, anim);
     let move_amt = if anim.moving { 1.0 } else { 0.0 };
-    let bob = (anim.time * visual.bob_hz * std::f32::consts::TAU).sin() * visual.bob_amp * (0.35 + 0.65 * move_amt);
-    let lean = if anim.charging {
-        -visual.charge_lean_deg.to_radians()
-    } else {
-        0.0
-    };
 
     for part in &visual.parts {
         let mut euler = part.rest_euler;

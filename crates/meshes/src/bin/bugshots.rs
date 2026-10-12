@@ -333,7 +333,8 @@ mod vex_reference {
 
     #[test]
     fn vex_fp_stills_stay_near_the_polished_reference() {
-        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../art/heroes/reference");
+        // The Meshy gun replaced the #12 box rifle. The gate is the committed still.
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../art/heroes");
         let idle_ref = decode_png(&format!("{root}/vex_fp_idle.png"));
         let drive_ref = decode_png(&format!("{root}/vex_fp_overdrive.png"));
         assert_eq!(idle_ref.len(), (W * H * 3) as usize);

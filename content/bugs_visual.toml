@@ -1,0 +1,100 @@
+# Meshy bug casts. Hitboxes and weak points stay in bugs.toml.
+# `file` is under assets/. A missing or unknown file fails at load.
+# `triangles` and `bytes` are the budgets. `fit = "hitbox"` scales the mesh
+# into that bug's body hitbox. Colors are palette.toml keys.
+# Red in the mask uses `accent` (magenta). Green uses `glow` (acid, emissive).
+
+[[model]]
+id = "swarmer"
+file = "models/swarmer.glb"
+triangles = 7200
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "not-in-handoff"
+base = "swarmer_amber"
+accent = "spitter_glow"
+glow = "swarmer_glow"
+rim = ""
+fit = "hitbox"
+size = 0.0
+yaw_deg = 0.0
+at = [0.0, 0.0, 0.0]
+grip = [0.0, 0.0, 0.0]
+view = [0.0, 0.0, 0.0]
+
+[[model]]
+id = "spitter"
+file = "models/spitter.glb"
+triangles = 8000
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-07b4-77f7-92d7-6b273530504d"
+base = "spitter_carapace"
+accent = "spitter_glow"
+glow = "swarmer_glow"
+rim = "spitter_rim"
+fit = "hitbox"
+size = 0.0
+yaw_deg = 0.0
+at = [0.0, 0.0, 0.0]
+grip = [0.0, 0.0, 0.0]
+view = [0.0, 0.0, 0.0]
+
+[[model]]
+id = "brute"
+file = "models/brute.glb"
+triangles = 16500
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-0821-7782-a83c-d920709db581"
+base = "brute_amber"
+accent = "brute_cracks"
+glow = "swarmer_glow"
+rim = ""
+fit = "hitbox"
+size = 0.0
+yaw_deg = 0.0
+at = [0.0, 0.0, 0.0]
+grip = [0.0, 0.0, 0.0]
+view = [0.0, 0.0, 0.0]
+
+[[model]]
+id = "brood_mother"
+file = "models/brood_mother.glb"
+triangles = 16000
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-07ff-709c-8474-341c65290b70"
+base = "brood_sac"
+accent = "spitter_glow"
+glow = "swarmer_glow"
+rim = ""
+fit = "hitbox"
+size = 0.0
+yaw_deg = 0.0
+at = [0.0, 0.0, 0.0]
+grip = [0.0, 0.0, 0.0]
+view = [0.0, 0.0, 0.0]
+
+[[model]]
+id = "hive_tyrant"
+file = "models/hive_tyrant.glb"
+triangles = 16500
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-07ff-709d-8a31-1645d04d96be"
+base = "brute_amber"
+accent = "spitter_glow"
+glow = "swarmer_glow"
+rim = ""
+fit = "hitbox"
+size = 0.0
+yaw_deg = 0.0
+at = [0.0, 0.0, 0.0]
+grip = [0.0, 0.0, 0.0]
+view = [0.0, 0.0, 0.0]

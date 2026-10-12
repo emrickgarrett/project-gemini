@@ -150,3 +150,182 @@ thumb_sides = 8
 thumb_at = [0.07, -0.02, -0.02]
 thumb_pitch = 0.85
 thumb_yaw = 0.9
+
+# Meshy static casts. `file` is under assets/. A missing or unknown file fails at load.
+# Rigged bodies, and the grip-origin guns from the rig handoff, are not in this set.
+# `triangles` and `bytes` are the budgets. `size` is the fitted height or gun length.
+# `at` places a body in front of the portrait camera, or a weapon's grip on that body.
+# `view` is the grip in viewmodel space, before characters.toml viewmodel_offset.
+# Gun grips sit on the +X butt. Brakk's shield grip is the handle.
+# Colors are palette.toml keys. Empty `rim` means no rim light.
+
+[[model]]
+id = "vex_body"
+file = "models/vex_body.glb"
+triangles = 14000
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "not-in-handoff"
+base = "hero_vex_base"
+accent = "hero_vex"
+glow = "swarmer_glow"
+rim = ""
+fit = "hero"
+size = 1.84
+yaw_deg = 0.0
+at = [0.0, -0.92, -3.20]
+grip = [0.0, 0.0, 0.0]
+view = [0.0, 0.0, 0.0]
+
+[[model]]
+id = "vex_gun"
+file = "models/vex_gun.glb"
+triangles = 3400
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "not-in-handoff"
+base = "hero_vex_base"
+accent = "hero_vex"
+glow = "swarmer_glow"
+rim = ""
+fit = "weapon"
+size = 0.78
+yaw_deg = 180.0
+at = [0.34, 1.08, 0.26]
+grip = [1.0, 0.0, 0.0]
+view = [0.10, -0.05, -0.22]
+
+[[model]]
+id = "nyra_body"
+file = "models/nyra_body.glb"
+triangles = 14000
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-0793-7293-ba7e-cf21b38cc17a"
+base = "hero_nyra_base"
+accent = "hero_nyra"
+glow = "swarmer_glow"
+rim = ""
+fit = "hero"
+size = 1.74
+yaw_deg = 0.0
+at = [0.0, -0.87, -3.15]
+grip = [0.0, 0.0, 0.0]
+view = [0.0, 0.0, 0.0]
+
+[[model]]
+id = "nyra_gun"
+file = "models/nyra_gun.glb"
+triangles = 3400
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-07ac-73d3-9c70-26a0d522c443"
+base = "hero_nyra_base"
+accent = "hero_nyra"
+glow = "swarmer_glow"
+rim = ""
+fit = "weapon"
+size = 0.72
+yaw_deg = 180.0
+at = [0.26, 1.02, 0.22]
+grip = [1.0, 0.0, 0.0]
+view = [0.08, -0.04, -0.20]
+
+[[model]]
+id = "brakk_body"
+file = "models/brakk_body.glb"
+triangles = 14000
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-07c4-7020-aa98-9b0149cdc711"
+base = "hero_brakk_base"
+accent = "hero_brakk"
+glow = "swarmer_glow"
+rim = ""
+fit = "hero"
+size = 1.96
+yaw_deg = 0.0
+at = [0.0, -0.98, -3.55]
+grip = [0.0, 0.0, 0.0]
+view = [0.0, 0.0, 0.0]
+
+[[model]]
+id = "brakk_gun"
+file = "models/brakk_gun.glb"
+triangles = 3400
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-07f6-7500-94c6-71ba5b485607"
+base = "hero_brakk_base"
+accent = "hero_brakk"
+glow = "swarmer_glow"
+rim = ""
+fit = "weapon"
+size = 0.82
+yaw_deg = 180.0
+at = [0.46, 1.08, 0.28]
+grip = [1.0, 0.0, 0.0]
+view = [0.12, -0.06, -0.24]
+
+[[model]]
+id = "brakk_shield"
+file = "models/brakk_shield.glb"
+triangles = 3600
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-0850-7679-b7cb-91f3bedf9043"
+base = "hero_brakk_base"
+accent = "hero_brakk"
+glow = "swarmer_glow"
+rim = ""
+fit = "shield"
+size = 1.12
+yaw_deg = 0.0
+at = [-0.50, 1.20, 0.18]
+grip = [0.0, 0.0, -0.058]
+view = [0.0, 0.0, 0.0]
+
+[[model]]
+id = "kip_body"
+file = "models/kip_body.glb"
+triangles = 13000
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-07a4-737d-80be-85f9da7898c6"
+base = "hero_kip_base"
+accent = "hero_kip"
+glow = "swarmer_glow"
+rim = ""
+fit = "hero"
+size = 1.66
+yaw_deg = 0.0
+at = [0.0, -0.83, -3.10]
+grip = [0.0, 0.0, 0.0]
+view = [0.0, 0.0, 0.0]
+
+[[model]]
+id = "kip_gun"
+file = "models/kip_gun.glb"
+triangles = 3400
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-07ea-7463-8f9a-8c225f23fcfd"
+base = "hero_kip_base"
+accent = "hero_kip"
+glow = "swarmer_glow"
+rim = ""
+fit = "weapon"
+size = 0.86
+yaw_deg = 180.0
+at = [0.26, 0.98, 0.20]
+grip = [1.0, 0.0, 0.0]
+view = [0.08, -0.04, -0.22]

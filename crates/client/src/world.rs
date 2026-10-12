@@ -1,4 +1,4 @@
-//! One mesh handle per bug part. Joints pose the instances. Distant bugs swap to the LOD mesh.
+//! One Meshy cast per bug. Root bob and charge lean are the motion. The same mesh is used up close and far.
 
 use std::collections::HashMap;
 
@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy::render::view::{ColorGrading, Tonemapping};
 
-use gemini_meshes::{pose, AnimInput, MeshData, Rgba};
+use gemini_meshes::{pose, root_motion, AnimInput, CastMesh, MeshData, Rgba};
 use gemini_sim::content::EnemyKind;
 use gemini_sim::math::Vec3 as SimVec;
 use gemini_sim::sim::{AiState, ShotKind};
@@ -79,6 +79,8 @@ pub(crate) struct BarrelGlow {
 #[derive(Resource, Default)]
 pub(crate) struct Bank {
     meshes: HashMap<String, Handle<Mesh>>,
+    casts: HashMap<String, Handle<Mesh>>,
+    cast_mats: HashMap<String, Handle<StandardMaterial>>,
     mats: HashMap<String, Handle<StandardMaterial>>,
     tracer: Handle<Mesh>,
     acid: Handle<Mesh>,
@@ -110,6 +112,7 @@ pub fn scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     game: Res<Game>,
 ) {
     let content = &game.content;
@@ -228,6 +231,13 @@ pub fn scene(
         ));
     }
 
+    for mesh in gemini_meshes::casts() {
+        let handle = upload_cast(&mut meshes, mesh);
+        let mat = cast_material(&mut images, &mut materials, content, mesh);
+        bank.casts.insert(mesh.id.clone(), handle);
+        bank.cast_mats.insert(mesh.id.clone(), mat);
+    }
+
     let vm = gemini_meshes::viewmodel(&content.heroes_visual.glove);
     let offset = content.hero.viewmodel_offset;
     let hands = Transform::from_xyz(offset[0], offset[1], offset[2]);
@@ -237,9 +247,6 @@ pub fn scene(
         unlit: true,
         ..default()
     });
-    let trim_idle = trim_handle.clone();
-    let strip = mat_of(&bank, "hero_teal", true, false);
-    let cobalt_idle = mat_of(&bank, "hero_cobalt", false, false);
     // The world camera draws layer 0. The overlay camera draws the arms on
     // layer 1 with its own depth buffer, so the rifle cannot clip into the arena.
     let world_cam = commands
@@ -285,33 +292,38 @@ pub fn scene(
         ))
         .id();
     let layer = RenderLayers::layer(1);
+    let gun_id = format!("{}_gun", content.hero.id);
+    let gun_mesh = bank.casts.get(&gun_id).cloned().unwrap_or_else(|| panic!("missing {gun_id}"));
+    let gun_idle = bank.cast_mats.get(&gun_id).cloned().unwrap_or_else(|| panic!("missing {gun_id} material"));
+    let gun_view = content
+        .models
+        .iter()
+        .find(|model| model.id == gun_id)
+        .map(|model| model.view)
+        .unwrap_or([0.0, 0.0, 0.0]);
+    let grip = Transform::from_xyz(offset[0] + gun_view[0], offset[1] + gun_view[1], offset[2] + gun_view[2]);
+    let mut gun_hot_src = materials.get(&gun_idle).cloned().unwrap_or_default();
+    gun_hot_src.emissive = LinearRgba::rgb(trim[0] * 5.0, trim[1] * 2.2, trim[2] * 0.4);
+    let gun_hot = materials.add(gun_hot_src);
     let pieces = [
-        (upload(&mut meshes, &vm.teal), mat_of(&bank, "hero_teal", false, false), None),
-        (upload(&mut meshes, &vm.cobalt), cobalt_idle.clone(), None),
-        (upload(&mut meshes, &vm.white), mat_of(&bank, "hero_white", false, false), None),
+        (upload(&mut meshes, &vm.teal), mat_of(&bank, "hero_teal", false, false), hands, None),
+        (upload(&mut meshes, &vm.cobalt), mat_of(&bank, "hero_cobalt", false, false), hands, None),
+        (upload(&mut meshes, &vm.white), mat_of(&bank, "hero_white", false, false), hands, None),
         (
-            upload(&mut meshes, &vm.barrel),
-            cobalt_idle.clone(),
+            gun_mesh,
+            gun_idle.clone(),
+            grip,
             Some(BarrelGlow {
-                idle: cobalt_idle,
-                hot: barrel_hot.clone(),
+                idle: gun_idle,
+                hot: gun_hot,
             }),
         ),
-        (
-            upload(&mut meshes, &vm.accent),
-            trim_idle.clone(),
-            Some(BarrelGlow {
-                idle: trim_idle,
-                hot: barrel_hot.clone(),
-            }),
-        ),
-        (upload(&mut meshes, &vm.core), strip, None),
     ];
-    for (mesh, mat, glow) in pieces {
+    for (mesh, mat, place, glow) in pieces {
         let mut entity = commands.spawn((
             Mesh3d(mesh),
             MeshMaterial3d(mat),
-            hands,
+            place,
             layer.clone(),
             ChildOf(vm_cam),
         ));
@@ -372,10 +384,6 @@ pub fn sync(
             let link = links.bugs.get(&enemy.id).expect("bug");
             (link.root, link.parts.clone(), link.lod)
         };
-        if let Ok(mut xf) = roots.get_mut(root) {
-            xf.translation = bevy::math::Vec3::new(enemy.pos.x, enemy.pos.y, enemy.pos.z);
-            xf.rotation = Quat::from_rotation_y(enemy.yaw);
-        }
         let visual = gemini_meshes::bug(enemy.kind.name());
         let moving = enemy.vel.x * enemy.vel.x + enemy.vel.z * enemy.vel.z > 0.05;
         let charging = match enemy.kind {
@@ -414,6 +422,25 @@ pub fn sync(
             },
             &prev,
         );
+        let (bob, lean) = root_motion(
+            visual,
+            AnimInput {
+                time: game.sim.time + enemy.id as f32 * 0.17,
+                moving,
+                charging,
+                vulnerable: enemy.weak_exposed,
+                phase: enemy.phase as u32,
+                frenzy: enemy.kind == EnemyKind::HiveTyrant && enemy.phase >= 1,
+                preview_glow: false,
+                regrow: 0,
+                hatch_pod: 255,
+                hatch_charge: 0.0,
+            },
+        );
+        if let Ok(mut xf) = roots.get_mut(root) {
+            xf.translation = bevy::math::Vec3::new(enemy.pos.x, enemy.pos.y + bob, enemy.pos.z);
+            xf.rotation = Quat::from_rotation_y(enemy.yaw) * Quat::from_rotation_x(lean);
+        }
         if let Some(slot) = links.feet.get_mut(&enemy.id) {
             *slot = posed.foot_lift.clone();
         }
@@ -423,12 +450,7 @@ pub fn sync(
                 audio::footstep(&mut commands, assets.as_ref(), game.as_ref(), &name, enemy.pos, prefs.as_ref());
             }
         }
-        let dist = {
-            let dx = enemy.pos.x - eye.x;
-            let dz = enemy.pos.z - eye.z;
-            (dx * dx + dz * dz).sqrt()
-        };
-        let use_lod = dist > visual.lod_distance;
+        let _ = eye;
         for (entity, xf) in part_ids.iter().zip(posed.xforms.iter()) {
             if let Ok((mut part, mut local, mut vis)) = parts.get_mut(*entity) {
                 local.translation = bevy::math::Vec3::new(xf.pos[0], xf.pos[1], xf.pos[2]);
@@ -438,7 +460,7 @@ pub fn sync(
                     .pod_slot
                     .and_then(|slot| enemy.pods.get(slot as usize).copied())
                     .is_some_and(|hp| hp <= 0.0);
-                *vis = if use_lod || !xf.visible || pod_dead {
+                *vis = if !xf.visible || pod_dead {
                     Visibility::Hidden
                 } else {
                     Visibility::Inherited
@@ -460,7 +482,7 @@ pub fn sync(
         }
         if let Ok((mut local, mut vis)) = lods.get_mut(lod) {
             local.translation = bevy::math::Vec3::ZERO;
-            *vis = if use_lod { Visibility::Inherited } else { Visibility::Hidden };
+            *vis = Visibility::Hidden;
         }
     }
 
@@ -572,18 +594,14 @@ pub fn sync(
 fn spawn_bug(
     commands: &mut Commands,
     bank: &Bank,
-    game: &Game,
-    materials: &mut Assets<StandardMaterial>,
+    _game: &Game,
+    _materials: &mut Assets<StandardMaterial>,
     kind: EnemyKind,
     id: u32,
 ) -> BugLink {
-    let visual = gemini_meshes::bug(kind.name());
-    let shell = visual
-        .parts
-        .iter()
-        .find(|p| !p.emissive)
-        .map(|p| p.palette.clone())
-        .unwrap_or_else(|| "brute_amber".into());
+    let name = kind.name();
+    let mesh = bank.casts.get(name).cloned().unwrap_or_else(|| panic!("missing cast {name}"));
+    let mat = bank.cast_mats.get(name).cloned().unwrap_or_else(|| panic!("missing cast material {name}"));
     let root = commands
         .spawn((
             Transform::IDENTITY,
@@ -592,62 +610,25 @@ fn spawn_bug(
             PlayPiece,
         ))
         .id();
-    let colors = &game.content.bug(kind).visual;
-    let mut parts = Vec::new();
-    for (index, part) in visual.parts.iter().enumerate() {
-        let mesh = bank.meshes.get(&part.mesh_key).cloned().unwrap_or_else(|| bank.tracer.clone());
-        let bud = part.grows;
-        let rest_key = if bud && !colors.bud_color.is_empty() {
-            colors.bud_color.as_str()
-        } else {
-            part.palette.as_str()
-        };
-        let rest = mat_of(bank, rest_key, part.emissive && !bud, false);
-        let mut hot = if bud && !colors.grown_color.is_empty() {
-            mat_of(bank, &colors.grown_color, true, true)
-        } else if part.emissive {
-            mat_of(bank, &part.palette, true, true)
-        } else {
-            rest.clone()
-        };
-        if part.pod_slot.is_some() && part.emissive {
-            if let Some(src) = materials.get(&hot).cloned() {
-                hot = materials.add(src);
-            }
-        }
-        let pod_slot = part.pod_slot;
-        let entity = commands
-            .spawn((
-                Mesh3d(mesh),
-                MeshMaterial3d(rest.clone()),
-                Transform::from_xyz(part.rest_pos[0], part.rest_pos[1], part.rest_pos[2]),
-                Visibility::Inherited,
-                BugPart {
-                    index,
-                    emissive: part.emissive,
-                    grows: part.grows,
-                    pod_slot,
-                    rest,
-                    hot,
-                    hot_on: false,
-                },
-                ChildOf(root),
-            ))
-            .id();
-        parts.push(entity);
-    }
-    let lod_mesh = bank.meshes.get(&visual.lod_key).cloned().unwrap_or_else(|| bank.tracer.clone());
+    commands.spawn((
+        Mesh3d(mesh),
+        MeshMaterial3d(mat),
+        Transform::IDENTITY,
+        Visibility::Inherited,
+        ChildOf(root),
+        PlayPiece,
+    ));
     let lod = commands
         .spawn((
-            Mesh3d(lod_mesh),
-            MeshMaterial3d(mat_of(bank, &shell, false, false)),
+            Mesh3d(bank.tracer.clone()),
+            MeshMaterial3d(mat_of(bank, "brute_amber", false, false)),
             Transform::IDENTITY,
             Visibility::Hidden,
             BugLod,
             ChildOf(root),
         ))
         .id();
-    BugLink { root, parts, lod }
+    BugLink { root, parts: Vec::new(), lod }
 }
 
 pub fn grade(
@@ -753,6 +734,50 @@ pub fn sync_viewmodel(
         PlayPiece,
         ChildOf(cam),
     ));
+}
+
+fn upload_cast(meshes: &mut Assets<Mesh>, data: &CastMesh) -> Handle<Mesh> {
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, data.positions.clone());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, data.normals.clone());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, data.uvs.clone());
+    mesh.insert_indices(Indices::U32(data.indices.clone()));
+    meshes.add(mesh)
+}
+
+fn cast_material(
+    images: &mut Assets<Image>,
+    materials: &mut Assets<StandardMaterial>,
+    content: &gemini_sim::content::Content,
+    mesh: &CastMesh,
+) -> Handle<StandardMaterial> {
+    let palette = |name: &str| content.palette.key(name);
+    let (w, h, albedo, emit) = gemini_meshes::bake_textures(mesh, &palette);
+    let albedo_image = rgba_image(w, h, albedo);
+    let emit_image = rgba_image(w, h, emit);
+    materials.add(StandardMaterial {
+        base_color_texture: Some(images.add(albedo_image)),
+        emissive_texture: Some(images.add(emit_image)),
+        emissive: LinearRgba::rgb(1.0, 1.0, 1.0),
+        perceptual_roughness: 1.0,
+        metallic: 0.0,
+        ..default()
+    })
+}
+
+fn rgba_image(width: u32, height: u32, data: Vec<u8>) -> Image {
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    Image::new(
+        Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    )
 }
 
 fn upload(meshes: &mut Assets<Mesh>, data: &MeshData) -> Handle<Mesh> {

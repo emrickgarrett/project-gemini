@@ -39,6 +39,8 @@ pub struct Content {
     pub ui: Ui,
     /// Full-body card meshes and the first-person glove. One list with the portraits.
     pub heroes_visual: HeroesVisual,
+    /// Meshy casts. Bodies, weapons, and bugs. The sim stores the record and does not read the files.
+    pub models: Vec<CastModel>,
     /// Deck, low rim, and the review camera. Not a collider.
     pub arena_dressing: ArenaDressing,
 }
@@ -138,8 +140,21 @@ impl Content {
         require_spawn_clearance(&bosses, &bugs).map_err(|err| format!("bosses.toml: {err}"))?;
         let mut palette: Palette = parse("palette.toml", src.palette)?;
         let heroes_visual = load_heroes_visual(src.heroes_visual, &palette)?;
+        let bug_models = load_model_table(
+            include_str!("../../../content/bugs_visual.toml"),
+            &palette,
+            "bugs_visual.toml",
+        )?;
+        let mut models = heroes_visual.models.clone();
+        for model in bug_models {
+            if models.iter().any(|have| have.id == model.id) {
+                return Err(format!("duplicate cast model \"{}\"", model.id));
+            }
+            models.push(model);
+        }
         let mesh_ids: Vec<String> = heroes_visual.meshes.iter().map(|mesh| mesh.id.clone()).collect();
         let (mut hero, guns, roster, heroes, warnings) = load_characters(src.hero, &mesh_ids)?;
+        require_cast_roster(&models, &heroes)?;
         for mesh in &heroes_visual.meshes {
             if !heroes.iter().any(|card| card.portrait.mesh == mesh.id) {
                 return Err(format!(
@@ -233,6 +248,7 @@ impl Content {
             cosmetics: load_cosmetics(src.cosmetics).map_err(|err| format!("cosmetics.toml: {err}"))?,
             ui,
             heroes_visual,
+            models,
             arena_dressing,
         })
     }
@@ -1301,6 +1317,29 @@ pub struct HeroPortrait {
 pub struct HeroesVisual {
     pub meshes: Vec<HeroMesh>,
     pub glove: GloveSpec,
+    pub models: Vec<CastModel>,
+}
+
+/// One Meshy cast. Paths, budgets, and palette keys live here. The mesh crate reads the file.
+#[derive(Clone, Debug)]
+pub struct CastModel {
+    pub id: String,
+    pub file: String,
+    pub triangles: u32,
+    pub bytes: u32,
+    pub source: String,
+    pub license: String,
+    pub task: String,
+    pub base: String,
+    pub accent: String,
+    pub glow: String,
+    pub rim: String,
+    pub fit: String,
+    pub size: f32,
+    pub yaw_deg: f32,
+    pub at: [f32; 3],
+    pub grip: [f32; 3],
+    pub view: [f32; 3],
 }
 
 /// One hero's ability, as the act-now cues read it. No hero or ability id.
@@ -1679,7 +1718,7 @@ fn load_portrait(
 fn load_heroes_visual(text: &str, palette: &Palette) -> Result<HeroesVisual, String> {
     let root: toml::Value = toml::from_str(text).map_err(|err| format!("heroes_visual.toml: {err}"))?;
     let table = root.as_table().ok_or_else(|| "heroes_visual.toml is not a table".to_string())?;
-    expect_keys(table, &["mesh", "glove"], "heroes_visual.toml")?;
+    expect_keys(table, &["mesh", "glove", "model"], "heroes_visual.toml")?;
     let rows = table
         .get("mesh")
         .and_then(|v| v.as_array())
@@ -1713,7 +1752,142 @@ fn load_heroes_visual(text: &str, palette: &Palette) -> Result<HeroesVisual, Str
         .get("glove")
         .and_then(|v| v.as_table())
         .ok_or_else(|| "heroes_visual.toml is missing [glove]".to_string())?;
-    Ok(HeroesVisual { meshes, glove: load_glove(glove_row)? })
+    let models = load_model_rows(
+        table.get("model").and_then(|v| v.as_array()),
+        palette,
+        "heroes_visual.toml",
+    )?;
+    Ok(HeroesVisual {
+        meshes,
+        glove: load_glove(glove_row)?,
+        models,
+    })
+}
+
+fn load_model_table(text: &str, palette: &Palette, what: &str) -> Result<Vec<CastModel>, String> {
+    let root: toml::Value = toml::from_str(text).map_err(|err| format!("{what}: {err}"))?;
+    let table = root.as_table().ok_or_else(|| format!("{what} is not a table"))?;
+    expect_keys(table, &["model"], what)?;
+    load_model_rows(table.get("model").and_then(|v| v.as_array()), palette, what)
+}
+
+fn load_model_rows(
+    rows: Option<&Vec<toml::Value>>,
+    palette: &Palette,
+    what: &str,
+) -> Result<Vec<CastModel>, String> {
+    let rows = rows.ok_or_else(|| format!("{what} is missing [[model]]"))?;
+    if rows.is_empty() {
+        return Err(format!("{what} has no [[model]]"));
+    }
+    let mut models: Vec<CastModel> = Vec::new();
+    for row in rows {
+        let map = row.as_table().ok_or_else(|| format!("{what} model is not a table"))?;
+        expect_keys(
+            map,
+            &[
+                "id", "file", "triangles", "bytes", "source", "license", "task", "base", "accent", "glow", "rim", "fit",
+                "size", "yaw_deg", "at", "grip", "view",
+            ],
+            &format!("{what} model"),
+        )?;
+        let id = vis_str(map, "id", &format!("{what} model"))?.to_string();
+        if id.is_empty() || models.iter().any(|model| model.id == id) {
+            return Err(format!("{what} duplicate or empty model id \"{id}\""));
+        }
+        let file = vis_str(map, "file", &format!("{what} {id}"))?.to_string();
+        let expected = format!("models/{id}.glb");
+        if file != expected {
+            return Err(format!("{what} {id} file \"{file}\" is unknown"));
+        }
+        let fit = vis_str(map, "fit", &format!("{what} {id}"))?.to_string();
+        if !matches!(fit.as_str(), "hero" | "hitbox" | "weapon" | "shield") {
+            return Err(format!("{what} {id} fit \"{fit}\" is unknown"));
+        }
+        let size = vis_f32(map, "size", &format!("{what} {id}"))?;
+        if fit != "hitbox" && !(size > 0.0) {
+            return Err(format!("{what} {id} size must be > 0"));
+        }
+        let labeled = id.clone();
+        let color = |key: &str| -> Result<String, String> {
+            let name = vis_str(map, key, &format!("{what} {labeled}"))?.to_string();
+            if name.is_empty() {
+                if key == "rim" {
+                    return Ok(name);
+                }
+                return Err(format!("{what} {labeled} {key} is empty"));
+            }
+            let resolved = palette.hex(&name).unwrap_or("");
+            if resolved.trim().trim_start_matches('#').len() < 6 {
+                return Err(format!("{what} {labeled} {key} \"{name}\" does not resolve"));
+            }
+            Ok(name)
+        };
+        let source = vis_str(map, "source", &format!("{what} {id}"))?.to_string();
+        let license = vis_str(map, "license", &format!("{what} {id}"))?.to_string();
+        let task = vis_str(map, "task", &format!("{what} {id}"))?.to_string();
+        if source.is_empty() || license.is_empty() || task.is_empty() {
+            return Err(format!("{what} {id} source, license, and task are required"));
+        }
+        let yaw_deg = vis_f32(map, "yaw_deg", &format!("{what} {id}"))?;
+        if !yaw_deg.is_finite() {
+            return Err(format!("{what} {id} yaw_deg must be finite"));
+        }
+        models.push(CastModel {
+            id,
+            file,
+            triangles: vis_u32(map, "triangles", &format!("{what} model"))?,
+            bytes: vis_u32(map, "bytes", &format!("{what} model"))?,
+            source,
+            license,
+            task,
+            base: color("base")?,
+            accent: color("accent")?,
+            glow: color("glow")?,
+            rim: color("rim")?,
+            fit,
+            size,
+            yaw_deg,
+            at: vis_vec3(map, "at", &format!("{what} model"))?,
+            grip: vis_vec3(map, "grip", &format!("{what} model"))?,
+            view: vis_vec3(map, "view", &format!("{what} model"))?,
+        });
+    }
+    Ok(models)
+}
+
+fn require_cast_roster(models: &[CastModel], heroes: &[HeroCard]) -> Result<(), String> {
+    let need = [
+        "vex_body",
+        "vex_gun",
+        "nyra_body",
+        "nyra_gun",
+        "brakk_body",
+        "brakk_gun",
+        "brakk_shield",
+        "kip_body",
+        "kip_gun",
+        "swarmer",
+        "spitter",
+        "brute",
+        "brood_mother",
+        "hive_tyrant",
+    ];
+    for id in need {
+        if !models.iter().any(|model| model.id == id) {
+            return Err(format!("cast model \"{id}\" is missing"));
+        }
+    }
+    for hero in heroes {
+        let body = format!("{}_body", hero.id);
+        if !models.iter().any(|model| model.id == body) {
+            return Err(format!("cast model \"{body}\" is missing"));
+        }
+    }
+    if models.len() != need.len() {
+        return Err(format!("cast roster has {} models, expected {}", models.len(), need.len()));
+    }
+    Ok(())
 }
 
 fn load_hero_part(value: &toml::Value, id: &str, palette: &Palette) -> Result<HeroPart, String> {
@@ -3386,6 +3560,11 @@ pub struct PaletteKeys {
     pub hero_nyra: String,
     pub hero_brakk: String,
     pub hero_kip: String,
+    pub hero_vex_base: String,
+    pub hero_nyra_base: String,
+    pub hero_brakk_base: String,
+    pub hero_kip_base: String,
+    pub spitter_rim: String,
     pub hero_plate: String,
     pub portrait_field: String,
     pub arena_sky: String,
@@ -3411,6 +3590,11 @@ impl Palette {
             "hero_nyra" => self.keys.hero_nyra.as_str(),
             "hero_brakk" => self.keys.hero_brakk.as_str(),
             "hero_kip" => self.keys.hero_kip.as_str(),
+            "hero_vex_base" => self.keys.hero_vex_base.as_str(),
+            "hero_nyra_base" => self.keys.hero_nyra_base.as_str(),
+            "hero_brakk_base" => self.keys.hero_brakk_base.as_str(),
+            "hero_kip_base" => self.keys.hero_kip_base.as_str(),
+            "spitter_rim" => self.keys.spitter_rim.as_str(),
             "hero_plate" => self.keys.hero_plate.as_str(),
             "portrait_field" => self.keys.portrait_field.as_str(),
             "arena_sky" => self.keys.arena_sky.as_str(),

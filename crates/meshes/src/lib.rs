@@ -3,6 +3,7 @@
 
 mod arena;
 mod away_still;
+mod cast;
 mod geom;
 mod glyph;
 mod menu_still;
@@ -12,15 +13,21 @@ mod preview;
 mod reveal_still;
 mod visual;
 
+pub use cast::{
+    bake_textures, body_pivot, cast, casts, hero_pieces, hero_placement, load_catalog, model_bytes, muzzle_tip, place_point, read_model_file,
+    CastMesh, PaintCam, Placement,
+};
+
 pub use menu_still::{paint_menu, raster_hero_portrait, Hit, MenuShot, PaintPrefs};
 
 pub use arena::{pieces as arena_pieces, review_ground, ArenaPiece};
 pub use away_still::{paint_away, AwayShot};
 pub use reveal_still::{paint_reveal, reveal_still_is_flat, still_color_stats};
 
-pub use pose::{pose, AnimInput, Pose, Xform};
+pub use pose::{pose, root_motion, AnimInput, Pose, Xform};
 pub use preview::{
-    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_in_arena, raster_rail_edge, raster_top, raster_viewmodel, still,
+    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_in_arena, raster_model, raster_rail_edge, raster_top,
+    raster_viewmodel, still,
     still_open, still_top, ViewmodelFrame,
 };
 pub use visual::{bug, catalog, flat_shaded, EnemyVisual, Gate, Joint, Part, ShotCamera};
@@ -92,8 +99,19 @@ impl Viewmodel {
 }
 
 /// Barrel tip in viewmodel mesh space, before the screen offset from characters.toml.
+/// Vex's muzzle in viewmodel mesh space, before `viewmodel_offset`.
+/// The fitted gun keeps its grip at the origin and its muzzle down -Z.
 pub fn muzzle_local() -> [f32; 3] {
-    [0.03, -0.005, -1.28]
+    let gun = cast("vex_gun");
+    let tip = muzzle_tip(gun);
+    let content = gemini_sim::content::Content::embedded();
+    let view = content
+        .models
+        .iter()
+        .find(|model| model.id == "vex_gun")
+        .map(|model| model.view)
+        .unwrap_or([0.0, 0.0, 0.0]);
+    [view[0] + tip[0], view[1] + tip[1], view[2] + tip[2]]
 }
 
 /// Round muzzle glow, centered on the origin. Scale it by the radius from characters.toml.
