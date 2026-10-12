@@ -13,8 +13,6 @@
 # the hitbox radius is under that mesh radius times hitbox_margin.
 
 hitbox_margin = 1.1
-# Still camera distance for the in-arena review frames. Gameplay does not read it.
-review_distance = 15.0
 
 [feedback]
 weakpoint_hit = "weakpoint_hit"

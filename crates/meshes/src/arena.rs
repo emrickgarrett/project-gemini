@@ -1,5 +1,5 @@
-//! Arena dressing. Radii and heights come from arena_01. Tessellation and rocks
-//! come from arena_visual.toml. Nothing here is a collider.
+//! Arena dressing. Radii and heights come from the parsed arena. Tessellation
+//! and the curb come from arena dressing. Nothing here is a collider.
 
 use crate::geom;
 use crate::MeshData;
@@ -12,26 +12,8 @@ pub struct ArenaPiece {
     pub palette: String,
 }
 
-struct Visual {
-    deck_sides: u32,
-    rail_posts: u32,
-    rail_thickness: f32,
-    review_stand_gap: f32,
-    rocks: Vec<Rock>,
-}
-
-struct Rock {
-    at: [f32; 2],
-    size: [f32; 3],
-}
-
-pub fn review_stand_gap() -> f32 {
-    visual().review_stand_gap
-}
-
-pub fn pieces() -> Vec<ArenaPiece> {
-    let content = Content::embedded();
-    let vis = visual();
+pub fn pieces(content: &Content) -> Vec<ArenaPiece> {
+    let dress = &content.arena_dressing;
     let platform = &content.arena.platform;
     let mut out = Vec::new();
     let mut deck = MeshData::new();
@@ -40,15 +22,17 @@ pub fn pieces() -> Vec<ArenaPiece> {
         [platform.center.x, platform.height * 0.5, platform.center.z],
         platform.radius,
         platform.height,
-        vis.deck_sides,
+        dress.deck_sides,
     );
     out.push(ArenaPiece { mesh: deck, palette: "arena_light".into() });
-    out.extend(rails(
-        &vis,
+    out.push(curb(
+        dress.rail_posts,
+        dress.rail_thickness,
+        dress.rail_height,
+        dress.ramp_gap_dot,
         [platform.center.x, platform.center.z],
         platform.radius,
         platform.height,
-        platform.railing_height,
         &platform.ramps,
     ));
     for ramp in &platform.ramps {
@@ -57,96 +41,106 @@ pub fn pieces() -> Vec<ArenaPiece> {
             palette: "arena_light".into(),
         });
     }
-    for rock in &vis.rocks {
-        let mut mesh = MeshData::new();
-        let radii = [rock.size[0] * 0.5, rock.size[1] * 0.5, rock.size[2] * 0.5];
-        geom::gem(&mut mesh, [rock.at[0], radii[1], rock.at[1]], radii, 6, 4, INK);
-        out.push(ArenaPiece { mesh, palette: "arena_dark".into() });
-    }
     out
 }
 
 /// Ground disc used by the in-arena still. The client keeps its own ground box.
-pub fn review_ground() -> MeshData {
-    let content = Content::embedded();
+pub fn review_ground(content: &Content) -> MeshData {
     let mut mesh = MeshData::new();
-    disc(&mut mesh, [0.0, 0.02, 0.0], content.arena.radius, visual().deck_sides);
+    disc(
+        &mut mesh,
+        [0.0, content.arena_dressing.review_ground_y, 0.0],
+        content.arena.radius,
+        content.arena_dressing.deck_sides,
+    );
     mesh
 }
 
-fn visual() -> Visual {
-    let text = include_str!("../../../content/arena_visual.toml");
-    let root: toml::Value = toml::from_str(text).unwrap_or_else(|err| panic!("arena_visual.toml: {err}"));
-    let table = root.as_table().unwrap_or_else(|| panic!("arena_visual.toml is not a table"));
-    expect_keys(table, &["deck_sides", "rail_posts", "rail_thickness", "review_stand_gap", "rock"], "arena_visual.toml");
-    let deck_sides = req_u32(table, "deck_sides");
-    let rail_posts = req_u32(table, "rail_posts");
-    let rail_thickness = req_f32(table, "rail_thickness");
-    let review_stand_gap = req_f32(table, "review_stand_gap");
-    if deck_sides < 8 || rail_posts < 8 || !(rail_thickness > 0.0) || !(review_stand_gap > 0.0) {
-        panic!("arena_visual.toml deck, rail, or stand gap is out of range");
-    }
-    let rows = table.get("rock").and_then(|v| v.as_array()).unwrap_or_else(|| panic!("arena_visual.toml is missing [[rock]]"));
-    let content = Content::embedded();
-    let boss = &content.arena.boss_area;
-    let mut rocks = Vec::new();
-    for row in rows {
-        let map = row.as_table().unwrap_or_else(|| panic!("rock is not a table"));
-        expect_keys(map, &["at", "size"], "rock");
-        let at = req_vec2(map, "at");
-        let size = req_vec3(map, "size");
-        if size.iter().any(|n| !(*n > 0.0)) {
-            panic!("rock size must be > 0");
-        }
-        let dx = at[0] - boss.center.x;
-        let dz = at[1] - boss.center.z;
-        if (dx * dx + dz * dz).sqrt() <= boss.radius {
-            panic!("rock at {at:?} sits in the boss area");
-        }
-        let deck = content.arena.platform.radius;
-        if (at[0] * at[0] + at[1] * at[1]).sqrt() <= deck {
-            panic!("rock at {at:?} sits on the platform");
-        }
-        rocks.push(Rock { at, size });
-    }
-    Visual { deck_sides, rail_posts, rail_thickness, review_stand_gap, rocks }
-}
-
-fn rails(
-    vis: &Visual,
+fn curb(
+    posts: u32,
+    thick: f32,
+    rail_h: f32,
+    gap_dot: f32,
     center: [f32; 2],
     radius: f32,
     deck_top: f32,
-    rail_h: f32,
     ramps: &[gemini_sim::content::Ramp],
-) -> Vec<ArenaPiece> {
+) -> ArenaPiece {
     let mut mesh = MeshData::new();
-    let thick = vis.rail_thickness;
-    for i in 0..vis.rail_posts {
-        let ang = i as f32 / vis.rail_posts as f32 * std::f32::consts::TAU;
-        let dir = [ang.cos(), ang.sin()];
-        if ramps.iter().any(|ramp| near_ramp(center, dir, ramp)) {
+    let inner = radius - thick * 0.5;
+    let outer = radius + thick * 0.5;
+    let y0 = deck_top;
+    let y1 = deck_top + rail_h;
+    let skipped = |i: u32| {
+        let ang = (i as f32 + 0.5) / posts as f32 * std::f32::consts::TAU;
+        let (s, c) = ang.sin_cos();
+        ramps.iter().any(|ramp| near_ramp(center, [c, s], ramp, gap_dot))
+    };
+    let point = |ang: f32, rad: f32, y: f32| {
+        let (s, c) = ang.sin_cos();
+        [center[0] + c * rad, y, center[1] + s * rad]
+    };
+    for i in 0..posts {
+        if skipped(i) {
             continue;
         }
-        let x = center[0] + dir[0] * (radius - thick * 0.5);
-        let z = center[1] + dir[1] * (radius - thick * 0.5);
-        let mut post = MeshData::new();
-        geom::box_mesh(&mut post, [x, deck_top + rail_h * 0.5, z], [thick, rail_h, thick], INK);
-        for n in &mut post.normals {
-            n[0] = -n[0];
-            n[1] = -n[1];
-            n[2] = -n[2];
+        let a0 = i as f32 / posts as f32 * std::f32::consts::TAU;
+        let a1 = (i + 1) as f32 / posts as f32 * std::f32::consts::TAU;
+        geom::add_quad(
+            &mut mesh,
+            point(a0, outer, y1),
+            point(a0, outer, y0),
+            point(a1, outer, y0),
+            point(a1, outer, y1),
+            INK,
+        );
+        geom::add_quad(
+            &mut mesh,
+            point(a1, inner, y1),
+            point(a1, inner, y0),
+            point(a0, inner, y0),
+            point(a0, inner, y1),
+            INK,
+        );
+        geom::add_quad(
+            &mut mesh,
+            point(a0, inner, y1),
+            point(a1, inner, y1),
+            point(a1, outer, y1),
+            point(a0, outer, y1),
+            INK,
+        );
+        let prev = if i == 0 { posts - 1 } else { i - 1 };
+        let next = (i + 1) % posts;
+        if skipped(prev) {
+            geom::add_quad(
+                &mut mesh,
+                point(a0, outer, y0),
+                point(a0, outer, y1),
+                point(a0, inner, y1),
+                point(a0, inner, y0),
+                INK,
+            );
         }
-        geom::append(&mut mesh, &post);
+        if skipped(next) {
+            geom::add_quad(
+                &mut mesh,
+                point(a1, inner, y0),
+                point(a1, inner, y1),
+                point(a1, outer, y1),
+                point(a1, outer, y0),
+                INK,
+            );
+        }
     }
-    vec![ArenaPiece { mesh, palette: "arena_light".into() }]
+    ArenaPiece { mesh, palette: "arena_light".into() }
 }
 
-fn near_ramp(center: [f32; 2], dir: [f32; 2], ramp: &gemini_sim::content::Ramp) -> bool {
+fn near_ramp(center: [f32; 2], dir: [f32; 2], ramp: &gemini_sim::content::Ramp, gap_dot: f32) -> bool {
     let mouth = [ramp.from.x - center[0], ramp.from.z - center[1]];
     let len = (mouth[0] * mouth[0] + mouth[1] * mouth[1]).sqrt().max(1e-4);
     let dot = (dir[0] * mouth[0] + dir[1] * mouth[1]) / len;
-    dot > 0.86
+    dot > gap_dot
 }
 
 fn ramp_wedge(from: [f32; 2], to: [f32; 2], width: f32, height: f32) -> MeshData {
@@ -201,65 +195,4 @@ fn disc(mesh: &mut MeshData, center: [f32; 3], radius: f32, sides: u32) {
         let j = (i + 1) % sides as usize;
         geom::add_face(mesh, center, ring[i], ring[j], INK);
     }
-}
-
-fn expect_keys(table: &toml::map::Map<String, toml::Value>, allowed: &[&str], what: &str) {
-    for key in table.keys() {
-        if !allowed.contains(&key.as_str()) {
-            panic!("{what} has unknown key {key}");
-        }
-    }
-    for key in allowed {
-        if !table.contains_key(*key) {
-            panic!("{what} is missing {key}");
-        }
-    }
-}
-
-fn req_f32(table: &toml::map::Map<String, toml::Value>, key: &str) -> f32 {
-    let n = table
-        .get(key)
-        .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|i| i as f64)))
-        .unwrap_or_else(|| panic!("arena_visual.toml is missing {key}")) as f32;
-    if !n.is_finite() {
-        panic!("arena_visual.toml {key} is not finite");
-    }
-    n
-}
-
-fn req_u32(table: &toml::map::Map<String, toml::Value>, key: &str) -> u32 {
-    table
-        .get(key)
-        .and_then(|v| v.as_integer())
-        .filter(|n| *n >= 0)
-        .unwrap_or_else(|| panic!("arena_visual.toml is missing {key}")) as u32
-}
-
-fn req_vec2(table: &toml::map::Map<String, toml::Value>, key: &str) -> [f32; 2] {
-    let v = req_nums(table, key);
-    if v.len() != 2 {
-        panic!("{key} must have 2 numbers");
-    }
-    [v[0], v[1]]
-}
-
-fn req_vec3(table: &toml::map::Map<String, toml::Value>, key: &str) -> [f32; 3] {
-    let v = req_nums(table, key);
-    if v.len() != 3 {
-        panic!("{key} must have 3 numbers");
-    }
-    [v[0], v[1], v[2]]
-}
-
-fn req_nums(table: &toml::map::Map<String, toml::Value>, key: &str) -> Vec<f32> {
-    let arr = table.get(key).and_then(|v| v.as_array()).unwrap_or_else(|| panic!("missing {key}"));
-    arr.iter()
-        .map(|value| {
-            let n = value.as_float().or_else(|| value.as_integer().map(|i| i as f64)).unwrap_or_else(|| panic!("{key}")) as f32;
-            if !n.is_finite() {
-                panic!("{key} is not finite");
-            }
-            n
-        })
-        .collect()
 }

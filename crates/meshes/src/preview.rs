@@ -102,7 +102,8 @@ pub fn raster_viewmodel(width: u32, height: u32, frame: &ViewmodelFrame) -> Vec<
 
 /// Same still, with the posed viewmodel turned. Zero yaw and pitch is the unrotated raster.
 pub fn raster_viewmodel_yaw(width: u32, height: u32, frame: &ViewmodelFrame, yaw_deg: f32, pitch_deg: f32) -> Vec<u8> {
-    let vm = crate::viewmodel();
+    let glove = gemini_sim::content::Content::embedded().heroes_visual.glove;
+    let vm = crate::viewmodel(&glove);
     let palette = palette_of();
     let shift = frame.offset;
     let orange = frame.accent;
@@ -451,15 +452,16 @@ fn draw_scene(
 pub fn raster_in_arena(id: &str, width: u32, height: u32) -> Vec<u8> {
     use gemini_sim::content::Content;
     let content = Content::embedded();
-    let distance = review_distance();
+    let dress = &content.arena_dressing;
+    let distance = dress.review_distance;
     let visual = bug(id);
     // Bug stands on the deck. The eye is `review_distance` meters out along the
     // concept camera, so the still is the bug in the arena rather than a camera
     // buried in the platform.
-    let look = [0.0, visual.height * 0.45, 0.0];
+    let look = [0.0, visual.height * dress.review_look_height, 0.0];
     let dir = norm(sub(visual.camera.eye, visual.camera.target));
     let mut eye = [look[0] + dir[0] * distance, look[1] + dir[1] * distance, look[2] + dir[2] * distance];
-    let clearance = content.arena.platform.radius + crate::review_stand_gap();
+    let clearance = content.arena.platform.radius + dress.review_stand_gap;
     let flat = (eye[0] * eye[0] + eye[2] * eye[2]).sqrt();
     if flat < clearance {
         let scale = clearance / flat.max(1.0e-4);
@@ -469,8 +471,8 @@ pub fn raster_in_arena(id: &str, width: u32, height: u32) -> Vec<u8> {
     let sky = content.palette.key("arena_sky");
     let bg = [byte(sky[0]), byte(sky[1]), byte(sky[2])];
     let palette = |name: &str| content.palette.key(name);
-    let ground = crate::review_ground();
-    let pieces = crate::arena_pieces();
+    let ground = crate::review_ground(&content);
+    let pieces = crate::arena_pieces(&content);
     let mut owned: Vec<(crate::MeshData, [f32; 4])> = Vec::new();
     owned.push((ground, palette("arena_dark")));
     for piece in &pieces {
@@ -491,17 +493,54 @@ pub fn raster_in_arena(id: &str, width: u32, height: u32) -> Vec<u8> {
     )
 }
 
-pub fn review_distance() -> f32 {
-    let text = include_str!("../../../content/bugs.toml");
-    let root: toml::Value = toml::from_str(text).unwrap_or_else(|err| panic!("bugs.toml: {err}"));
-    let distance = root
-        .get("review_distance")
-        .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|n| n as f64)))
-        .unwrap_or_else(|| panic!("bugs.toml is missing review_distance")) as f32;
-    if !(distance > 0.0) {
-        panic!("bugs.toml review_distance must be > 0");
+/// The curb at the rim, with a swarmer on the deck so the height reads against a body.
+pub fn raster_rail_edge(width: u32, height: u32) -> Vec<u8> {
+    use gemini_sim::content::Content;
+    let content = Content::embedded();
+    let dress = &content.arena_dressing;
+    let platform = &content.arena.platform;
+    let ang = dress.rail_still_angle_deg.to_radians();
+    let (s, c) = ang.sin_cos();
+    let radial = [c, s];
+    let tangent = [-s, c];
+    let look = [
+        platform.center.x + radial[0] * platform.radius,
+        platform.height + dress.rail_height * 0.5,
+        platform.center.z + radial[1] * platform.radius,
+    ];
+    let eye = [
+        look[0] + radial[0] * dress.rail_still_back + tangent[0] * dress.rail_still_side,
+        look[1] + dress.rail_still_up,
+        look[2] + radial[1] * dress.rail_still_back + tangent[1] * dress.rail_still_side,
+    ];
+    let sky = content.palette.key("arena_sky");
+    let bg = [byte(sky[0]), byte(sky[1]), byte(sky[2])];
+    let palette = |name: &str| content.palette.key(name);
+    let ground = crate::review_ground(&content);
+    let pieces = crate::arena_pieces(&content);
+    let mut owned: Vec<(crate::MeshData, [f32; 4])> = Vec::new();
+    owned.push((ground, palette("arena_dark")));
+    for piece in &pieces {
+        owned.push((piece.mesh.clone(), palette(&piece.palette)));
     }
-    distance
+    let extras: Vec<(&crate::MeshData, [f32; 4])> = owned.iter().map(|(mesh, color)| (mesh, *color)).collect();
+    let stand = platform.radius - dress.rail_still_inset;
+    draw_scene(
+        bug("swarmer"),
+        &palette,
+        width,
+        height,
+        false,
+        false,
+        Some((eye, look, dress.rail_still_fov)),
+        [
+            platform.center.x + radial[0] * stand,
+            platform.height,
+            platform.center.z + radial[1] * stand,
+        ],
+        bg,
+        &extras,
+    )
 }
 
 pub fn palette_of() -> impl Fn(&str) -> [f32; 4] {

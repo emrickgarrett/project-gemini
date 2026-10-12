@@ -610,7 +610,8 @@ pub fn raster_hero_portrait(content: &Content, hero_id: &str, raster: u32) -> Ve
 }
 
 fn portrait_raster(content: &Content, hero: &gemini_sim::content::HeroCard, raster: u32) -> Vec<u8> {
-    let built = crate::portrait::build(&hero.portrait.mesh).unwrap_or_else(|| panic!("unknown portrait mesh {}", hero.portrait.mesh));
+    let built = crate::portrait::build(&content.heroes_visual, &hero.portrait.mesh)
+        .unwrap_or_else(|| panic!("unknown portrait mesh {}", hero.portrait.mesh));
     let turned = crate::portrait::turn(&built, hero.portrait.yaw_deg, hero.portrait.pitch_deg);
     let positions: Vec<[f32; 3]> = turned.iter().flat_map(|part| part.mesh.positions.iter().copied()).collect();
     let fov = mesh_fov(content, &positions, hero.portrait.fit);
@@ -908,11 +909,14 @@ mod tests {
     fn portraits_are_full_bodies_and_the_content_turn_changes_them() {
         let content = Content::embedded();
         let raster = content.ui.portrait.raster;
-        let listed: Vec<&str> = gemini_sim::content::PORTRAIT_MESHES.to_vec();
-        let built_ids = crate::portrait::ids();
-        assert_eq!(built_ids.len(), listed.len());
-        for id in &built_ids {
-            assert!(listed.contains(&id.as_str()), "{id} is not a portrait mesh");
+        let listed: Vec<&str> = content.heroes_visual.meshes.iter().map(|mesh| mesh.id.as_str()).collect();
+        let portraits: Vec<&str> = content.heroes.iter().map(|hero| hero.portrait.mesh.as_str()).collect();
+        assert_eq!(listed.len(), portraits.len());
+        for id in &listed {
+            assert!(portraits.contains(id), "{id} is not a portrait mesh");
+        }
+        for id in &portraits {
+            assert!(listed.contains(id), "{id} has no visual mesh");
         }
         for hero in &content.heroes {
             let (x0, y0, x1, y1) = opaque_bounds(&content, &portrait_raster(&content, hero, raster), raster).unwrap();
@@ -934,12 +938,13 @@ mod tests {
 
     #[test]
     fn portrait_builders_follow_the_content_list() {
-        for id in gemini_sim::content::PORTRAIT_MESHES {
-            let built = crate::portrait::build(id);
-            assert!(built.is_some_and(|parts| !parts.is_empty()), "{id}");
+        let content = gemini_sim::content::Content::embedded();
+        for mesh in &content.heroes_visual.meshes {
+            let built = crate::portrait::build(&content.heroes_visual, &mesh.id);
+            assert!(built.is_some_and(|parts| !parts.is_empty()), "{}", mesh.id);
         }
-        assert!(crate::portrait::build("laser_knife").is_none());
-        assert!(crate::portrait::build("pulse_rifle").is_none());
+        assert!(crate::portrait::build(&content.heroes_visual, "laser_knife").is_none());
+        assert!(crate::portrait::build(&content.heroes_visual, "pulse_rifle").is_none());
     }
 
     fn round_bytes(content: &Content, key: &str) -> [u8; 3] {

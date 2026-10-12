@@ -200,7 +200,7 @@ pub fn scene(
         Transform::IDENTITY,
         PlayPiece,
     ));
-    for piece in gemini_meshes::arena_pieces() {
+    for piece in gemini_meshes::arena_pieces(content) {
         let mesh = upload(&mut meshes, &piece.mesh);
         commands.spawn((
             Mesh3d(mesh),
@@ -228,7 +228,7 @@ pub fn scene(
         ));
     }
 
-    let vm = gemini_meshes::viewmodel();
+    let vm = gemini_meshes::viewmodel(&content.heroes_visual.glove);
     let offset = content.hero.viewmodel_offset;
     let hands = Transform::from_xyz(offset[0], offset[1], offset[2]);
     let barrel_hot = materials.add(StandardMaterial {

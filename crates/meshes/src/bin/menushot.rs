@@ -50,6 +50,14 @@ fn main() {
         write_png(&path, &rgb, 1280, 720);
         println!("wrote {path}");
     }
+    let mut unlocked = content.clone();
+    for hero in &mut unlocked.heroes {
+        hero.owned = true;
+    }
+    let (rgb, _) = paint_menu(&unlocked, &MenuShot::Heroes { focus: 0 }, 1280, 720);
+    let path = format!("{out}/heroes_unlocked_1280x720.png");
+    write_png(&path, &rgb, 1280, 720);
+    println!("wrote {path}");
     let heroes = MenuShot::Heroes { focus: 0 };
     for (width, height) in [(1366, 768), (2560, 1440)] {
         let (rgb, _) = paint_menu(&content, &heroes, width, height);
@@ -66,6 +74,11 @@ fn main() {
         let rgb = raster_hero_portrait(&content, &hero.id, raster);
         let path = format!("{out}/portrait_{}.png", hero.id);
         write_png(&path, &rgb, raster, raster);
+        println!("wrote {path}");
+        let big = 640u32;
+        let rgb = raster_hero_portrait(&content, &hero.id, big);
+        let path = format!("{out}/portrait_{}_{big}.png", hero.id);
+        write_png(&path, &rgb, big, big);
         println!("wrote {path}");
     }
 }
