@@ -4,6 +4,7 @@
 pub mod audio_mix;
 pub mod bugs;
 pub mod content;
+pub mod reveal;
 pub mod math;
 pub mod music;
 pub mod ogg;

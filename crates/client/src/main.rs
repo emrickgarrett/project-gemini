@@ -4,6 +4,7 @@ mod audio;
 mod hud;
 #[cfg(not(target_arch = "wasm32"))]
 mod net;
+mod reveal_ui;
 mod session;
 mod world;
 
@@ -16,6 +17,7 @@ enum AppState {
     #[default]
     Menu,
     Playing,
+    Reveal,
 }
 
 fn main() {
@@ -72,7 +74,9 @@ fn install_match(app: &mut App) {
                 .chain()
                 .run_if(in_state(AppState::Playing)),
         )
-        .add_systems(Update, (menu_keys, session::autoplay).run_if(in_state(AppState::Menu)));
+        .add_systems(Update, (menu_keys, session::autoplay).run_if(in_state(AppState::Menu)))
+        .add_systems(Update, reveal_ui::tick.run_if(in_state(AppState::Reveal)))
+        .add_systems(OnExit(AppState::Reveal), reveal_ui::close);
 }
 
 #[derive(Component)]
@@ -108,8 +112,37 @@ fn menu(mut commands: Commands) {
                 TextFont::from_font_size(16.0),
                 TextColor(white),
             ),
+            (
+                Text::new("REVEAL"),
+                TextFont::from_font_size(14.0),
+                TextColor(white),
+            ),
         ],
     ));
+    for rarity in ["common", "rare", "epic", "legendary"] {
+        let label = rarity.to_uppercase();
+        commands
+            .spawn((
+                Button,
+                reveal_ui::RevealButton(rarity),
+                Node {
+                    width: Val::Px(240.0),
+                    height: Val::Px(36.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border_radius: BorderRadius::all(Val::Px(8.0)),
+                    ..default()
+                },
+                BackgroundColor(teal),
+                MenuRoot,
+                children![(
+                    Text::new(label),
+                    TextFont::from_font_size(16.0),
+                    TextColor(Color::srgb(0.07, 0.06, 0.09)),
+                )],
+            ))
+            .observe(reveal_ui::start_button);
+    }
     for (id, label) in [("normal", "NORMAL"), ("hard", "HARD"), ("heroic", "HEROIC"), ("legendary", "LEGENDARY")] {
         commands
             .spawn((

@@ -122,6 +122,12 @@ impl Content {
         let (hero, guns, roster) = load_characters(src.hero)?;
         let mut weapons = parse::<WeaponFile>("weapons.toml", src.weapons)?;
         weapons.weapon = guns;
+        let audio = crate::audio_mix::load_mix(src.audio).map_err(|err| format!("audio_mix.toml: {err}"))?;
+        let crate_reveal: CrateReveal = parse("crate_reveal.toml", src.crate_reveal)?;
+        validate_reveal_cues(&crate_reveal, &audio)?;
+        validate_reveal_layout(&crate_reveal)?;
+        let palette: Palette = parse("palette.toml", src.palette)?;
+        require_palette_keys(&palette, &bugs).map_err(|err| format!("palette.toml: {err}"))?;
         Ok(Self {
             fingerprint,
             waves: parse("waves.toml", src.waves)?,
@@ -145,7 +151,7 @@ impl Content {
             arena: load_arena(src.arena).map_err(|err| format!("arena_01.toml: {err}"))?,
             presentation: parse("presentation.toml", src.presentation)?,
             combat: parse("combat.toml", src.combat)?,
-            palette: parse("palette.toml", src.palette)?,
+            palette,
             music: {
                 let loaded = crate::music::load_music(src.music).map_err(|err| format!("music.toml: {err}"))?;
                 MusicFile {
@@ -155,9 +161,9 @@ impl Content {
                     rotation: loaded.rotation,
                 }
             },
-            audio: crate::audio_mix::load_mix(src.audio).map_err(|err| format!("audio_mix.toml: {err}"))?,
+            audio,
             bugs,
-            crate_reveal: parse("crate_reveal.toml", src.crate_reveal)?,
+            crate_reveal,
             coop: load_coop(src.coop).map_err(|err| format!("coop.toml: {err}"))?,
             cosmetics: load_cosmetics(src.cosmetics).map_err(|err| format!("cosmetics.toml: {err}"))?,
         })
@@ -272,6 +278,23 @@ impl Content {
         self.audio.sfx.iter().find(|s| s.id == id)
     }
 
+    /// File for a reveal cue. Stings live in the sting table; tease and fakeout live in sfx.
+    pub fn cue_path(&self, id: &str) -> Option<&str> {
+        if let Some(sting) = self.audio.sting.iter().find(|row| row.id == id) {
+            return Some(sting.path.as_str());
+        }
+        self.sfx(id).map(|row| row.path.as_str())
+    }
+
+    /// Playback gain for a mix row. `None` means the id is not in the mix.
+    /// A sting row with no `volume_db` never reaches playback: content load rejects it.
+    pub fn cue_volume(&self, id: &str) -> Option<f32> {
+        if let Some(sting) = self.audio.sting.iter().find(|row| row.id == id) {
+            return Some(sting.volume);
+        }
+        self.sfx(id).map(|row| row.volume)
+    }
+
     pub fn pitch_range(&self, id: &str) -> Option<(f32, f32)> {
         let semi = self.sfx(id)?.pitch_semitones;
         if semi <= 0.0 {
@@ -299,6 +322,69 @@ fn fnv_cat(parts: &[&str]) -> u64 {
         }
     }
     hash
+}
+
+/// Every tease, fakeout, and rarity sting must name a mix row that has `volume_db`
+/// and a file under `assets/`. Playback does not skip a missing cue.
+fn validate_reveal_cues(reveal: &CrateReveal, audio: &AudioTable) -> Result<(), String> {
+    let mut ids = Vec::new();
+    for name in ["common", "rare", "epic", "legendary"] {
+        let tier = reveal.tier(name).ok_or_else(|| format!("crate_reveal.toml: missing tier {name}"))?;
+        ids.push(cue_stem(&tier.tease));
+        ids.push(cue_stem(&tier.sting));
+    }
+    let fakeout = cue_stem(&reveal.fakeout_sfx);
+    if !fakeout.is_empty() {
+        ids.push(fakeout);
+    }
+    let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+    let check_files = assets.is_dir();
+    for id in ids {
+        let path = reveal_cue_file(audio, &id)?;
+        if check_files && !assets.join(path).is_file() {
+            return Err(format!("reveal cue {id} file {path} is missing"));
+        }
+    }
+    Ok(())
+}
+
+fn reveal_cue_file<'a>(audio: &'a AudioTable, id: &str) -> Result<&'a str, String> {
+    if let Some(sting) = audio.sting.iter().find(|row| row.id == id) {
+        return Ok(sting.path.as_str());
+    }
+    if let Some(sfx) = audio.sfx.iter().find(|row| row.id == id) {
+        return Ok(sfx.path.as_str());
+    }
+    Err(format!("reveal cue {id} does not resolve to a mix row with volume_db"))
+}
+
+fn cue_stem(path: &str) -> String {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
+    name.trim_end_matches(".ogg").to_string()
+}
+
+fn validate_reveal_layout(reveal: &CrateReveal) -> Result<(), String> {
+    let hint = &reveal.hint;
+    if !(hint.text_px > 0.0) {
+        return Err("crate_reveal.toml hint.text_px must be positive".into());
+    }
+    if !(hint.opacity > 0.0 && hint.opacity <= 1.0) {
+        return Err("crate_reveal.toml hint.opacity must be in (0, 1]".into());
+    }
+    if !(hint.margin_x >= 0.0) || !(hint.margin_y >= 0.0) {
+        return Err("crate_reveal.toml hint margins must be non-negative".into());
+    }
+    let card = &reveal.card;
+    if !(card.title_pad >= 0.0) {
+        return Err("crate_reveal.toml card.title_pad must be non-negative".into());
+    }
+    if !(card.title_max_scale > 0.0) {
+        return Err("crate_reveal.toml card.title_max_scale must be positive".into());
+    }
+    if !(card.legendary_title_max_scale > card.title_max_scale) {
+        return Err("crate_reveal.toml card.legendary_title_max_scale must exceed title_max_scale".into());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -2178,8 +2264,9 @@ pub struct PaletteKeys {
 }
 
 impl Palette {
-    pub fn key(&self, name: &str) -> [f32; 4] {
-        let hex = match name {
+    /// Hex for a known color name. `None` when the name is not in the palette.
+    pub fn hex(&self, name: &str) -> Option<&str> {
+        Some(match name {
             "swarmer_amber" => self.keys.swarmer_amber.as_str(),
             "swarmer_glow" => self.keys.swarmer_glow.as_str(),
             "spitter_carapace" => self.keys.spitter_carapace.as_str(),
@@ -2199,20 +2286,63 @@ impl Palette {
             "rarity_rare" => self.rarity.rare.as_str(),
             "rarity_epic" => self.rarity.epic.as_str(),
             "rarity_legendary" => self.rarity.legendary.as_str(),
-            _ => "#FFFFFF",
-        };
-        hex_srgb(hex)
+            _ => return None,
+        })
     }
+
+    pub fn key(&self, name: &str) -> [f32; 4] {
+        hex_srgb(self.hex(name).unwrap_or_else(|| panic!("unknown palette key {name}")))
+    }
+}
+
+fn require_palette_keys(palette: &Palette, bugs: &crate::bugs::BugBook) -> Result<(), String> {
+    let check = |owner: &str, name: &str| -> Result<(), String> {
+        if name.is_empty() || palette.hex(name).is_some() {
+            return Ok(());
+        }
+        Err(format!("{owner} color \"{name}\" does not resolve"))
+    };
+    for (bug, row) in bugs.rows() {
+        check(bug, &row.visual.bud_color)?;
+        check(bug, &row.visual.grown_color)?;
+        for part in &row.visual.parts {
+            check(bug, &part.color)?;
+        }
+    }
+    for rarity in ["common", "rare", "epic", "legendary"] {
+        check("rarity", &format!("rarity_{rarity}"))?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct CrateReveal {
     pub fakeout_enabled: bool,
+    pub fakeout_sfx: String,
+    pub burst_fade: f32,
+    pub freeze_dim: f32,
     pub common: CrateTier,
     pub rare: CrateTier,
     pub epic: CrateTier,
     pub legendary: CrateTier,
     pub multi_pull: CrateMulti,
+    pub hint: RevealHint,
+    pub card: CardTitle,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct RevealHint {
+    pub text_px: f32,
+    pub opacity: f32,
+    pub margin_x: f32,
+    pub margin_y: f32,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct CardTitle {
+    pub title_pad: f32,
+    pub title_max_scale: f32,
+    pub legendary_title_max_scale: f32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -2312,6 +2442,8 @@ pub struct SfxDef {
 pub struct StingDef {
     pub id: String,
     pub path: String,
+    /// Linear gain from a required `volume_db`.
+    pub volume: f32,
 }
 
 #[derive(Clone, Debug, Deserialize)]

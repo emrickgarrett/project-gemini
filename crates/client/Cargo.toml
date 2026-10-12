@@ -11,6 +11,11 @@ default-run = "gemini-client"
 # Bevy's `webgpu` feature replaces `webgl2` at compile time, so the page
 # ships two wasm artifacts and chooses at runtime. See web/index.html.
 webgpu = ["bevy/webgpu"]
+# Still renderer. Off by default so the wasm client build does not compile it.
+pullshot = []
+
+[lib]
+path = "src/lib.rs"
 
 [dependencies]
 gemini-sim = { path = "../sim" }
@@ -21,3 +26,8 @@ bevy = { version = "0.20", features = ["vorbis"] }
 [[bin]]
 name = "gemini-client"
 path = "src/main.rs"
+
+[[bin]]
+name = "pullshot"
+path = "src/bin/pullshot.rs"
+required-features = ["pullshot"]

@@ -199,14 +199,18 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
     let mut sting = Vec::new();
     if let Some(rows) = table.get("sting").and_then(|v| v.as_table()) {
         for (id, value) in rows {
-            let path = value
+            let row = value.as_table().ok_or_else(|| format!("sting {id} is not a row"))?;
+            let path = row
                 .get("path")
                 .and_then(|v| v.as_str())
                 .filter(|path| !path.is_empty())
                 .ok_or_else(|| format!("sting {id} is missing path"))?;
+            let label = format!("sting {id}");
+            let volume = db_to_linear(row_number(row, &label, "volume_db")?);
             sting.push(crate::content::StingDef {
                 id: id.clone(),
                 path: path.to_string(),
+                volume,
             });
         }
     }
