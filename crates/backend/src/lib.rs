@@ -7,7 +7,8 @@ compile_error!("gemini-backend does not build for wasm32");
 use std::collections::BTreeMap;
 
 use gemini_sim::content::Content;
-use gemini_sim::rng::Rng;
+use rand_chacha::ChaCha20Rng;
+use rand_core::{Rng, SeedableRng};
 
 const TIERS: [&str; 4] = ["common", "rare", "epic", "legendary"];
 
@@ -53,19 +54,32 @@ pub struct Account {
     pub credits: f32,
     pity: BTreeMap<String, Pity>,
     active_banner: Option<String>,
-    rng: Rng,
+    rng: ChaCha20Rng,
     pub audit: Vec<AuditEntry>,
 }
 
 impl Account {
-    pub fn new(seed: u64) -> Self {
+    /// A live account. The generator is seeded from the operating system.
+    pub fn new() -> Self {
+        let mut seed = [0u8; 32];
+        getrandom::fill(&mut seed).expect("os randomness for a live account");
+        Self::from_chacha(ChaCha20Rng::from_seed(seed))
+    }
+
+    /// Fixed seed for tests. Live accounts use [`Account::new`].
+    #[cfg(test)]
+    fn from_seed(seed: u64) -> Self {
+        Self::from_chacha(ChaCha20Rng::seed_from_u64(seed))
+    }
+
+    fn from_chacha(rng: ChaCha20Rng) -> Self {
         Self {
             rank: 1,
             shards: 0,
             credits: 0.0,
             pity: BTreeMap::new(),
             active_banner: None,
-            rng: Rng::new(seed),
+            rng,
             audit: Vec::new(),
         }
     }
@@ -162,7 +176,7 @@ impl Account {
     }
 }
 
-fn roll_rarity(pity: &mut Pity, rng: &mut Rng, content: &Content) -> String {
+fn roll_rarity(pity: &mut Pity, rng: &mut ChaCha20Rng, content: &Content) -> String {
     let rules = &content.banners.pity;
     let rates = &content.banners.rates;
     pity.since_legendary += 1;
@@ -177,7 +191,7 @@ fn roll_rarity(pity: &mut Pity, rng: &mut Rng, content: &Content) -> String {
         let steps = (pity.since_legendary - rules.legendary_soft_start) as f32;
         legendary = (legendary + steps * rules.legendary_soft_step).min(1.0);
     }
-    let roll = rng.next_f32();
+    let roll = next_f32(rng);
     let mut rarity = if roll < legendary {
         "legendary"
     } else if roll < legendary + rates.epic {
@@ -200,7 +214,7 @@ fn roll_rarity(pity: &mut Pity, rng: &mut Rng, content: &Content) -> String {
 }
 
 /// Fake-out uses only `crate_reveal.toml`. Pity does not change the chance.
-fn roll_fakeout(rng: &mut Rng, content: &Content, rarity: &str) -> Option<String> {
+fn roll_fakeout(rng: &mut ChaCha20Rng, content: &Content, rarity: &str) -> Option<String> {
     let reveal = &content.crate_reveal;
     if !reveal.fakeout_enabled {
         return None;
@@ -214,11 +228,16 @@ fn roll_fakeout(rng: &mut Rng, content: &Content, rarity: &str) -> Option<String
     if window[1] <= window[0] {
         return None;
     }
-    if rng.next_f32() < tier.fakeout_chance {
+    if next_f32(rng) < tier.fakeout_chance {
         Some(above.to_string())
     } else {
         None
     }
+}
+
+/// [0, 1) from 24 bits of ChaCha20 output.
+fn next_f32(rng: &mut ChaCha20Rng) -> f32 {
+    (rng.next_u32() >> 8) as f32 / 16_777_216.0
 }
 
 fn tier_above(rarity: &str) -> Option<&'static str> {
@@ -231,7 +250,7 @@ mod tests {
     use super::*;
 
     fn funded(seed: u64, content: &Content) -> Account {
-        let mut account = Account::new(seed);
+        let mut account = Account::from_seed(seed);
         account.credits = content.banners.cost.single as f32 * 20.0;
         account
     }
@@ -299,7 +318,7 @@ mod tests {
         let published = content.banners.published.legendary_overall_rate;
         let hard = content.banners.pity.legendary_hard;
         let n = 1_000_000u32;
-        let mut account = Account::new(0x5EED_F00D);
+        let mut account = Account::from_seed(0x5EED_F00D);
         account.credits = content.banners.cost.single as f32;
         let banners = ["standard", "featured"];
         let mut legendaries = 0u32;
@@ -400,7 +419,7 @@ mod tests {
         );
 
         let off = content_with_fakeouts_disabled();
-        let mut quiet = Account::new(0x5EED_F00D);
+        let mut quiet = Account::from_seed(0x5EED_F00D);
         for i in 0..100_000 {
             quiet.credits = off.banners.cost.single as f32;
             let pull = quiet.pull(&off, banners[(i % 2) as usize]).unwrap();
@@ -449,6 +468,25 @@ mod tests {
             cosmetics: base.cosmetics,
         })
         .expect("content with fakeouts off")
+    }
+
+    #[test]
+    fn default_accounts_draw_different_pull_sequences() {
+        let content = Content::embedded();
+        let mut first = Account::new();
+        let mut second = Account::new();
+        let mut left = Vec::new();
+        let mut right = Vec::new();
+        for _ in 0..64 {
+            let cost = content.banners.cost.single as f32;
+            first.credits = cost;
+            second.credits = cost;
+            let a = first.pull(&content, "standard").unwrap();
+            let b = second.pull(&content, "standard").unwrap();
+            left.push((a.rarity, a.fakeout));
+            right.push((b.rarity, b.fakeout));
+        }
+        assert_ne!(left, right, "two os-seeded accounts drew the same 64 pulls");
     }
 
     #[test]

@@ -8,3 +8,6 @@ description = "Server-side accounts, crate pulls, pity, and the pull audit log."
 
 [dependencies]
 gemini-sim = { path = "../sim" }
+getrandom = "0.4"
+rand_chacha = "0.10"
+rand_core = "0.10"
