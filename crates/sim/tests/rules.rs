@@ -1018,7 +1018,6 @@ fn crate_reveal_reads_tease_and_fakeout() {
     assert!((reveal.card.title_pad - 20.0).abs() < 1e-4);
     assert!((reveal.layout.gem_height - 0.30).abs() < 1e-4);
     assert_eq!(reveal.layout.border_px, 8);
-    assert_eq!(reveal.card.legendary_title_max_scale, reveal.card.title_max_scale);
 
     let base = gemini_sim::content::embedded_sources();
     let missing_hint = base.crate_reveal.lines().filter(|line| !line.contains("text_px")).collect::<Vec<_>>().join("\n");

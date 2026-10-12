@@ -94,8 +94,6 @@ opacity = 0.60
 margin_x = 28.0
 margin_y = 22.0
 
-# The still title uses one scale, fit from LEGENDARY in [layout].
+# Title size is the shared LEGENDARY fit in [layout]. This is only the UI inset.
 [card]
 title_pad = 20.0
-title_max_scale = 4.0
-legendary_title_max_scale = 4.0

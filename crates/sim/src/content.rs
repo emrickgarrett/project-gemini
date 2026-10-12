@@ -460,9 +460,6 @@ fn validate_reveal_layout(reveal: &CrateReveal) -> Result<(), String> {
     if !(card.title_pad >= 0.0) {
         return Err("crate_reveal.toml card.title_pad must be non-negative".into());
     }
-    if !(card.title_max_scale > 0.0) || !(card.legendary_title_max_scale > 0.0) {
-        return Err("crate_reveal.toml card title scales must be positive".into());
-    }
     validate_reveal_panel(&reveal.layout)
 }
 
@@ -2610,8 +2607,6 @@ pub struct RevealHint {
 #[derive(Clone, Debug, Deserialize)]
 pub struct CardTitle {
     pub title_pad: f32,
-    pub title_max_scale: f32,
-    pub legendary_title_max_scale: f32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
