@@ -92,6 +92,28 @@ focus_lift = 0.45
 # The painter multiplies every layout size by window height / fit_height.
 fit_width = 1280.0
 fit_height = 720.0
+# Wrapped-text leading, stacked-line spacing, and control insets. 720p pixels.
+# Loading rejects a missing or negative value. inset_min is the border floor in screen pixels.
+leading = 2.0
+spacing = 4.0
+spacing_role = 6.0
+spacing_block = 8.0
+inset_x = 12.0
+inset_y = 6.0
+inset_bar = 8.0
+inset_portrait = 4.0
+inset_min = 1.0
+
+# Hero-card portrait framing. bg is a palette.toml key. The FOV search starts at
+# max(viewmodel fov, fov_floor) and steps until every vertex is inside `fit`.
+[portrait]
+bg = "portrait_field"
+raster = 320
+fov_floor = 10.0
+fov_limit = 150.0
+fov_step = 4.0
+near = 0.08
+fit = 0.78
 
 [settings]
 sensitivity = 1.0

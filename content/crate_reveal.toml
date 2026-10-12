@@ -30,9 +30,13 @@ stage = "reveal_stage"
 ink_dark = "reveal_ink"
 ink_light = "reveal_paper"
 # Still backdrop, in bytes: palette(stage) + stage_base + lift * center - vignette * corner.
+# stage_y is the backdrop center as a fraction of the frame height.
 stage_base = [-2.0, -2.0, -1.0]
 stage_lift = [28.0, 22.0, 36.0]
 stage_vignette = [10.0, 8.0, 12.0]
+stage_y = 0.42
+stage_lift_pow = 1.35
+stage_vignette_pow = 1.6
 
 [common]
 tease = "sfx/crate_tease.ogg"

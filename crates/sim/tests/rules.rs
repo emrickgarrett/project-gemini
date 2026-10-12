@@ -1478,9 +1478,8 @@ fn arena_01_vents_perches_and_pickups() {
     assert_eq!(content.arena.paint.band_x, 48);
     assert_eq!(content.arena.paint.band_y, 36);
     assert!((content.arena.paint.shade - 0.45).abs() < 1e-4);
-    assert_eq!(content.arena.edge_wash.color, "reveal_ink");
-    assert_eq!(content.arena.edge_wash.num, [2, 5, 1]);
-    assert_eq!(content.arena.edge_wash.den, [7, 12, 2]);
+    assert_eq!(content.arena.edge_wash.sky, "arena_sky");
+    assert_eq!(content.palette.hex("arena_sky"), Some("#080A10"));
     assert!((content.arena.edge_wash.horizon - 0.42).abs() < 1e-4);
     assert!((content.arena.edge_wash.mix - 0.25).abs() < 1e-4);
     assert!((content.arena.edge_wash.span - 0.45).abs() < 1e-4);
@@ -1539,9 +1538,7 @@ fn arena_01_vents_perches_and_pickups() {
         "shade",
         "horizon",
         "span",
-        "color",
-        "num",
-        "den",
+        "sky",
         "mix",
     ] {
         let missing_key = include_str!("../../../content/arena_01.toml")
@@ -1577,9 +1574,12 @@ fn arena_01_vents_perches_and_pickups() {
     let bad_color = include_str!("../../../content/arena_01.toml").replacen("floor_light = \"arena_light\"", "floor_light = \"not_a_color\"", 1);
     let err = parse(&bad_color).expect_err("unknown floor color");
     assert!(err.contains("does not resolve"), "{err}");
-    let bad_den = include_str!("../../../content/arena_01.toml").replacen("den = [7, 12, 2]", "den = [7, 0, 2]", 1);
-    let err = parse(&bad_den).expect_err("zero edge wash denominator");
-    assert!(err.contains("edge_wash.den"), "{err}");
+    let bad_sky = include_str!("../../../content/arena_01.toml").replacen("sky = \"arena_sky\"", "sky = \"not_a_color\"", 1);
+    let err = parse(&bad_sky).expect_err("unknown sky");
+    assert!(err.contains("does not resolve"), "{err}");
+    let missing_sky = include_str!("../../../content/arena_01.toml").replacen("sky = \"arena_sky\"\n", "", 1);
+    let err = parse(&missing_sky).expect_err("missing sky");
+    assert!(err.contains("sky"), "{err}");
     let missing = include_str!("../../../content/arena_01.toml").replacen("telegraph = 1.5\n", "", 1);
     let err = parse(&missing).expect_err("missing telegraph");
     assert!(err.contains("telegraph"), "{err}");
@@ -1993,6 +1993,99 @@ fn reveal_layout_fails_when_missing_or_invalid() {
     assert_eq!(layout.title_height_div, 16);
     assert_eq!(layout.title_scale_min, 2);
     assert_eq!(layout.title_scale_max, 14);
+    assert!((layout.stage_y - 0.42).abs() < 1e-4);
+    assert!((layout.stage_lift_pow - 1.35).abs() < 1e-4);
+    assert!((layout.stage_vignette_pow - 1.6).abs() < 1e-4);
+}
+
+#[test]
+fn ui_spacing_and_font_coverage_fail_closed() {
+    let content = Content::embedded();
+    assert!((content.ui.layout.leading - 2.0).abs() < 1e-4);
+    assert!((content.ui.layout.spacing - 4.0).abs() < 1e-4);
+    assert!((content.ui.layout.spacing_role - 6.0).abs() < 1e-4);
+    assert!((content.ui.layout.spacing_block - 8.0).abs() < 1e-4);
+    assert!((content.ui.layout.inset_x - 12.0).abs() < 1e-4);
+    assert!((content.ui.layout.inset_y - 6.0).abs() < 1e-4);
+    assert!((content.ui.layout.inset_bar - 8.0).abs() < 1e-4);
+    assert!((content.ui.layout.inset_portrait - 4.0).abs() < 1e-4);
+    assert!((content.ui.layout.inset_min - 1.0).abs() < 1e-4);
+    assert_eq!(content.ui.portrait.bg, "portrait_field");
+    assert_eq!(content.ui.portrait.raster, 320);
+    assert!((content.ui.portrait.fov_floor - 10.0).abs() < 1e-4);
+    assert!((content.ui.portrait.fov_limit - 150.0).abs() < 1e-4);
+    assert!((content.ui.portrait.fov_step - 4.0).abs() < 1e-4);
+    assert!((content.ui.portrait.near - 0.08).abs() < 1e-4);
+    assert!((content.ui.portrait.fit - 0.78).abs() < 1e-4);
+    assert!(gemini_sim::content::font_covers(';'));
+    assert!(!gemini_sim::content::font_covers('_'));
+    assert!(!gemini_sim::content::font_covers('?'));
+
+    let base = gemini_sim::content::embedded_sources();
+    let load_ui = |ui: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            waves: base.waves,
+            difficulty: base.difficulty,
+            controller: base.controller,
+            run_upgrades: base.run_upgrades,
+            endless: base.endless,
+            currency: base.currency,
+            banners: base.banners,
+            duplicate_ranks: base.duplicate_ranks,
+            bosses: base.bosses,
+            weapons: base.weapons,
+            hero: base.hero,
+            arena: base.arena,
+            presentation: base.presentation,
+            combat: base.combat,
+            palette: base.palette,
+            music: base.music,
+            audio: base.audio,
+            bugs: base.bugs,
+            crate_reveal: base.crate_reveal,
+            coop: base.coop,
+            cosmetics: base.cosmetics,
+            ui,
+        })
+    };
+    let negative = base.ui.replacen("leading = 2.0", "leading = -1.0", 1);
+    let err = load_ui(&negative).expect_err("negative leading");
+    assert!(err.contains("leading"), "{err}");
+    let missing = base.ui.replacen("inset_x = 12.0\n", "", 1);
+    let err = load_ui(&missing).expect_err("missing inset");
+    assert!(err.contains("inset_x"), "{err}");
+    let glyph = base.ui.replacen("title = \"PROJECT GEMINI\"", "title = \"PROJECT GEMINI?\"", 1);
+    let err = load_ui(&glyph).expect_err("question mark");
+    assert!(err.contains("title"), "{err}");
+    assert!(err.contains("'?'"), "{err}");
+    let hero = base.hero.replacen("name = \"Nyra Sol\"", "name = \"Nyra_Sol\"", 1);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        waves: base.waves,
+        difficulty: base.difficulty,
+        controller: base.controller,
+        run_upgrades: base.run_upgrades,
+        endless: base.endless,
+        currency: base.currency,
+        banners: base.banners,
+        duplicate_ranks: base.duplicate_ranks,
+        bosses: base.bosses,
+        weapons: base.weapons,
+        hero: &hero,
+        arena: base.arena,
+        presentation: base.presentation,
+        combat: base.combat,
+        palette: base.palette,
+        music: base.music,
+        audio: base.audio,
+        bugs: base.bugs,
+        crate_reveal: base.crate_reveal,
+        coop: base.coop,
+        cosmetics: base.cosmetics,
+        ui: base.ui,
+    })
+    .expect_err("underscore in a hero name");
+    assert!(err.contains("nyra"), "{err}");
+    assert!(err.contains("'_'"), "{err}");
 }
 
 #[test]

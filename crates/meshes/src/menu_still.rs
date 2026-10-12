@@ -165,7 +165,7 @@ fn paint_heroes(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize) -
         };
         let border = if focused { lift(base, palette(content, &ui.colors.text), ui.layout.focus_lift) } else { base };
         rect(rgb, frame.width, frame.height, x, y, card_w, card_h, border);
-        let inset = frame.px(ui.layout.border_px).max(1);
+        let inset = frame.px(ui.layout.border_px).max(ui.layout.inset_min.round() as i32);
         rect(rgb, frame.width, frame.height, x + inset, y + inset, card_w - inset * 2, card_h - inset * 2, palette(content, &ui.colors.panel));
         let pad = frame.px(ui.layout.card_pad);
         paint_portrait(rgb, content, frame, hero, x, y, card_w, card_h, pad);
@@ -178,13 +178,13 @@ fn paint_heroes(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize) -
             let lock = ui.copy.locked.as_str();
             let tw = measure(lock, hint_scale, glyph) as i32;
             blit(rgb, frame.width, frame.height, x + (card_w - tw) / 2, ty, lock, palette(content, &ui.colors.locked), hint_scale, glyph);
-            ty += (hint_scale * rows) as i32 + frame.px(4.0);
+            ty += (hint_scale * rows) as i32 + frame.px(ui.layout.spacing);
         }
         ty = draw_wrapped(rgb, content, frame, &hero.name.to_uppercase(), x + pad, ty, inner, name_scale, name_color);
         let paper = palette(content, &ui.colors.text);
         let body = if hero.owned { paper } else { locked_ink };
-        ty = draw_wrapped(rgb, content, frame, &hero.role.to_uppercase(), x + pad, ty + frame.px(4.0), inner, hint_scale, body);
-        ty = draw_wrapped(rgb, content, frame, &hero.ability.to_uppercase(), x + pad, ty + frame.px(6.0), inner, hint_scale, body);
+        ty = draw_wrapped(rgb, content, frame, &hero.role.to_uppercase(), x + pad, ty + frame.px(ui.layout.spacing), inner, hint_scale, body);
+        ty = draw_wrapped(rgb, content, frame, &hero.ability.to_uppercase(), x + pad, ty + frame.px(ui.layout.spacing_role), inner, hint_scale, body);
         let stats = format!(
             "{} {}  {} {}",
             ui.copy.hp,
@@ -192,7 +192,7 @@ fn paint_heroes(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize) -
             ui.copy.speed,
             format_fixed(hero.move_speed_mult, ui.layout.stat_decimals)
         );
-        draw_wrapped(rgb, content, frame, &stats, x + pad, ty + frame.px(8.0), inner, hint_scale, body);
+        draw_wrapped(rgb, content, frame, &stats, x + pad, ty + frame.px(ui.layout.spacing_block), inner, hint_scale, body);
         hits.push(Hit { id, x, y, w: card_w, h: card_h });
         x += card_w + gap;
     }
@@ -247,7 +247,7 @@ fn paint_pause(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, he
     let y = (frame.height as i32 - ph) / 2;
     let hero = if hero_id.is_empty() { None } else { Some(hero_id) };
     rect(rgb, frame.width, frame.height, x, y, pw, ph, accent(content, hero));
-    let inset = frame.px(ui.layout.border_px).max(1);
+    let inset = frame.px(ui.layout.border_px).max(ui.layout.inset_min.round() as i32);
     rect(rgb, frame.width, frame.height, x + inset, y + inset, pw - inset * 2, ph - inset * 2, palette(content, &ui.colors.panel));
     let labels = [("resume", ui.copy.resume.as_str()), ("settings", ui.copy.settings.as_str()), ("quit_to_menu", ui.copy.quit_to_menu.as_str())];
     let button_h = frame.px(ui.layout.button_height);
@@ -282,7 +282,7 @@ fn paint_settings(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize,
     let mut hits = Vec::new();
     for (index, (id, label, value, fill)) in rows.iter().enumerate() {
         let hit = slider_row(rgb, content, frame, y, label, value, *fill, index == focus, hero);
-        y = hit.y + hit.h + frame.px(8.0);
+        y = hit.y + hit.h + frame.px(ui.layout.spacing_block);
         hits.push(Hit { id: (*id).into(), ..hit });
     }
     hits.push(Hit { id: "back".into(), ..button(rgb, content, frame, y, &ui.copy.back, focus == hits.len(), hero) });
@@ -318,7 +318,7 @@ fn paint_results(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, 
     for line in &lines {
         let tw = measure(line, scale, glyph) as i32;
         blit(rgb, frame.width, frame.height, (frame.width as i32 - tw) / 2, y, line, paper, scale, glyph);
-        y += (scale * rows) as i32 + frame.px(8.0);
+        y += (scale * rows) as i32 + frame.px(ui.layout.spacing_block);
     }
     y += frame.px(ui.layout.row_gap);
     let mut hits = Vec::new();
@@ -417,7 +417,7 @@ fn button_at(rgb: &mut [u8], content: &Content, frame: Frame, x: i32, y: i32, la
     let h = frame.px(content.ui.layout.button_height);
     let border = if focused { accent(content, hero) } else { palette(content, &content.ui.colors.dim) };
     rect(rgb, frame.width, frame.height, x, y, w, h, border);
-    let inset = frame.px(content.ui.layout.border_px).max(1);
+    let inset = frame.px(content.ui.layout.border_px).max(content.ui.layout.inset_min.round() as i32);
     rect(rgb, frame.width, frame.height, x + inset, y + inset, w - inset * 2, h - inset * 2, palette(content, &content.ui.colors.panel));
     let glyph = content.crate_reveal.layout.title_glyph_px;
     let scale = frame.text(content.ui.layout.button_scale);
@@ -435,7 +435,7 @@ fn two_line(rgb: &mut [u8], content: &Content, frame: Frame, y: i32, title: &str
     let hint_scale = frame.text(content.ui.layout.hint_scale);
     let title_h = (title_scale * rows) as i32;
     let hint_h = (hint_scale * rows) as i32;
-    let gap = frame.px(4.0);
+    let gap = frame.px(content.ui.layout.spacing);
     let block = title_h + gap + hint_h;
     let mut ty = hit.y + (hit.h - block) / 2;
     let tw = measure(title, title_scale, glyph) as i32;
@@ -453,15 +453,25 @@ fn slider_row(rgb: &mut [u8], content: &Content, frame: Frame, y: i32, label: &s
     let x = (frame.width as i32 - w) / 2;
     let border = if focused { accent(content, hero) } else { palette(content, &ui.colors.dim) };
     rect(rgb, frame.width, frame.height, x, y, w, h, border);
-    let inset = frame.px(ui.layout.border_px).max(1);
+    let inset = frame.px(ui.layout.border_px).max(ui.layout.inset_min.round() as i32);
     rect(rgb, frame.width, frame.height, x + inset, y + inset, w - inset * 2, h - inset * 2, palette(content, &ui.colors.panel));
     let glyph = content.crate_reveal.layout.title_glyph_px;
     let text = format!("{label} {value}");
-    blit(rgb, frame.width, frame.height, x + frame.px(12.0), y + frame.px(6.0), &text, palette(content, &ui.colors.text), frame.text(ui.layout.hint_scale), glyph);
+    blit(
+        rgb,
+        frame.width,
+        frame.height,
+        x + frame.px(ui.layout.inset_x),
+        y + frame.px(ui.layout.inset_y),
+        &text,
+        palette(content, &ui.colors.text),
+        frame.text(ui.layout.hint_scale),
+        glyph,
+    );
     let bar_w = frame.px(ui.layout.slider_width);
     let bar_h = frame.px(ui.layout.slider_height).max(1);
     let bx = x + (w - bar_w) / 2;
-    let by = y + h - bar_h - frame.px(8.0);
+    let by = y + h - bar_h - frame.px(ui.layout.inset_bar);
     rect(rgb, frame.width, frame.height, bx, by, bar_w, bar_h, palette(content, &ui.colors.dim));
     let fw = ((bar_w as f32) * fill.clamp(0.0, 1.0)).round() as i32;
     rect(rgb, frame.width, frame.height, bx, by, fw.max(0), bar_h, accent(content, hero));
@@ -471,7 +481,7 @@ fn slider_row(rgb: &mut [u8], content: &Content, frame: Frame, y: i32, label: &s
 fn draw_wrapped(rgb: &mut [u8], content: &Content, frame: Frame, text: &str, x: i32, mut y: i32, inner: u32, scale: u32, color: [u8; 3]) -> i32 {
     let glyph = content.crate_reveal.layout.title_glyph_px;
     let rows = content.crate_reveal.layout.glyph_rows;
-    let leading = frame.px(2.0);
+    let leading = frame.px(content.ui.layout.leading);
     let mut line = String::new();
     for word in text.split_whitespace() {
         let next = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
@@ -490,8 +500,6 @@ fn draw_wrapped(rgb: &mut [u8], content: &Content, frame: Frame, text: &str, x: 
     y
 }
 
-const PORTRAIT_BG: [u8; 3] = [0x8A, 0x8A, 0x8A];
-
 /// Frames the idle viewmodel so the whole weapon is in view, then scales that
 /// painted silhouette into the top half of the card.
 fn paint_portrait(rgb: &mut [u8], content: &Content, frame: Frame, hero: &gemini_sim::content::HeroCard, card_x: i32, card_y: i32, card_w: i32, card_h: i32, pad: i32) {
@@ -499,10 +507,10 @@ fn paint_portrait(rgb: &mut [u8], content: &Content, frame: Frame, hero: &gemini
         return;
     }
     let mut view = view_frame(content, hero);
-    view.fov = portrait_fov(&view);
-    let raster = 320u32;
+    view.fov = portrait_fov(content, &view);
+    let raster = content.ui.portrait.raster;
     let src = raster_viewmodel(raster, raster, &view);
-    let Some((x0, y0, x1, y1)) = opaque_bounds(&src, raster) else {
+    let Some((x0, y0, x1, y1)) = opaque_bounds(content, &src, raster) else {
         return;
     };
     let bw = (x1 - x0).max(1);
@@ -511,12 +519,12 @@ fn paint_portrait(rgb: &mut [u8], content: &Content, frame: Frame, hero: &gemini
     let inner_w = (card_w - pad * 2).max(1);
     let dest_h = (card_h as f32 * content.ui.layout.portrait_fraction)
         .round()
-        .clamp(1.0, (top_half - frame.px(4.0)).max(1) as f32) as i32;
+        .clamp(1.0, (top_half - frame.px(content.ui.layout.inset_portrait)).max(1) as f32) as i32;
     // Keep the portrait at portrait_fraction of the card. Crop the wide rifle from the center.
     let window_w = ((bh as f32) * (inner_w as f32 / dest_h as f32)).round().clamp(1.0, bw as f32) as i32;
     let win_x0 = x0 + (bw - window_w) / 2;
     let win_x1 = win_x0 + window_w;
-    let (sy0, sy1) = vertical_span(&src, raster, win_x0, win_x1, y0, y1);
+    let (sy0, sy1) = vertical_span(content, &src, raster, win_x0, win_x1, y0, y1);
     let window_h = (sy1 - sy0).max(1);
     let dx = card_x + (card_w - inner_w) / 2;
     let dy = card_y + (top_half - dest_h) / 2;
@@ -528,7 +536,7 @@ fn paint_portrait(rgb: &mut [u8], content: &Content, frame: Frame, hero: &gemini
             let sy = sy.clamp(sy0, sy1 - 1);
             let i = ((sy as u32 * raster + sx as u32) * 3) as usize;
             let mut px = [src[i], src[i + 1], src[i + 2]];
-            if px == PORTRAIT_BG {
+            if px == portrait_bg(content) {
                 continue;
             }
             if !hero.owned {
@@ -539,13 +547,18 @@ fn paint_portrait(rgb: &mut [u8], content: &Content, frame: Frame, hero: &gemini
     }
 }
 
-fn vertical_span(src: &[u8], raster: u32, x0: i32, x1: i32, y0: i32, y1: i32) -> (i32, i32) {
+fn portrait_bg(content: &Content) -> [u8; 3] {
+    palette(content, &content.ui.portrait.bg)
+}
+
+fn vertical_span(content: &Content, src: &[u8], raster: u32, x0: i32, x1: i32, y0: i32, y1: i32) -> (i32, i32) {
+    let bg = portrait_bg(content);
     let mut top = y1;
     let mut bottom = y0;
     for row in y0..y1 {
         for col in x0..x1 {
             let i = ((row as u32 * raster + col as u32) * 3) as usize;
-            if [src[i], src[i + 1], src[i + 2]] != PORTRAIT_BG {
+            if [src[i], src[i + 1], src[i + 2]] != bg {
                 top = top.min(row);
                 bottom = bottom.max(row + 1);
                 break;
@@ -555,7 +568,8 @@ fn vertical_span(src: &[u8], raster: u32, x0: i32, x1: i32, y0: i32, y1: i32) ->
     if top >= bottom { (y0, y1) } else { (top, bottom) }
 }
 
-fn opaque_bounds(src: &[u8], raster: u32) -> Option<(i32, i32, i32, i32)> {
+fn opaque_bounds(content: &Content, src: &[u8], raster: u32) -> Option<(i32, i32, i32, i32)> {
+    let bg = portrait_bg(content);
     let mut x0 = raster as i32;
     let mut y0 = raster as i32;
     let mut x1 = 0i32;
@@ -564,7 +578,7 @@ fn opaque_bounds(src: &[u8], raster: u32) -> Option<(i32, i32, i32, i32)> {
     for row in 0..raster as i32 {
         for col in 0..raster as i32 {
             let i = ((row as u32 * raster + col as u32) * 3) as usize;
-            if [src[i], src[i + 1], src[i + 2]] == PORTRAIT_BG {
+            if [src[i], src[i + 1], src[i + 2]] == bg {
                 continue;
             }
             any = true;
@@ -578,21 +592,22 @@ fn opaque_bounds(src: &[u8], raster: u32) -> Option<(i32, i32, i32, i32)> {
 }
 
 /// Widens the idle FOV until the viewmodel vertices sit inside the frame.
-fn portrait_fov(frame: &ViewmodelFrame) -> f32 {
+fn portrait_fov(content: &Content, frame: &ViewmodelFrame) -> f32 {
+    let framing = &content.ui.portrait;
     let vm = crate::viewmodel();
     let meshes = [&vm.teal, &vm.cobalt, &vm.white, &vm.accent, &vm.core, &vm.barrel];
-    let mut fov = frame.fov.max(10.0);
-    let limit = 150.0;
+    let mut fov = frame.fov.max(framing.fov_floor);
+    let limit = framing.fov_limit;
     while fov < limit {
-        if vertices_fit(&meshes, frame.offset, fov) {
+        if vertices_fit(&meshes, frame.offset, fov, framing.near, framing.fit) {
             return fov;
         }
-        fov += 4.0;
+        fov += framing.fov_step;
     }
     limit
 }
 
-fn vertices_fit(meshes: &[&crate::MeshData], offset: [f32; 3], fov: f32) -> bool {
+fn vertices_fit(meshes: &[&crate::MeshData], offset: [f32; 3], fov: f32, near: f32, fit: f32) -> bool {
     let focal = 1.0 / (fov.to_radians() * 0.5).tan();
     let mut any = false;
     for mesh in meshes {
@@ -600,11 +615,11 @@ fn vertices_fit(meshes: &[&crate::MeshData], offset: [f32; 3], fov: f32) -> bool
             let x = p[0] + offset[0];
             let y = p[1] + offset[1];
             let z = -(p[2] + offset[2]);
-            if z < 0.08 {
+            if z < near {
                 return false;
             }
             any = true;
-            if (x / z * focal).abs() > 0.78 || (y / z * focal).abs() > 0.78 {
+            if (x / z * focal).abs() > fit || (y / z * focal).abs() > fit {
                 return false;
             }
         }
@@ -735,7 +750,7 @@ mod tests {
         let scale = height as f32 / content.ui.layout.fit_height;
         let expect_w = (content.ui.layout.button_width * scale).round() as i32;
         let expect_h = (content.ui.layout.button_height * scale).round() as i32;
-        let inset = ((content.ui.layout.border_px * scale).round() as i32).max(1);
+        let inset = ((content.ui.layout.border_px * scale).round() as i32).max(content.ui.layout.inset_min.round() as i32);
         let common = bytes(&content, &content.ui.colors.focus_before_hero);
         let dim = bytes(&content, &content.ui.colors.dim);
         let panel = bytes(&content, &content.ui.colors.panel);
@@ -781,7 +796,8 @@ mod tests {
             for hit in cards {
                 let id = hit.id.trim_start_matches("hero:");
                 let hero = content.heroes.iter().find(|hero| hero.id == id).unwrap();
-                let inset = ((content.ui.layout.border_px * (height as f32 / content.ui.layout.fit_height)).round() as i32).max(1);
+                let inset = ((content.ui.layout.border_px * (height as f32 / content.ui.layout.fit_height)).round() as i32)
+                    .max(content.ui.layout.inset_min.round() as i32);
                 let top = hit.y + inset;
                 let bottom = hit.y + hit.h / 2;
                 let mut x0 = hit.x + hit.w;

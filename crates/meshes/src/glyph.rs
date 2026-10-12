@@ -54,7 +54,21 @@ pub fn bits(ch: char) -> [u8; 7] {
         '.' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00000, 0b01100, 0b01100],
         ',' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00100, 0b00100, 0b01000],
         '/' => [0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000],
+        ';' => [0b00000, 0b00100, 0b00100, 0b00000, 0b00100, 0b00100, 0b01000],
         _ => [0; 7],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::covers;
+
+    #[test]
+    fn coverage_matches_the_sim_font_check() {
+        for code in 0u32..=127 {
+            let ch = char::from_u32(code).unwrap();
+            assert_eq!(covers(ch), gemini_sim::content::font_covers(ch), "{ch:?}");
+        }
     }
 }
 
