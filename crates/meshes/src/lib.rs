@@ -718,6 +718,54 @@ mod tests {
         let halo = at(cx + 28, cy);
         assert!(halo[0] > 160 && halo[2] < 160, "soft halo {halo:?}");
         assert!(core[0] as i32 + core[1] as i32 > halo[0] as i32 + halo[1] as i32);
+        // Shots leave the camera along -Z and hit the crosshair. The bore is that axis.
+        let mesh_tip = muzzle_tip(cast("vex_gun"));
+        let radial = (mesh_tip[0] * mesh_tip[0] + mesh_tip[1] * mesh_tip[1]).sqrt();
+        assert!(
+            mesh_tip[2] < -0.2 && radial < mesh_tip[2].abs() * 0.25,
+            "muzzle {mesh_tip:?} is off the shot axis"
+        );
+    }
+
+    /// The pre-swap rifle covered 63563 idle pixels and left the crosshair and the
+    /// lower center empty. The cast gun must not cover more.
+    #[test]
+    fn vex_gun_covers_no_more_screen_than_the_old_rifle() {
+        let hero = &gemini_sim::content::Content::embedded().hero;
+        let frame = ViewmodelFrame {
+            accent: [1.0, 0.45, 0.1, 1.0],
+            offset: hero.viewmodel_offset,
+            fov: hero.viewmodel_fov,
+            overdrive: false,
+            glow_radius: hero.muzzle_flash_radius,
+            glow_core: hero.muzzle_flash_core,
+            glow_falloff: hero.muzzle_flash_falloff,
+            glow_tip_px: hero.muzzle_flash_tip_px,
+            glow_color: [1.0, 0.72, 0.28, 1.0],
+        };
+        let rgb = raster_viewmodel(1280, 720, &frame);
+        let bg = [0x8Au8, 0x8A, 0x8A];
+        let mut covered = 0usize;
+        let mut cross = 0usize;
+        let mut lower = 0usize;
+        for y in 0..720u32 {
+            for x in 0..1280u32 {
+                let i = ((y * 1280 + x) * 3) as usize;
+                if rgb[i..i + 3] == bg {
+                    continue;
+                }
+                covered += 1;
+                if (x as i32 - 640).abs() <= 24 && (y as i32 - 360).abs() <= 24 {
+                    cross += 1;
+                }
+                if (448..832).contains(&x) && y >= 432 {
+                    lower += 1;
+                }
+            }
+        }
+        assert!(covered <= 63_563, "idle coverage {covered} px exceeds the old rifle");
+        assert_eq!(cross, 0, "crosshair is covered");
+        assert_eq!(lower, 0, "lower center is covered");
     }
 
     #[test]

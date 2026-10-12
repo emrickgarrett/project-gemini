@@ -477,8 +477,8 @@ pub fn sync(
                 };
                 let want_hot = (part.emissive || part.grows) && xf.glow > 1.5;
                 if part.emissive && part.pod_slot.is_some() {
-                    let rgb = game.content.palette.key("swarmer_glow");
-                    let mul = 2.8 + xf.glow * 1.7;
+                    let rgb = game.content.palette.key(&game.content.cast.pod_glow_key);
+                    let mul = game.content.cast.pod_glow_base + xf.glow * game.content.cast.pod_glow_per_glow;
                     let mut material = materials
                         .get_mut(&part.hot)
                         .unwrap_or_else(|| panic!("missing pod material for enemy {}", enemy.id));

@@ -1354,6 +1354,11 @@ pub struct CastLook {
     /// Palette key. Overdrive multiplies this color by `overdrive_emissive_gain`.
     pub overdrive_emissive_key: String,
     pub overdrive_emissive_gain: [f32; 3],
+    /// Palette key for a live brood pod.
+    pub pod_glow_key: String,
+    /// Emissive multiplier is `pod_glow_base + glow * pod_glow_per_glow`.
+    pub pod_glow_base: f32,
+    pub pod_glow_per_glow: f32,
     pub review_yaw_deg: f32,
     pub review_elev_deg: f32,
     pub review_distance: f32,
@@ -1921,6 +1926,9 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
             "rim_strength",
             "overdrive_emissive_key",
             "overdrive_emissive_gain",
+            "pod_glow_key",
+            "pod_glow_base",
+            "pod_glow_per_glow",
             "review_yaw_deg",
             "review_elev_deg",
             "review_distance",
@@ -1947,6 +1955,15 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
     if overdrive_emissive_gain.iter().any(|n| !n.is_finite() || *n < 0.0) {
         return Err("cast.toml overdrive_emissive_gain must be finite and >= 0".into());
     }
+    let pod_glow_key = vis_str(table, "pod_glow_key", "cast.toml")?.to_string();
+    if palette.hex(&pod_glow_key).is_none() {
+        return Err(format!("cast.toml pod_glow_key \"{pod_glow_key}\" does not resolve"));
+    }
+    let pod_glow_base = vis_f32(table, "pod_glow_base", "cast.toml")?;
+    let pod_glow_per_glow = vis_f32(table, "pod_glow_per_glow", "cast.toml")?;
+    if !pod_glow_base.is_finite() || pod_glow_base < 0.0 || !pod_glow_per_glow.is_finite() || pod_glow_per_glow < 0.0 {
+        return Err("cast.toml pod glow multipliers must be finite and >= 0".into());
+    }
     let review_yaw_deg = vis_f32(table, "review_yaw_deg", "cast.toml")?;
     let review_elev_deg = vis_f32(table, "review_elev_deg", "cast.toml")?;
     let review_distance = vis_f32(table, "review_distance", "cast.toml")?;
@@ -1959,6 +1976,9 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
         rim_strength,
         overdrive_emissive_key,
         overdrive_emissive_gain,
+        pod_glow_key,
+        pod_glow_base,
+        pod_glow_per_glow,
         review_yaw_deg,
         review_elev_deg,
         review_distance,
