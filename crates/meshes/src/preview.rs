@@ -53,7 +53,6 @@ pub fn raster_model(id: &str, width: u32, height: u32) -> Vec<u8> {
             [0.0, 0.0, 0.0],
             bg,
             &[],
-            None,
         );
     }
     let palette = palette_of();
@@ -509,7 +508,7 @@ fn draw(
     open_shell: bool,
     camera: Option<([f32; 3], [f32; 3], f32)>,
 ) -> Vec<u8> {
-    draw_scene(visual, palette, width, height, silhouette, open_shell, camera, [0.0, 0.0, 0.0], BG, &[], None)
+    draw_scene(visual, palette, width, height, silhouette, open_shell, camera, [0.0, 0.0, 0.0], BG, &[])
 }
 
 /// Bug at `shift`, plus optional world meshes (the arena), on `bg`.
@@ -524,7 +523,6 @@ fn draw_scene(
     shift: [f32; 3],
     bg: [u8; 3],
     extras: &[(&crate::MeshData, [f32; 4])],
-    hero_at: Option<[f32; 3]>,
 ) -> Vec<u8> {
     let w = width.max(8);
     let h = height.max(8);
@@ -612,9 +610,6 @@ fn draw_scene(
             }
         }
     }
-    if let Some(at) = hero_at {
-        paint_hero_figure(&mut color, &mut depth, &cam, at, eye);
-    }
     color
 }
 
@@ -690,20 +685,6 @@ fn paint_feedback_parts(
                 fill_tri(color, depth, cam.w, cam.h, projected[0], projected[1], projected[2], rgb);
             }
         }
-    }
-}
-
-fn paint_hero_figure(color: &mut [u8], depth: &mut [f32], cam: &crate::PaintCam, at: [f32; 3], eye: [f32; 3]) {
-    let content = gemini_sim::content::Content::embedded();
-    let id = content.hero.id.as_str();
-    let fx = eye[0] - at[0];
-    let fz = eye[2] - at[2];
-    let yaw = (-fx).atan2(-fz).to_degrees();
-    let pivot = crate::body_pivot(&content, id);
-    let palette = |name: &str| content.palette.key(name);
-    for mesh in crate::hero_pieces(id) {
-        let place = crate::hero_placement(&content, mesh, at, pivot, yaw, 0.0);
-        crate::cast::paint(color, depth, mesh, place, &palette, cam, false);
     }
 }
 
@@ -852,7 +833,6 @@ pub fn raster_in_arena(id: &str, width: u32, height: u32) -> Vec<u8> {
         bug_at,
         bg,
         &extras,
-        None,
     )
 }
 
@@ -894,8 +874,9 @@ pub fn raster_rail_edge(width: u32, height: u32) -> Vec<u8> {
     for piece in &pieces {
         owned.push((piece.mesh.clone(), palette(&piece.palette)));
     }
+    owned.extend(player_reference(&content, stand));
     let extras: Vec<(&crate::MeshData, [f32; 4])> = owned.iter().map(|(mesh, color)| (mesh, *color)).collect();
-    // The cast hero is the scale figure. The swarmer stays at the deck center, outside this rim view.
+    // The hero is the scale figure. The swarmer stays at the deck center, outside this rim view.
     draw_scene(
         bug("swarmer"),
         &palette,
@@ -907,8 +888,36 @@ pub fn raster_rail_edge(width: u32, height: u32) -> Vec<u8> {
         [platform.center.x, deck, platform.center.z],
         bg,
         &extras,
-        Some(stand),
     )
+}
+
+/// Starter hero, feet on `at`, as a scale figure. Portrait framing is removed.
+fn player_reference(content: &gemini_sim::content::Content, at: [f32; 3]) -> Vec<(crate::MeshData, [f32; 4])> {
+    let id = content.hero.id.as_str();
+    let hero = content.heroes.iter().find(|hero| hero.id == id).expect("starter hero");
+    let parts = crate::portrait::build(&content.heroes_visual, id).expect("starter body");
+    let mut min_y = f32::MAX;
+    let mut cx = 0.0;
+    let mut cz = 0.0;
+    let mut count = 0.0;
+    for part in &parts {
+        for p in &part.mesh.positions {
+            min_y = min_y.min(p[1]);
+            cx += p[0];
+            cz += p[2];
+            count += 1.0;
+        }
+    }
+    let shift = [at[0] - cx / count, at[1] - min_y, at[2] - cz / count];
+    parts
+        .into_iter()
+        .map(|part| {
+            let mut mesh = part.mesh;
+            crate::geom::translate(&mut mesh, shift);
+            let key = if part.palette == "accent" { hero.accent_key.as_str() } else { part.palette.as_str() };
+            (mesh, content.palette.key(key))
+        })
+        .collect()
 }
 
 /// One software frame of `count` swarmers on the deck. Used to time a client-style
