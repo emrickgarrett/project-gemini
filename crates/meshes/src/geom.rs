@@ -170,6 +170,65 @@ fn fan(mesh: &mut MeshData, center: [f32; 3], ring: &[[f32; 3]], color: [f32; 4]
     }
 }
 
+/// Rectangular prism with the XZ corners cut, so a plate reads as faceted armor.
+pub fn bevel_box(mesh: &mut MeshData, size: [f32; 3], chamfer: f32, color: [f32; 4]) {
+    let hx = size[0] * 0.5;
+    let hy = size[1] * 0.5;
+    let hz = size[2] * 0.5;
+    let c = chamfer;
+    let ring = [
+        [hx - c, hz],
+        [hx, hz - c],
+        [hx, -hz + c],
+        [hx - c, -hz],
+        [-hx + c, -hz],
+        [-hx, -hz + c],
+        [-hx, hz - c],
+        [-hx + c, hz],
+    ];
+    let mut top = Vec::new();
+    let mut bot = Vec::new();
+    for p in ring {
+        top.push([p[0], hy, p[1]]);
+        bot.push([p[0], -hy, p[1]]);
+    }
+    let n = ring.len();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        add_quad(mesh, bot[i], bot[j], top[j], top[i], color);
+    }
+    for i in 1..n - 1 {
+        add_face(mesh, top[0], top[i], top[i + 1], color);
+        add_face(mesh, bot[0], bot[i + 1], bot[i], color);
+    }
+}
+
+/// Vertical plate that bows toward +Z. `bend_deg` is the full arc.
+pub fn arc_plate(mesh: &mut MeshData, width: f32, height: f32, thick: f32, bend_deg: f32, segments: u32, color: [f32; 4]) {
+    let segs = segments.max(2);
+    let bend = bend_deg.to_radians().max(0.05);
+    let radius = (width * 0.5) / (bend * 0.5).sin();
+    let hy = height * 0.5;
+    let point = |u: f32, radial: f32, y: f32| {
+        let ang = (u - 0.5) * bend;
+        let r = radius + radial;
+        // Center of the arc sits toward +Z (the camera). The ends fall back.
+        [ang.sin() * r, y, ang.cos() * r - radius]
+    };
+    for i in 0..segs {
+        let u0 = i as f32 / segs as f32;
+        let u1 = (i + 1) as f32 / segs as f32;
+        let o = thick * 0.5;
+        add_quad(mesh, point(u0, o, -hy), point(u1, o, -hy), point(u1, o, hy), point(u0, o, hy), color);
+        add_quad(mesh, point(u1, -o, -hy), point(u0, -o, -hy), point(u0, -o, hy), point(u1, -o, hy), color);
+        add_quad(mesh, point(u0, -o, hy), point(u1, -o, hy), point(u1, o, hy), point(u0, o, hy), color);
+        add_quad(mesh, point(u0, o, -hy), point(u1, o, -hy), point(u1, -o, -hy), point(u0, -o, -hy), color);
+    }
+    let o = thick * 0.5;
+    add_quad(mesh, point(0.0, -o, -hy), point(0.0, o, -hy), point(0.0, o, hy), point(0.0, -o, hy), color);
+    add_quad(mesh, point(1.0, o, -hy), point(1.0, -o, -hy), point(1.0, -o, hy), point(1.0, o, hy), color);
+}
+
 pub fn translate(mesh: &mut MeshData, by: [f32; 3]) {
     for p in &mut mesh.positions {
         p[0] += by[0];

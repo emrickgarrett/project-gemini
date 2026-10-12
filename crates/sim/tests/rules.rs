@@ -646,6 +646,8 @@ fn sim_step_cap_comes_from_controller() {
             coop: base.coop,
             cosmetics: base.cosmetics,
         ui: base.ui,
+            heroes_visual: base.heroes_visual,
+            arena_visual: base.arena_visual,
         })
     };
     let missing = base
@@ -699,6 +701,8 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         coop: base.coop,
         cosmetics: base.cosmetics,
         ui: base.ui,
+        heroes_visual: base.heroes_visual,
+        arena_visual: base.arena_visual,
     })
     .expect_err("missing hatch_fan_step");
     assert!(err.contains("hatch_fan_step"), "{err}");
@@ -727,6 +731,8 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         coop: base.coop,
         cosmetics: base.cosmetics,
         ui: base.ui,
+        heroes_visual: base.heroes_visual,
+        arena_visual: base.arena_visual,
     })
     .expect_err("spawn_radius inside the body");
     assert!(err.contains("spawn_radius"), "{err}");
@@ -757,6 +763,8 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         coop: base.coop,
         cosmetics: base.cosmetics,
         ui: base.ui,
+        heroes_visual: base.heroes_visual,
+        arena_visual: base.arena_visual,
     })
     .expect_err("zero hatch telegraph");
     assert!(err.contains("hatch_telegraph"), "{err}");
@@ -788,6 +796,8 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         coop: base.coop,
         cosmetics: base.cosmetics,
         ui: base.ui,
+        heroes_visual: base.heroes_visual,
+        arena_visual: base.arena_visual,
     })
     .expect_err("missing hatch telegraph");
     assert!(err.contains("hatch_telegraph"), "{err}");
@@ -932,6 +942,8 @@ fn missing_weakpoint_anchor_fails_content_load() {
             coop: base.coop,
         cosmetics: base.cosmetics,
         ui: base.ui,
+            heroes_visual: base.heroes_visual,
+            arena_visual: base.arena_visual,
         })
     };
 
@@ -991,6 +1003,8 @@ fn a_typo_in_a_rarity_color_fails_load() {
         coop: base.coop,
         cosmetics: base.cosmetics,
         ui: base.ui,
+        heroes_visual: base.heroes_visual,
+        arena_visual: base.arena_visual,
     })
     .expect_err("a typo'd rarity color must fail load");
     assert!(err.contains("rarity_commmon"), "{err}");
@@ -1069,6 +1083,8 @@ fn sources_reveal<'a>(base: &'a gemini_sim::content::Sources<'a>, crate_reveal: 
         coop: base.coop,
         cosmetics: base.cosmetics,
         ui: base.ui,
+        heroes_visual: base.heroes_visual,
+        arena_visual: base.arena_visual,
     }
 }
 
@@ -1188,6 +1204,8 @@ fn every_emitted_sound_resolves_to_a_mix_file() {
             coop: base.coop,
             cosmetics: base.cosmetics,
         ui: base.ui,
+            heroes_visual: base.heroes_visual,
+            arena_visual: base.arena_visual,
         })
     };
     let without_gain = base.audio.replacen(
@@ -1260,6 +1278,8 @@ fn leg_layout_comes_from_bugs() {
         coop: base.coop,
         cosmetics: base.cosmetics,
         ui: base.ui,
+        heroes_visual: base.heroes_visual,
+        arena_visual: base.arena_visual,
     })
     .expect_err("missing layout");
     assert!(err.contains("layout"), "{err}");
@@ -1326,6 +1346,8 @@ fn vex_overdrive_comes_from_characters() {
         coop: base.coop,
         cosmetics: base.cosmetics,
         ui: base.ui,
+        heroes_visual: base.heroes_visual,
+        arena_visual: base.arena_visual,
     })
     .expect_err("missing overdrive duration");
     assert!(err.contains("duration"), "{err}");
@@ -1354,6 +1376,8 @@ fn vex_overdrive_comes_from_characters() {
             coop: base.coop,
         cosmetics: base.cosmetics,
         ui: base.ui,
+            heroes_visual: base.heroes_visual,
+            arena_visual: base.arena_visual,
         })
     };
     let text = include_str!("../../../content/characters.toml");
@@ -1522,6 +1546,8 @@ fn arena_01_vents_perches_and_pickups() {
             coop: base.coop,
         cosmetics: base.cosmetics,
         ui: base.ui,
+            heroes_visual: base.heroes_visual,
+            arena_visual: base.arena_visual,
         })
     };
     for key in [
@@ -2045,6 +2071,8 @@ fn ui_spacing_and_font_coverage_fail_closed() {
             coop: base.coop,
             cosmetics: base.cosmetics,
             ui,
+            heroes_visual: base.heroes_visual,
+            arena_visual: base.arena_visual,
         })
     };
     let negative = base.ui.replacen("leading = 2.0", "leading = -1.0", 1);
@@ -2081,6 +2109,8 @@ fn ui_spacing_and_font_coverage_fail_closed() {
         coop: base.coop,
         cosmetics: base.cosmetics,
         ui: base.ui,
+        heroes_visual: base.heroes_visual,
+        arena_visual: base.arena_visual,
     })
     .expect_err("underscore in a hero name");
     assert!(err.contains("nyra"), "{err}");
@@ -2165,6 +2195,8 @@ fn sources_with<'a>(base: &'a gemini_sim::content::Sources<'a>, coop: &'a str) -
         coop,
         cosmetics: base.cosmetics,
         ui: base.ui,
+        heroes_visual: base.heroes_visual,
+        arena_visual: base.arena_visual,
     }
 }
 
@@ -2946,10 +2978,10 @@ fn warnings_and_infinite_magazine_fail_closed() {
 fn hero_portraits_fail_closed() {
     let content = Content::embedded();
     let expect = [
-        ("vex", "pulse_rifle", 0.0, 0.0, 0.78),
-        ("nyra", "gauntlet", 30.0, 12.0, 0.78),
-        ("brakk", "slab_shield", 30.0, 12.0, 0.78),
-        ("kip", "marker_pistol", 30.0, 12.0, 0.78),
+        ("vex", "vex", 20.0, 0.0, 0.86),
+        ("nyra", "nyra", -18.0, 12.0, 0.86),
+        ("brakk", "brakk", 22.0, 8.0, 0.88),
+        ("kip", "kip", -14.0, 10.0, 0.86),
     ];
     for (id, mesh, yaw, pitch, fit) in expect {
         let card = content.heroes.iter().find(|hero| hero.id == id).unwrap();
@@ -2967,14 +2999,14 @@ fn hero_portraits_fail_closed() {
         })
     };
     let missing = base.hero.replacen(
-        "portrait = { mesh = \"gauntlet\", yaw_deg = 30.0, pitch_deg = 12.0, fit = 0.78 }\n",
+        "portrait = { mesh = \"nyra\", yaw_deg = -18.0, pitch_deg = 12.0, fit = 0.86 }\n",
         "",
         1,
     );
     let err = load(&missing).expect_err("nyra portrait");
     assert!(err.contains("nyra"), "{err}");
     assert!(err.contains("portrait"), "{err}");
-    let unknown = base.hero.replacen("mesh = \"marker_pistol\"", "mesh = \"laser_knife\"", 1);
+    let unknown = base.hero.replacen("mesh = \"kip\"", "mesh = \"laser_knife\"", 1);
     let err = load(&unknown).expect_err("unknown mesh");
     assert!(err.contains("kip"), "{err}");
     assert!(err.contains("laser_knife"), "{err}");
@@ -3001,6 +3033,42 @@ fn hero_portraits_fail_closed() {
     .expect_err("missing hero_white");
     assert!(err.contains("hero_white"), "{err}");
     assert!(err.contains("does not resolve"), "{err}");
+
+    let dress = &content.arena_dressing;
+    assert!((dress.rail_height - 0.45).abs() < 1e-4);
+    assert!(dress.rail_height <= 0.5);
+    assert!((dress.ramp_gap_dot - 0.86).abs() < 1e-4);
+    assert!((dress.review_distance - 15.0).abs() < 1e-4);
+    assert!((dress.review_look_height - 0.45).abs() < 1e-4);
+    assert!((dress.review_ground_y - 0.02).abs() < 1e-4);
+    let tall = base.arena_visual.replacen("rail_height = 0.45", "rail_height = 0.8", 1);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        arena_visual: &tall,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("tall curb");
+    assert!(err.contains("rail_height"), "{err}");
+    let rocks = format!("{}\n[[rock]]\nat = [18.0, 14.0]\nsize = [1.0, 1.0, 1.0]\n", base.arena_visual);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        arena_visual: &rocks,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("rocks");
+    assert!(err.contains("rock"), "{err}");
+    let spare = base.heroes_visual.replacen("[[mesh]]", "spare = 1\n[[mesh]]", 1);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        heroes_visual: &spare,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("unknown visual key");
+    assert!(err.contains("spare"), "{err}");
+    let bad_color = base.heroes_visual.replacen("color = \"hero_white\"", "color = \"not_a_color\"", 1);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        heroes_visual: &bad_color,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("bad color");
+    assert!(err.contains("not_a_color"), "{err}");
 }
 
 fn sources_ranks<'a>(
@@ -3030,5 +3098,7 @@ fn sources_ranks<'a>(
         coop: base.coop,
         cosmetics: base.cosmetics,
         ui: base.ui,
+        heroes_visual: base.heroes_visual,
+        arena_visual: base.arena_visual,
     }
 }

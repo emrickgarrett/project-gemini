@@ -1,6 +1,7 @@
 //! Procedural placeholder meshes. One shared mesh set per bug type.
 //! Colors are filled in by the client from `content/palette.toml`.
 
+mod arena;
 mod away_still;
 mod geom;
 mod glyph;
@@ -11,14 +12,15 @@ mod preview;
 mod reveal_still;
 mod visual;
 
-pub use menu_still::{paint_menu, Hit, MenuShot, PaintPrefs};
+pub use menu_still::{paint_menu, raster_hero_portrait, Hit, MenuShot, PaintPrefs};
 
+pub use arena::{pieces as arena_pieces, review_ground, ArenaPiece};
 pub use away_still::{paint_away, AwayShot};
 pub use reveal_still::{paint_reveal, reveal_still_is_flat, still_color_stats};
 
 pub use pose::{pose, AnimInput, Pose, Xform};
 pub use preview::{
-    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_top, raster_viewmodel, still,
+    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_in_arena, raster_rail_edge, raster_top, raster_viewmodel, still,
     still_open, still_top, ViewmodelFrame,
 };
 pub use visual::{bug, catalog, flat_shaded, EnemyVisual, Gate, Joint, Part, ShotCamera};
@@ -145,7 +147,7 @@ pub fn project_view(p: [f32; 3], fov_deg: f32, width: f32, height: f32) -> Optio
     Some([(x * 0.5 + 0.5) * width, (1.0 - (y * 0.5 + 0.5)) * height, z])
 }
 
-pub fn viewmodel() -> Viewmodel {
+pub fn viewmodel(spec: &gemini_sim::content::GloveSpec) -> Viewmodel {
     let mut vm = Viewmodel {
         teal: MeshData::new(),
         cobalt: MeshData::new(),
@@ -155,14 +157,15 @@ pub fn viewmodel() -> Viewmodel {
         barrel: MeshData::new(),
     };
     let ink = [1.0, 1.0, 1.0, 1.0];
-    glove(&mut vm, [0.2, -0.04, -0.08], 1.0, ink);
-    glove(&mut vm, [-0.06, -0.05, -0.5], -1.0, ink);
+    glove(&mut vm, [0.2, -0.04, -0.08], 1.0, ink, spec);
+    glove(&mut vm, [-0.06, -0.05, -0.5], -1.0, ink, spec);
     rifle(&mut vm, ink);
     vm
 }
 
 pub fn arms_and_gun(cobalt: Rgba, white: Rgba, accent: Rgba, energy: Rgba) -> MeshData {
-    let vm = viewmodel();
+    let glove = gemini_sim::content::Content::embedded().heroes_visual.glove;
+    let vm = viewmodel(&glove);
     let teal = [0.12, 0.71, 0.66, 1.0];
     let mut m = MeshData::new();
     geom::append(&mut m, &recolor(&vm.teal, teal));
@@ -182,58 +185,59 @@ fn recolor(src: &MeshData, color: [f32; 4]) -> MeshData {
     mesh
 }
 
-fn glove(vm: &mut Viewmodel, anchor: [f32; 3], side: f32, ink: [f32; 4]) {
+fn glove(vm: &mut Viewmodel, anchor: [f32; 3], side: f32, ink: [f32; 4], g: &gemini_sim::content::GloveSpec) {
     // Cobalt sleeve. Teal plates sit on the forearm; the glove and fingers are teal.
     geom::gem(
         &mut vm.cobalt,
-        [anchor[0], anchor[1] + 0.01, anchor[2] + 0.08],
-        [0.08, 0.055, 0.13],
-        8,
-        6,
+        [anchor[0] + g.sleeve_at[0], anchor[1] + g.sleeve_at[1], anchor[2] + g.sleeve_at[2]],
+        g.sleeve_radii,
+        g.sleeve_slices,
+        g.sleeve_stacks,
         ink,
     );
     geom::plate(
         &mut vm.teal,
-        [anchor[0], anchor[1] + 0.045, anchor[2] + 0.02],
-        0.12,
-        0.11,
-        0.02,
-        8,
-        5,
+        [anchor[0] + g.plate_at[0], anchor[1] + g.plate_at[1], anchor[2] + g.plate_at[2]],
+        g.plate_length,
+        g.plate_width,
+        g.plate_arch,
+        g.plate_nu,
+        g.plate_nv,
         ink,
     );
     geom::gem(
         &mut vm.teal,
-        [anchor[0] - side * 0.01, anchor[1] - 0.015, anchor[2] - 0.05],
-        [0.065, 0.048, 0.08],
-        8,
-        6,
+        [anchor[0] - side * g.hand_at[0], anchor[1] + g.hand_at[1], anchor[2] + g.hand_at[2]],
+        g.hand_radii,
+        g.hand_slices,
+        g.hand_stacks,
         ink,
     );
-    for i in 0..4 {
-        let spread = (i as f32 - 1.5) * 0.03;
+    let center = (g.finger_count - 1) as f32 * 0.5;
+    for i in 0..g.finger_count {
+        let spread = (i as f32 - center) * g.finger_spread;
         spoke(
             &mut vm.teal,
-            0.12,
-            0.02,
-            0.012,
-            8,
+            g.finger_length,
+            g.finger_r0,
+            g.finger_r1,
+            g.finger_sides,
             ink,
-            [anchor[0] + spread, anchor[1] - 0.02, anchor[2] - 0.11],
-            1.2,
-            side * 0.18,
+            [anchor[0] + spread + g.finger_at[0], anchor[1] + g.finger_at[1], anchor[2] + g.finger_at[2]],
+            g.finger_pitch,
+            side * g.finger_yaw,
         );
     }
     spoke(
         &mut vm.teal,
-        0.09,
-        0.022,
-        0.014,
-        8,
+        g.thumb_length,
+        g.thumb_r0,
+        g.thumb_r1,
+        g.thumb_sides,
         ink,
-        [anchor[0] - side * 0.07, anchor[1] - 0.02, anchor[2] - 0.02],
-        0.85,
-        -side * 0.9,
+        [anchor[0] - side * g.thumb_at[0], anchor[1] + g.thumb_at[1], anchor[2] + g.thumb_at[2]],
+        g.thumb_pitch,
+        -side * g.thumb_yaw,
     );
 }
 
@@ -394,7 +398,7 @@ mod tests {
         assert!(hive.tri_count() <= 8000 && hive.tri_count() > 600, "hive {}", hive.tri_count());
         assert!((1800..=3600).contains(&arms.tri_count()), "arms {}", arms.tri_count());
         assert!(flat_shaded(&arms));
-        let vm = viewmodel();
+        let vm = viewmodel(&gemini_sim::content::Content::embedded().heroes_visual.glove);
         assert_eq!(vm.tri_count(), arms.tri_count());
         assert!(vm.accent.tri_count() > 40, "accent {}", vm.accent.tri_count());
         assert!(vm.core.tri_count() > 20, "core {}", vm.core.tri_count());

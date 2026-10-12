@@ -102,7 +102,8 @@ pub fn raster_viewmodel(width: u32, height: u32, frame: &ViewmodelFrame) -> Vec<
 
 /// Same still, with the posed viewmodel turned. Zero yaw and pitch is the unrotated raster.
 pub fn raster_viewmodel_yaw(width: u32, height: u32, frame: &ViewmodelFrame, yaw_deg: f32, pitch_deg: f32) -> Vec<u8> {
-    let vm = crate::viewmodel();
+    let glove = gemini_sim::content::Content::embedded().heroes_visual.glove;
+    let vm = crate::viewmodel(&glove);
     let palette = palette_of();
     let shift = frame.offset;
     let orange = frame.accent;
@@ -332,11 +333,27 @@ fn draw(
     open_shell: bool,
     camera: Option<([f32; 3], [f32; 3], f32)>,
 ) -> Vec<u8> {
+    draw_scene(visual, palette, width, height, silhouette, open_shell, camera, [0.0, 0.0, 0.0], BG, &[])
+}
+
+/// Bug at `shift`, plus optional world meshes (the arena), on `bg`.
+fn draw_scene(
+    visual: &EnemyVisual,
+    palette: &dyn Fn(&str) -> [f32; 4],
+    width: u32,
+    height: u32,
+    silhouette: bool,
+    open_shell: bool,
+    camera: Option<([f32; 3], [f32; 3], f32)>,
+    shift: [f32; 3],
+    bg: [u8; 3],
+    extras: &[(&crate::MeshData, [f32; 4])],
+) -> Vec<u8> {
     let w = width.max(8);
     let h = height.max(8);
     let mut color = Vec::with_capacity((w * h * 3) as usize);
     for _ in 0..(w * h) {
-        color.extend_from_slice(&BG);
+        color.extend_from_slice(&bg);
     }
     let mut depth = vec![f32::INFINITY; (w * h) as usize];
     let mut anim = still_anim();
@@ -368,7 +385,7 @@ fn draw(
         for p in &mesh.positions {
             let scaled = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
             let r = crate::pose::rotate_vec(xf.rot, scaled);
-            verts.push([r[0] + xf.pos[0], r[1] + xf.pos[1], r[2] + xf.pos[2]]);
+            verts.push([r[0] + xf.pos[0] + shift[0], r[1] + xf.pos[1] + shift[1], r[2] + xf.pos[2] + shift[2]]);
         }
         for tri in mesh.indices.chunks(3) {
             if tri.len() < 3 {
@@ -401,7 +418,172 @@ fn draw(
             fill_tri(&mut color, &mut depth, w, h, a, b, c, rgb);
         }
     }
+    if !silhouette {
+        for (mesh, albedo) in extras {
+            for tri in mesh.indices.chunks(3) {
+                if tri.len() < 3 {
+                    continue;
+                }
+                let ia = tri[0] as usize;
+                let ib = tri[1] as usize;
+                let ic = tri[2] as usize;
+                let nw = mesh.normals[ia];
+                let ndot = (nw[0] * key[0] + nw[1] * key[1] + nw[2] * key[2]).clamp(0.0, 1.0);
+                let ndot2 = (nw[0] * fill[0] + nw[1] * fill[1] + nw[2] * fill[2]).clamp(0.0, 1.0);
+                let shade = (0.62 + 0.40 * ndot + 0.22 * ndot2).clamp(0.0, 1.0);
+                let rgb = [albedo[0] * shade, albedo[1] * shade, albedo[2] * shade];
+                let Some(a) = project(mesh.positions[ia], eye, right, up, forward, focal, aspect, w, h) else {
+                    continue;
+                };
+                let Some(b) = project(mesh.positions[ib], eye, right, up, forward, focal, aspect, w, h) else {
+                    continue;
+                };
+                let Some(c) = project(mesh.positions[ic], eye, right, up, forward, focal, aspect, w, h) else {
+                    continue;
+                };
+                fill_tri(&mut color, &mut depth, w, h, a, b, c, rgb);
+            }
+        }
+    }
     color
+}
+
+/// In-arena color still. The eye stands on the deck, `review_distance` meters from the bug.
+pub fn raster_in_arena(id: &str, width: u32, height: u32) -> Vec<u8> {
+    use gemini_sim::content::Content;
+    let content = Content::embedded();
+    let dress = &content.arena_dressing;
+    let platform = &content.arena.platform;
+    let visual = bug(id);
+    let deck = platform.height;
+    let eye_y = deck + content.controller.camera.eye_height;
+    let look_y = deck + visual.height * dress.review_look_height;
+    let dy = eye_y - look_y;
+    let horiz = (dress.review_distance * dress.review_distance - dy * dy).max(0.25).sqrt();
+    // Concept 3/4 yaw, flattened so both the eye and the bug stay on the deck.
+    // The sight line then stays above the platform instead of running into it.
+    let aim = sub(visual.camera.eye, visual.camera.target);
+    let flat_len = (aim[0] * aim[0] + aim[2] * aim[2]).sqrt();
+    let flat = if flat_len < 1.0e-3 {
+        [0.0, 1.0]
+    } else {
+        [aim[0] / flat_len, aim[2] / flat_len]
+    };
+    let half = horiz * 0.5;
+    let bug_at = [
+        platform.center.x - flat[0] * half,
+        deck,
+        platform.center.z - flat[1] * half,
+    ];
+    let eye = [platform.center.x + flat[0] * half, eye_y, platform.center.z + flat[1] * half];
+    let look = [bug_at[0], look_y, bug_at[2]];
+    let sky = content.palette.key("arena_sky");
+    let bg = [byte(sky[0]), byte(sky[1]), byte(sky[2])];
+    let palette = |name: &str| content.palette.key(name);
+    let ground = crate::review_ground(&content);
+    let pieces = crate::arena_pieces(&content);
+    let mut owned: Vec<(crate::MeshData, [f32; 4])> = Vec::new();
+    owned.push((ground, palette("arena_dark")));
+    for piece in &pieces {
+        owned.push((piece.mesh.clone(), palette(&piece.palette)));
+    }
+    let extras: Vec<(&crate::MeshData, [f32; 4])> = owned.iter().map(|(mesh, color)| (mesh, *color)).collect();
+    draw_scene(
+        visual,
+        &palette,
+        width,
+        height,
+        false,
+        false,
+        Some((eye, look, visual.camera.fov)),
+        bug_at,
+        bg,
+        &extras,
+    )
+}
+
+/// First-person view from the deck edge. Eye height is the player camera.
+/// The starter hero stands in frame as the player-scale reference.
+pub fn raster_rail_edge(width: u32, height: u32) -> Vec<u8> {
+    use gemini_sim::content::Content;
+    let content = Content::embedded();
+    let dress = &content.arena_dressing;
+    let platform = &content.arena.platform;
+    let ang = dress.rail_still_angle_deg.to_radians();
+    let (s, c) = ang.sin_cos();
+    let deck = platform.height;
+    // Stand on the deck, a step inside the rim, at player eye height.
+    let eye_r = platform.radius - dress.rail_still_inset;
+    let eye = [
+        platform.center.x + c * eye_r,
+        deck + content.controller.camera.eye_height,
+        platform.center.z + s * eye_r,
+    ];
+    // Step along the rim so the figure stays on the deck and in front of the eye.
+    let arc = dress.rail_still_side / eye_r.max(0.5);
+    let (hs, hc) = (ang + arc).sin_cos();
+    let stand = [platform.center.x + hc * eye_r, deck, platform.center.z + hs * eye_r];
+    // Look toward the curb beside the figure. Negative back keeps that point on the deck.
+    let look_r = platform.radius + dress.rail_still_back;
+    let look = [
+        platform.center.x + hc * look_r,
+        deck + dress.rail_still_up,
+        platform.center.z + hs * look_r,
+    ];
+    let sky = content.palette.key("arena_sky");
+    let bg = [byte(sky[0]), byte(sky[1]), byte(sky[2])];
+    let palette = |name: &str| content.palette.key(name);
+    let ground = crate::review_ground(&content);
+    let pieces = crate::arena_pieces(&content);
+    let mut owned: Vec<(crate::MeshData, [f32; 4])> = Vec::new();
+    owned.push((ground, palette("arena_dark")));
+    for piece in &pieces {
+        owned.push((piece.mesh.clone(), palette(&piece.palette)));
+    }
+    owned.extend(player_reference(&content, stand));
+    let extras: Vec<(&crate::MeshData, [f32; 4])> = owned.iter().map(|(mesh, color)| (mesh, *color)).collect();
+    // The hero is the scale figure. The swarmer stays at the deck center, outside this rim view.
+    draw_scene(
+        bug("swarmer"),
+        &palette,
+        width,
+        height,
+        false,
+        false,
+        Some((eye, look, dress.rail_still_fov)),
+        [platform.center.x, deck, platform.center.z],
+        bg,
+        &extras,
+    )
+}
+
+/// Starter hero, feet on `at`, as a scale figure. Portrait framing is removed.
+fn player_reference(content: &gemini_sim::content::Content, at: [f32; 3]) -> Vec<(crate::MeshData, [f32; 4])> {
+    let id = content.hero.id.as_str();
+    let hero = content.heroes.iter().find(|hero| hero.id == id).expect("starter hero");
+    let parts = crate::portrait::build(&content.heroes_visual, id).expect("starter body");
+    let mut min_y = f32::MAX;
+    let mut cx = 0.0;
+    let mut cz = 0.0;
+    let mut count = 0.0;
+    for part in &parts {
+        for p in &part.mesh.positions {
+            min_y = min_y.min(p[1]);
+            cx += p[0];
+            cz += p[2];
+            count += 1.0;
+        }
+    }
+    let shift = [at[0] - cx / count, at[1] - min_y, at[2] - cz / count];
+    parts
+        .into_iter()
+        .map(|part| {
+            let mut mesh = part.mesh;
+            crate::geom::translate(&mut mesh, shift);
+            let key = if part.palette == "accent" { hero.accent_key.as_str() } else { part.palette.as_str() };
+            (mesh, content.palette.key(key))
+        })
+        .collect()
 }
 
 pub fn palette_of() -> impl Fn(&str) -> [f32; 4] {

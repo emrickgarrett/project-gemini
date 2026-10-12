@@ -467,6 +467,8 @@ mod tests {
             coop: base.coop,
             cosmetics: base.cosmetics,
             ui: base.ui,
+            heroes_visual: base.heroes_visual,
+            arena_visual: base.arena_visual,
         })
         .expect("content with fakeouts off")
     }

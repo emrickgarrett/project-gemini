@@ -467,7 +467,9 @@ fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cat
                         grown_glow: 0.0,
                     });
                 }
-                // Magenta core between the plates. Hidden until the shell opens.
+                // Magenta core between a closed shell's plates. Hidden until the shell opens.
+                // An open rear (the swarmer) has no buried core.
+                if !rear {
                 let core_dens = Dens {
                     slices: 8,
                     stacks: 4,
@@ -496,6 +498,7 @@ fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cat
                     grown_scale: 0.0,
                     grown_glow: 0.0,
                 });
+                }
             }
         }
         if let Some(limb) = limb.as_ref() {

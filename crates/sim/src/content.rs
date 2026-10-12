@@ -37,6 +37,10 @@ pub struct Content {
     pub warnings: Warnings,
     pub cosmetics: Cosmetics,
     pub ui: Ui,
+    /// Full-body card meshes and the first-person glove. One list with the portraits.
+    pub heroes_visual: HeroesVisual,
+    /// Deck, low rim, and the review camera. Not a collider.
+    pub arena_dressing: ArenaDressing,
 }
 
 pub struct Sources<'a> {
@@ -62,6 +66,8 @@ pub struct Sources<'a> {
     pub coop: &'a str,
     pub cosmetics: &'a str,
     pub ui: &'a str,
+    pub heroes_visual: &'a str,
+    pub arena_visual: &'a str,
 }
 
 pub fn embedded_sources() -> Sources<'static> {
@@ -88,6 +94,8 @@ pub fn embedded_sources() -> Sources<'static> {
         coop: include_str!("../../../content/coop.toml"),
         cosmetics: include_str!("../../../content/cosmetics.toml"),
         ui: include_str!("../../../content/ui.toml"),
+        heroes_visual: include_str!("../../../content/heroes_visual.toml"),
+        arena_visual: include_str!("../../../content/arena_visual.toml"),
     }
 }
 
@@ -120,13 +128,27 @@ impl Content {
             src.coop,
             src.cosmetics,
             src.ui,
+            src.heroes_visual,
+            src.arena_visual,
         ]);
         let mut bugs: crate::bugs::BugBook = parse("bugs.toml", src.bugs)?;
         crate::bugs::bind_weak_anchors(&mut bugs).map_err(|err| format!("bugs.toml: {err}"))?;
         crate::bugs::require_leg_layout(&bugs).map_err(|err| format!("bugs.toml: {err}"))?;
         let bosses = load_bosses(src.bosses).map_err(|err| format!("bosses.toml: {err}"))?;
         require_spawn_clearance(&bosses, &bugs).map_err(|err| format!("bosses.toml: {err}"))?;
-        let (mut hero, guns, roster, heroes, warnings) = load_characters(src.hero)?;
+        let mut palette: Palette = parse("palette.toml", src.palette)?;
+        let heroes_visual = load_heroes_visual(src.heroes_visual, &palette)?;
+        let mesh_ids: Vec<String> = heroes_visual.meshes.iter().map(|mesh| mesh.id.clone()).collect();
+        let (mut hero, guns, roster, heroes, warnings) = load_characters(src.hero, &mesh_ids)?;
+        for mesh in &heroes_visual.meshes {
+            if !heroes.iter().any(|card| card.portrait.mesh == mesh.id) {
+                return Err(format!(
+                    "heroes_visual.toml mesh \"{}\" is not a characters.toml portrait",
+                    mesh.id
+                ));
+            }
+        }
+        let arena_dressing = load_arena_dressing(src.arena_visual)?;
         let mut weapons = parse::<WeaponFile>("weapons.toml", src.weapons)?;
         weapons.weapon = guns;
         let audio = crate::audio_mix::load_mix(src.audio).map_err(|err| format!("audio_mix.toml: {err}"))?;
@@ -136,7 +158,6 @@ impl Content {
         let crate_reveal: CrateReveal = parse("crate_reveal.toml", src.crate_reveal)?;
         validate_reveal_cues(&crate_reveal, &audio)?;
         validate_reveal_layout(&crate_reveal)?;
-        let mut palette: Palette = parse("palette.toml", src.palette)?;
         let presentation: Presentation = parse("presentation.toml", src.presentation)?;
         validate_away_hud(&presentation.hud.away)?;
         let ui = load_ui(src.ui)?;
@@ -210,6 +231,8 @@ impl Content {
             coop,
             cosmetics: load_cosmetics(src.cosmetics).map_err(|err| format!("cosmetics.toml: {err}"))?,
             ui,
+            heroes_visual,
+            arena_dressing,
         })
     }
 
@@ -1272,8 +1295,12 @@ pub struct HeroPortrait {
     pub fit: f32,
 }
 
-/// Meshes a hero portrait may name. `portrait::build` follows this list.
-pub const PORTRAIT_MESHES: &[&str] = &["pulse_rifle", "gauntlet", "slab_shield", "marker_pistol"];
+/// Card meshes plus the first-person glove. Parsed with the rest of the content.
+#[derive(Clone, Debug)]
+pub struct HeroesVisual {
+    pub meshes: Vec<HeroMesh>,
+    pub glove: GloveSpec,
+}
 
 /// One hero's ability, as the act-now cues read it. No hero or ability id.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -1291,7 +1318,97 @@ pub struct Warnings {
     pub ammo_low_fraction: f32,
 }
 
-fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>, Vec<HeroCard>, Warnings), String> {
+#[derive(Clone, Debug)]
+pub struct HeroMesh {
+    pub id: String,
+    pub place: [f32; 3],
+    pub parts: Vec<HeroPart>,
+}
+
+/// One piece of a lobby body. Unused fields stay zero for the other shapes.
+#[derive(Clone, Debug)]
+pub struct HeroPart {
+    pub shape: String,
+    pub size: [f32; 3],
+    pub radii: [f32; 3],
+    pub chamfer: f32,
+    pub slices: u32,
+    pub stacks: u32,
+    pub length: f32,
+    pub r0: f32,
+    pub r1: f32,
+    pub sides: u32,
+    pub width: f32,
+    pub height: f32,
+    pub thick: f32,
+    pub bend_deg: f32,
+    pub segments: u32,
+    pub at: [f32; 3],
+    pub yaw_deg: f32,
+    pub pitch_deg: f32,
+    pub color: String,
+    pub glow: bool,
+}
+
+/// Offsets are added to the viewmodel anchor. An X component is a side magnitude.
+#[derive(Clone, Debug)]
+pub struct GloveSpec {
+    pub sleeve_at: [f32; 3],
+    pub sleeve_radii: [f32; 3],
+    pub sleeve_slices: u32,
+    pub sleeve_stacks: u32,
+    pub plate_at: [f32; 3],
+    pub plate_length: f32,
+    pub plate_width: f32,
+    pub plate_arch: f32,
+    pub plate_nu: u32,
+    pub plate_nv: u32,
+    pub hand_at: [f32; 3],
+    pub hand_radii: [f32; 3],
+    pub hand_slices: u32,
+    pub hand_stacks: u32,
+    pub finger_count: u32,
+    pub finger_spread: f32,
+    pub finger_length: f32,
+    pub finger_r0: f32,
+    pub finger_r1: f32,
+    pub finger_sides: u32,
+    pub finger_at: [f32; 3],
+    pub finger_pitch: f32,
+    pub finger_yaw: f32,
+    pub thumb_length: f32,
+    pub thumb_r0: f32,
+    pub thumb_r1: f32,
+    pub thumb_sides: u32,
+    pub thumb_at: [f32; 3],
+    pub thumb_pitch: f32,
+    pub thumb_yaw: f32,
+}
+
+/// Visual deck, curb, and the review cameras. Not a collider.
+#[derive(Clone, Debug)]
+pub struct ArenaDressing {
+    pub deck_sides: u32,
+    pub rail_posts: u32,
+    pub rail_thickness: f32,
+    pub rail_height: f32,
+    pub ramp_gap_dot: f32,
+    pub review_stand_gap: f32,
+    pub review_distance: f32,
+    pub review_look_height: f32,
+    pub review_ground_y: f32,
+    pub rail_still_angle_deg: f32,
+    pub rail_still_back: f32,
+    pub rail_still_up: f32,
+    pub rail_still_side: f32,
+    pub rail_still_fov: f32,
+    pub rail_still_inset: f32,
+}
+
+fn load_characters(
+    text: &str,
+    meshes: &[String],
+) -> Result<(Hero, Vec<WeaponDef>, Vec<String>, Vec<HeroCard>, Warnings), String> {
     let root: toml::Value = toml::from_str(text).map_err(|err| err.to_string())?;
     let table = root.as_table().ok_or_else(|| "characters.toml is not a table".to_string())?;
     let heroes = table
@@ -1354,7 +1471,7 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>, Vec
             Some(toml::Value::Boolean(value)) => *value,
             Some(_) => return Err(format!("characters.toml {id} ability infinite_magazine must be a bool")),
         };
-        let portrait = load_portrait(row, id)?;
+        let portrait = load_portrait(row, id, meshes)?;
         let card = HeroCard {
             id: id.to_string(),
             name: req_str(row, "name", id)?.to_string(),
@@ -1524,7 +1641,11 @@ fn unit_fraction(value: f32, what: &str) -> Result<f32, String> {
     }
 }
 
-fn load_portrait(row: &toml::map::Map<String, toml::Value>, id: &str) -> Result<HeroPortrait, String> {
+fn load_portrait(
+    row: &toml::map::Map<String, toml::Value>,
+    id: &str,
+    meshes: &[String],
+) -> Result<HeroPortrait, String> {
     let table = row
         .get("portrait")
         .and_then(|value| value.as_table())
@@ -1535,7 +1656,7 @@ fn load_portrait(row: &toml::map::Map<String, toml::Value>, id: &str) -> Result<
         &format!("characters.toml {id} portrait"),
     )?;
     let mesh = req_str(table, "mesh", &format!("{id} portrait"))?.to_string();
-    if mesh.is_empty() || !PORTRAIT_MESHES.contains(&mesh.as_str()) {
+    if mesh.is_empty() || !meshes.iter().any(|have| have == &mesh) {
         return Err(format!("characters.toml {id} portrait mesh \"{mesh}\" is unknown"));
     }
     let yaw_deg = req_f32(table, "yaw_deg", &format!("{id} portrait"))?;
@@ -1552,6 +1673,381 @@ fn load_portrait(row: &toml::map::Map<String, toml::Value>, id: &str) -> Result<
         return Err(format!("characters.toml {id} portrait fit must be in (0, 1]"));
     }
     Ok(HeroPortrait { mesh, yaw_deg, pitch_deg, fit })
+}
+
+fn load_heroes_visual(text: &str, palette: &Palette) -> Result<HeroesVisual, String> {
+    let root: toml::Value = toml::from_str(text).map_err(|err| format!("heroes_visual.toml: {err}"))?;
+    let table = root.as_table().ok_or_else(|| "heroes_visual.toml is not a table".to_string())?;
+    expect_keys(table, &["mesh", "glove"], "heroes_visual.toml")?;
+    let rows = table
+        .get("mesh")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "heroes_visual.toml is missing [[mesh]]".to_string())?;
+    if rows.is_empty() {
+        return Err("heroes_visual.toml has no [[mesh]]".into());
+    }
+    let mut meshes: Vec<HeroMesh> = Vec::new();
+    for row in rows {
+        let map = row.as_table().ok_or_else(|| "heroes_visual.toml mesh is not a table".to_string())?;
+        expect_keys(map, &["id", "place", "parts"], "heroes_visual.toml mesh")?;
+        let id = vis_str(map, "id", "heroes_visual.toml mesh")?.to_string();
+        if id.is_empty() || meshes.iter().any(|mesh| mesh.id == id) {
+            return Err(format!("heroes_visual.toml duplicate or empty mesh id \"{id}\""));
+        }
+        let place = vis_vec3(map, "place", &format!("heroes_visual.toml {id}"))?;
+        let parts_v = map
+            .get("parts")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| format!("heroes_visual.toml {id} is missing parts"))?;
+        if parts_v.is_empty() {
+            return Err(format!("heroes_visual.toml {id} has no parts"));
+        }
+        let mut parts = Vec::new();
+        for part in parts_v {
+            parts.push(load_hero_part(part, &id, palette)?);
+        }
+        meshes.push(HeroMesh { id, place, parts });
+    }
+    let glove_row = table
+        .get("glove")
+        .and_then(|v| v.as_table())
+        .ok_or_else(|| "heroes_visual.toml is missing [glove]".to_string())?;
+    Ok(HeroesVisual { meshes, glove: load_glove(glove_row)? })
+}
+
+fn load_hero_part(value: &toml::Value, id: &str, palette: &Palette) -> Result<HeroPart, String> {
+    let spec = value.as_table().ok_or_else(|| format!("heroes_visual.toml {id} part is not a table"))?;
+    let shape = vis_str(spec, "shape", &format!("heroes_visual.toml {id} part"))?.to_string();
+    let keys: &[&str] = match shape.as_str() {
+        "box" => &["shape", "size", "at", "yaw_deg", "pitch_deg", "color", "glow"],
+        "gem" => &["shape", "radii", "slices", "stacks", "at", "yaw_deg", "pitch_deg", "color", "glow"],
+        "limb" => &["shape", "length", "r0", "r1", "sides", "at", "yaw_deg", "pitch_deg", "color", "glow"],
+        "bevel" => &["shape", "size", "chamfer", "at", "yaw_deg", "pitch_deg", "color", "glow"],
+        "arc" => &[
+            "shape", "width", "height", "thick", "bend_deg", "segments", "at", "yaw_deg", "pitch_deg", "color", "glow",
+        ],
+        other => return Err(format!("heroes_visual.toml {id} shape \"{other}\" is unknown")),
+    };
+    expect_keys(spec, keys, &format!("heroes_visual.toml {id} {shape}"))?;
+    let what = format!("heroes_visual.toml {id} {shape}");
+    let color = vis_str(spec, "color", &what)?.to_string();
+    if color != "accent" {
+        let resolved = palette.hex(&color).unwrap_or("");
+        if resolved.trim().trim_start_matches('#').len() < 6 {
+            return Err(format!("heroes_visual.toml {id} color \"{color}\" does not resolve"));
+        }
+    }
+    let mut part = HeroPart {
+        shape,
+        size: [0.0; 3],
+        radii: [0.0; 3],
+        chamfer: 0.0,
+        slices: 0,
+        stacks: 0,
+        length: 0.0,
+        r0: 0.0,
+        r1: 0.0,
+        sides: 0,
+        width: 0.0,
+        height: 0.0,
+        thick: 0.0,
+        bend_deg: 0.0,
+        segments: 0,
+        at: vis_vec3(spec, "at", &what)?,
+        yaw_deg: vis_f32(spec, "yaw_deg", &what)?,
+        pitch_deg: vis_f32(spec, "pitch_deg", &what)?,
+        color,
+        glow: vis_bool(spec, "glow", &what)?,
+    };
+    match part.shape.as_str() {
+        "box" => {
+            part.size = vis_vec3(spec, "size", &what)?;
+            if part.size.iter().any(|n| !(*n > 0.0)) {
+                return Err(format!("heroes_visual.toml {id} box size must be > 0"));
+            }
+        }
+        "bevel" => {
+            part.size = vis_vec3(spec, "size", &what)?;
+            part.chamfer = vis_f32(spec, "chamfer", &what)?;
+            if part.size.iter().any(|n| !(*n > 0.0)) {
+                return Err(format!("heroes_visual.toml {id} bevel size must be > 0"));
+            }
+            if !(part.chamfer > 0.0) || part.chamfer >= part.size[0] * 0.5 || part.chamfer >= part.size[2] * 0.5 {
+                return Err(format!(
+                    "heroes_visual.toml {id} bevel chamfer must be > 0 and less than half the X and Z size"
+                ));
+            }
+        }
+        "gem" => {
+            part.radii = vis_vec3(spec, "radii", &what)?;
+            part.slices = vis_u32(spec, "slices", &what)?;
+            part.stacks = vis_u32(spec, "stacks", &what)?;
+            if part.radii.iter().any(|n| !(*n > 0.0)) || part.slices < 3 || part.stacks < 2 {
+                return Err(format!("heroes_visual.toml {id} gem radii, slices, and stacks are out of range"));
+            }
+        }
+        "limb" => {
+            part.length = vis_f32(spec, "length", &what)?;
+            part.r0 = vis_f32(spec, "r0", &what)?;
+            part.r1 = vis_f32(spec, "r1", &what)?;
+            part.sides = vis_u32(spec, "sides", &what)?;
+            if !(part.length > 0.0 && part.r0 > 0.0 && part.r1 > 0.0) || part.sides < 3 {
+                return Err(format!("heroes_visual.toml {id} limb length, radii, and sides are out of range"));
+            }
+        }
+        "arc" => {
+            part.width = vis_f32(spec, "width", &what)?;
+            part.height = vis_f32(spec, "height", &what)?;
+            part.thick = vis_f32(spec, "thick", &what)?;
+            part.bend_deg = vis_f32(spec, "bend_deg", &what)?;
+            part.segments = vis_u32(spec, "segments", &what)?;
+            if !(part.width > 0.0 && part.height > 0.0 && part.thick > 0.0) {
+                return Err(format!("heroes_visual.toml {id} arc width, height, and thick must be > 0"));
+            }
+            if !(part.bend_deg > 0.0 && part.bend_deg < 180.0) || part.segments < 2 {
+                return Err(format!(
+                    "heroes_visual.toml {id} arc bend_deg must be in (0, 180) and segments >= 2"
+                ));
+            }
+        }
+        _ => unreachable!(),
+    }
+    Ok(part)
+}
+
+fn load_glove(table: &toml::map::Map<String, toml::Value>) -> Result<GloveSpec, String> {
+    expect_keys(
+        table,
+        &[
+            "sleeve_at",
+            "sleeve_radii",
+            "sleeve_slices",
+            "sleeve_stacks",
+            "plate_at",
+            "plate_length",
+            "plate_width",
+            "plate_arch",
+            "plate_nu",
+            "plate_nv",
+            "hand_at",
+            "hand_radii",
+            "hand_slices",
+            "hand_stacks",
+            "finger_count",
+            "finger_spread",
+            "finger_length",
+            "finger_r0",
+            "finger_r1",
+            "finger_sides",
+            "finger_at",
+            "finger_pitch",
+            "finger_yaw",
+            "thumb_length",
+            "thumb_r0",
+            "thumb_r1",
+            "thumb_sides",
+            "thumb_at",
+            "thumb_pitch",
+            "thumb_yaw",
+        ],
+        "heroes_visual.toml glove",
+    )?;
+    let what = "heroes_visual.toml glove";
+    let glove = GloveSpec {
+        sleeve_at: vis_vec3(table, "sleeve_at", what)?,
+        sleeve_radii: vis_vec3(table, "sleeve_radii", what)?,
+        sleeve_slices: vis_u32(table, "sleeve_slices", what)?,
+        sleeve_stacks: vis_u32(table, "sleeve_stacks", what)?,
+        plate_at: vis_vec3(table, "plate_at", what)?,
+        plate_length: vis_f32(table, "plate_length", what)?,
+        plate_width: vis_f32(table, "plate_width", what)?,
+        plate_arch: vis_f32(table, "plate_arch", what)?,
+        plate_nu: vis_u32(table, "plate_nu", what)?,
+        plate_nv: vis_u32(table, "plate_nv", what)?,
+        hand_at: vis_vec3(table, "hand_at", what)?,
+        hand_radii: vis_vec3(table, "hand_radii", what)?,
+        hand_slices: vis_u32(table, "hand_slices", what)?,
+        hand_stacks: vis_u32(table, "hand_stacks", what)?,
+        finger_count: vis_u32(table, "finger_count", what)?,
+        finger_spread: vis_f32(table, "finger_spread", what)?,
+        finger_length: vis_f32(table, "finger_length", what)?,
+        finger_r0: vis_f32(table, "finger_r0", what)?,
+        finger_r1: vis_f32(table, "finger_r1", what)?,
+        finger_sides: vis_u32(table, "finger_sides", what)?,
+        finger_at: vis_vec3(table, "finger_at", what)?,
+        finger_pitch: vis_f32(table, "finger_pitch", what)?,
+        finger_yaw: vis_f32(table, "finger_yaw", what)?,
+        thumb_length: vis_f32(table, "thumb_length", what)?,
+        thumb_r0: vis_f32(table, "thumb_r0", what)?,
+        thumb_r1: vis_f32(table, "thumb_r1", what)?,
+        thumb_sides: vis_u32(table, "thumb_sides", what)?,
+        thumb_at: vis_vec3(table, "thumb_at", what)?,
+        thumb_pitch: vis_f32(table, "thumb_pitch", what)?,
+        thumb_yaw: vis_f32(table, "thumb_yaw", what)?,
+    };
+    let positive = glove.sleeve_radii.iter().all(|n| *n > 0.0)
+        && glove.hand_radii.iter().all(|n| *n > 0.0)
+        && glove.plate_length > 0.0
+        && glove.plate_width > 0.0
+        && glove.plate_arch > 0.0
+        && glove.finger_length > 0.0
+        && glove.finger_r0 > 0.0
+        && glove.finger_r1 > 0.0
+        && glove.thumb_length > 0.0
+        && glove.thumb_r0 > 0.0
+        && glove.thumb_r1 > 0.0
+        && glove.finger_spread > 0.0;
+    if !positive
+        || glove.sleeve_slices < 3
+        || glove.sleeve_stacks < 2
+        || glove.hand_slices < 3
+        || glove.hand_stacks < 2
+        || glove.plate_nu < 1
+        || glove.plate_nv < 1
+        || glove.finger_count < 1
+        || glove.finger_sides < 3
+        || glove.thumb_sides < 3
+    {
+        return Err("heroes_visual.toml glove sizes and tessellation are out of range".into());
+    }
+    Ok(glove)
+}
+
+fn load_arena_dressing(text: &str) -> Result<ArenaDressing, String> {
+    let root: toml::Value = toml::from_str(text).map_err(|err| format!("arena_visual.toml: {err}"))?;
+    let table = root.as_table().ok_or_else(|| "arena_visual.toml is not a table".to_string())?;
+    expect_keys(
+        table,
+        &[
+            "deck_sides",
+            "rail_posts",
+            "rail_thickness",
+            "rail_height",
+            "ramp_gap_dot",
+            "review_stand_gap",
+            "review_distance",
+            "review_look_height",
+            "review_ground_y",
+            "rail_still_angle_deg",
+            "rail_still_back",
+            "rail_still_up",
+            "rail_still_side",
+            "rail_still_fov",
+            "rail_still_inset",
+        ],
+        "arena_visual.toml",
+    )?;
+    let what = "arena_visual.toml";
+    let dress = ArenaDressing {
+        deck_sides: vis_u32(table, "deck_sides", what)?,
+        rail_posts: vis_u32(table, "rail_posts", what)?,
+        rail_thickness: vis_f32(table, "rail_thickness", what)?,
+        rail_height: vis_f32(table, "rail_height", what)?,
+        ramp_gap_dot: vis_f32(table, "ramp_gap_dot", what)?,
+        review_stand_gap: vis_f32(table, "review_stand_gap", what)?,
+        review_distance: vis_f32(table, "review_distance", what)?,
+        review_look_height: vis_f32(table, "review_look_height", what)?,
+        review_ground_y: vis_f32(table, "review_ground_y", what)?,
+        rail_still_angle_deg: vis_f32(table, "rail_still_angle_deg", what)?,
+        rail_still_back: vis_f32(table, "rail_still_back", what)?,
+        rail_still_up: vis_f32(table, "rail_still_up", what)?,
+        rail_still_side: vis_f32(table, "rail_still_side", what)?,
+        rail_still_fov: vis_f32(table, "rail_still_fov", what)?,
+        rail_still_inset: vis_f32(table, "rail_still_inset", what)?,
+    };
+    if dress.deck_sides < 8 || dress.rail_posts < 8 {
+        return Err("arena_visual.toml deck_sides and rail_posts must be >= 8".into());
+    }
+    if !(dress.rail_thickness > 0.0 && dress.rail_thickness <= 1.0) {
+        return Err("arena_visual.toml rail_thickness must be in (0, 1]".into());
+    }
+    // Knee or below. The 0.6 collision band stays in arena_01.toml.
+    if !(dress.rail_height > 0.0 && dress.rail_height <= 0.5) {
+        return Err("arena_visual.toml rail_height must be in (0, 0.5]".into());
+    }
+    if !(dress.ramp_gap_dot > 0.0 && dress.ramp_gap_dot < 1.0) {
+        return Err("arena_visual.toml ramp_gap_dot must be in (0, 1)".into());
+    }
+    if !(dress.review_stand_gap > 0.0) {
+        return Err("arena_visual.toml review_stand_gap must be > 0".into());
+    }
+    if !(dress.review_distance > 0.0) {
+        return Err("arena_visual.toml review_distance must be > 0".into());
+    }
+    if !(dress.review_look_height > 0.0 && dress.review_look_height < 1.0) {
+        return Err("arena_visual.toml review_look_height must be in (0, 1)".into());
+    }
+    if !(dress.review_ground_y.is_finite() && dress.review_ground_y.abs() < 1.0) {
+        return Err("arena_visual.toml review_ground_y must be a small offset".into());
+    }
+    if !(dress.rail_still_fov > 1.0 && dress.rail_still_fov < 170.0) {
+        return Err("arena_visual.toml rail_still_fov must be between 1 and 170".into());
+    }
+    if !(dress.rail_still_inset > 0.0) {
+        return Err("arena_visual.toml rail_still_inset must be > 0".into());
+    }
+    Ok(dress)
+}
+
+fn vis_str<'a>(table: &'a toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<&'a str, String> {
+    table.get(key).and_then(|v| v.as_str()).ok_or_else(|| format!("{what} is missing {key}"))
+}
+
+fn vis_f32(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<f32, String> {
+    let value = table.get(key).ok_or_else(|| format!("{what} is missing {key}"))?;
+    let n = if let Some(n) = value.as_float() {
+        n as f32
+    } else if let Some(n) = value.as_integer() {
+        n as f32
+    } else {
+        return Err(format!("{what} {key} must be a number"));
+    };
+    if !n.is_finite() {
+        return Err(format!("{what} {key} is not finite"));
+    }
+    Ok(n)
+}
+
+fn vis_u32(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<u32, String> {
+    let n = table
+        .get(key)
+        .and_then(|v| v.as_integer())
+        .ok_or_else(|| format!("{what} {key} must be an integer"))?;
+    if n < 0 {
+        return Err(format!("{what} {key} must be >= 0"));
+    }
+    Ok(n as u32)
+}
+
+fn vis_bool(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<bool, String> {
+    table
+        .get(key)
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| format!("{what} {key} must be a bool"))
+}
+
+fn vis_vec3(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<[f32; 3], String> {
+    let arr = table
+        .get(key)
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| format!("{what} {key} must be 3 numbers"))?;
+    if arr.len() != 3 {
+        return Err(format!("{what} {key} must be 3 numbers"));
+    }
+    let mut out = [0.0; 3];
+    for (i, slot) in arr.iter().enumerate() {
+        if let Some(n) = slot.as_float() {
+            out[i] = n as f32;
+        } else if let Some(n) = slot.as_integer() {
+            out[i] = n as f32;
+        } else {
+            return Err(format!("{what} {key} must be 3 numbers"));
+        }
+        if !out[i].is_finite() {
+            return Err(format!("{what} {key} is not finite"));
+        }
+    }
+    Ok(out)
 }
 
 fn load_cosmetics(text: &str) -> Result<Cosmetics, String> {
@@ -2889,6 +3385,7 @@ pub struct PaletteKeys {
     pub hero_nyra: String,
     pub hero_brakk: String,
     pub hero_kip: String,
+    pub hero_plate: String,
     pub portrait_field: String,
     pub arena_sky: String,
 }
@@ -2913,6 +3410,7 @@ impl Palette {
             "hero_nyra" => self.keys.hero_nyra.as_str(),
             "hero_brakk" => self.keys.hero_brakk.as_str(),
             "hero_kip" => self.keys.hero_kip.as_str(),
+            "hero_plate" => self.keys.hero_plate.as_str(),
             "portrait_field" => self.keys.portrait_field.as_str(),
             "arena_sky" => self.keys.arena_sky.as_str(),
             "hero_teal" | "teal" => self.hero.teal.as_str(),
@@ -3478,6 +3976,8 @@ pub struct UiLayout {
     pub portrait_fraction: f32,
     /// Locked portrait glow mixes this far from grayscale back toward the accent.
     pub locked_accent_mix: f32,
+    /// Non-accent portrait pixels desaturate this far on a locked card. 1 is fully gray.
+    pub locked_body_desaturation: f32,
     pub card_pad: f32,
     pub pause_keep: f32,
     pub pause_panel_width: f32,
@@ -3679,6 +4179,9 @@ fn validate_ui(
     }
     if !(layout.locked_accent_mix > 0.0 && layout.locked_accent_mix < 1.0) {
         return Err("ui.toml layout.locked_accent_mix must be in (0, 1)".into());
+    }
+    if !(layout.locked_body_desaturation >= 0.0 && layout.locked_body_desaturation <= 1.0) {
+        return Err("ui.toml layout.locked_body_desaturation must be in [0, 1]".into());
     }
     check_range("sensitivity", settings.sensitivity, settings.sensitivity_min, settings.sensitivity_max, settings.sensitivity_step)?;
     check_range("fov", settings.fov, settings.fov_min, settings.fov_max, settings.fov_step)?;
