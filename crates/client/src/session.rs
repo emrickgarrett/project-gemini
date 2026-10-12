@@ -34,6 +34,9 @@ pub struct Game {
     pub difficulty: String,
     pub token: u64,
     pub seat: usize,
+    /// Upgrade pick waiting for a sim tick. Number keys are `just_pressed` for one
+    /// frame, and a frame faster than the 30 Hz tick used to drop them.
+    pub pending_pick: Option<u8>,
 }
 
 #[derive(Resource, Clone)]
@@ -167,6 +170,7 @@ pub fn boot(
         difficulty: pending.0.clone(),
         token,
         seat: 0,
+        pending_pick: None,
     });
     commands.insert_resource(link);
     commands.insert_resource(FrameFx::default());
@@ -222,13 +226,13 @@ pub fn gather_and_step(
     hold: Res<PauseMenu>,
     prefs: Res<Prefs>,
 ) {
-    // The pause menu owns the cursor. A click on a menu button must not grab it again.
-    // Wasm waits for the click-to-play control so the browser can grant the lock.
-    if !hold.open && !cfg!(target_arch = "wasm32") && mouse_buttons.just_pressed(MouseButton::Left) {
-        if let Ok(mut cursor) = cursor.single_mut() {
-            cursor.grab_mode = CursorGrabMode::Locked;
-            cursor.visible = false;
-        }
+    // The upgrade picker and the pause menu both need a visible cursor. A click
+    // outside those screens grabs it again. Wasm waits for click-to-play.
+    let picking = matches!(game.sim.phase, Phase::Upgrade { .. });
+    if picking || hold.open {
+        set_cursor(&mut cursor, true);
+    } else if !cfg!(target_arch = "wasm32") && mouse_buttons.just_pressed(MouseButton::Left) {
+        set_cursor(&mut cursor, false);
     }
     #[cfg(not(target_arch = "wasm32"))]
     if keys.just_pressed(KeyCode::F10) {
@@ -297,16 +301,16 @@ pub fn gather_and_step(
         interact |= pad.pressed(GamepadButton::East);
     }
 
-    let mut choice = None;
-    if matches!(game.sim.phase, Phase::Upgrade { .. }) {
-        if keys.just_pressed(KeyCode::Digit1) {
-            choice = Some(0);
-        } else if keys.just_pressed(KeyCode::Digit2) {
-            choice = Some(1);
-        } else if keys.just_pressed(KeyCode::Digit3) {
-            choice = Some(2);
-        }
+    let option_count = match &game.sim.phase {
+        Phase::Upgrade { options } => options.len(),
+        _ => 0,
+    };
+    if option_count == 0 {
+        game.pending_pick = None;
+    } else if let Some(index) = upgrade_index(&keys, option_count) {
+        game.pending_pick = Some(index);
     }
+    let mut choice = if option_count > 0 { game.pending_pick } else { None };
     if hold.open {
         crouch = false;
         move_x = 0.0;
@@ -322,6 +326,7 @@ pub fn gather_and_step(
         ability = false;
         interact = false;
         choice = None;
+        game.pending_pick = None;
     }
 
     let mut input = PlayerInput {
@@ -403,6 +408,7 @@ pub fn gather_and_step(
     clock.acc += dt;
     let max_steps = game.content.controller.sim.max_sim_steps_per_frame;
     let mut steps = 0u32;
+    let sent = input.upgrade_choice;
     fx.sounds.clear();
     fx.stops.clear();
     fx.pings.clear();
@@ -490,6 +496,13 @@ pub fn gather_and_step(
     if steps == max_steps && clock.acc >= SIM_DT {
         clock.acc %= SIM_DT;
     }
+    if steps > 0 && sent.is_some() {
+        game.pending_pick = None;
+    }
+    let still_picking = matches!(game.sim.phase, Phase::Upgrade { .. });
+    if picking && !still_picking && !hold.open {
+        set_cursor(&mut cursor, false);
+    }
     fx.tick = game.sim.tick;
     if using_pad {
         let aim = game.local().map(|player| (player.yaw, player.pitch));
@@ -529,6 +542,39 @@ fn watch_act_now(act: &mut ActNow, game: &Game, interact: bool, before: &[act_no
 
 fn axis(pos: bool, neg: bool) -> f32 {
     (pos as i32 - neg as i32) as f32
+}
+
+fn set_cursor(cursor: &mut Query<&mut CursorOptions>, show: bool) {
+    let Ok(mut cursor) = cursor.single_mut() else { return };
+    if show || cfg!(target_arch = "wasm32") {
+        cursor.grab_mode = CursorGrabMode::None;
+        cursor.visible = true;
+    } else {
+        cursor.grab_mode = CursorGrabMode::Locked;
+        cursor.visible = false;
+    }
+}
+
+/// Digit row and numpad, 1 through N. Zero is not a card.
+pub(crate) fn upgrade_index(keys: &ButtonInput<KeyCode>, count: usize) -> Option<u8> {
+    const KEYS: [(KeyCode, KeyCode); 9] = [
+        (KeyCode::Digit1, KeyCode::Numpad1),
+        (KeyCode::Digit2, KeyCode::Numpad2),
+        (KeyCode::Digit3, KeyCode::Numpad3),
+        (KeyCode::Digit4, KeyCode::Numpad4),
+        (KeyCode::Digit5, KeyCode::Numpad5),
+        (KeyCode::Digit6, KeyCode::Numpad6),
+        (KeyCode::Digit7, KeyCode::Numpad7),
+        (KeyCode::Digit8, KeyCode::Numpad8),
+        (KeyCode::Digit9, KeyCode::Numpad9),
+    ];
+    let count = count.min(KEYS.len());
+    for (index, (digit, numpad)) in KEYS.iter().take(count).enumerate() {
+        if keys.just_pressed(*digit) || keys.just_pressed(*numpad) {
+            return Some(index as u8);
+        }
+    }
+    None
 }
 
 #[cfg(not(target_arch = "wasm32"))]

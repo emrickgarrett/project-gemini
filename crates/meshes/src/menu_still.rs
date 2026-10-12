@@ -280,12 +280,18 @@ fn paint_settings(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize,
         ("toggle:invert", ui.copy.invert_y.as_str(), on_off(content, prefs.invert_y), if prefs.invert_y { 1.0 } else { 0.0 }),
     ];
     let mut hits = Vec::new();
+    let mut steppers = Vec::new();
     for (index, (id, label, value, fill)) in rows.iter().enumerate() {
-        let hit = slider_row(rgb, content, frame, y, label, value, *fill, index == focus, hero);
-        y = hit.y + hit.h + frame.px(ui.layout.spacing_block);
-        hits.push(Hit { id: (*id).into(), ..hit });
+        let mut parts = slider_row(rgb, content, frame, y, label, value, *fill, index == focus, hero, id.starts_with("slider:"));
+        let main = parts.remove(0);
+        y = main.y + main.h + frame.px(ui.layout.spacing_block);
+        hits.push(Hit { id: (*id).into(), ..main });
+        for (suffix, part) in [":-", ":+"].into_iter().zip(parts) {
+            steppers.push(Hit { id: format!("{id}{suffix}"), ..part });
+        }
     }
     hits.push(Hit { id: "back".into(), ..button(rgb, content, frame, y, &ui.copy.back, focus == hits.len(), hero) });
+    hits.extend(steppers);
     if notice {
         let glyph = content.crate_reveal.layout.title_glyph_px;
         let scale = frame.text(ui.layout.hint_scale);
@@ -446,7 +452,18 @@ fn two_line(rgb: &mut [u8], content: &Content, frame: Frame, y: i32, title: &str
     hit
 }
 
-fn slider_row(rgb: &mut [u8], content: &Content, frame: Frame, y: i32, label: &str, value: &str, fill: f32, focused: bool, hero: Option<&str>) -> Hit {
+fn slider_row(
+    rgb: &mut [u8],
+    content: &Content,
+    frame: Frame,
+    y: i32,
+    label: &str,
+    value: &str,
+    fill: f32,
+    focused: bool,
+    hero: Option<&str>,
+    steppers: bool,
+) -> Vec<Hit> {
     let ui = &content.ui;
     let w = frame.px(ui.layout.button_width);
     let h = frame.px(ui.layout.settings_row_height);
@@ -454,28 +471,76 @@ fn slider_row(rgb: &mut [u8], content: &Content, frame: Frame, y: i32, label: &s
     let border = if focused { accent(content, hero) } else { palette(content, &ui.colors.dim) };
     rect(rgb, frame.width, frame.height, x, y, w, h, border);
     let inset = frame.px(ui.layout.border_px).max(ui.layout.inset_min.round() as i32);
-    rect(rgb, frame.width, frame.height, x + inset, y + inset, w - inset * 2, h - inset * 2, palette(content, &ui.colors.panel));
+    let panel = palette(content, &ui.colors.panel);
+    rect(rgb, frame.width, frame.height, x + inset, y + inset, w - inset * 2, h - inset * 2, panel);
     let glyph = content.crate_reveal.layout.title_glyph_px;
+    let scale = frame.text(ui.layout.hint_scale);
+    let ink = palette(content, &ui.colors.text);
     let text = format!("{label} {value}");
-    blit(
-        rgb,
-        frame.width,
-        frame.height,
-        x + frame.px(ui.layout.inset_x),
-        y + frame.px(ui.layout.inset_y),
-        &text,
-        palette(content, &ui.colors.text),
-        frame.text(ui.layout.hint_scale),
-        glyph,
-    );
-    let bar_w = frame.px(ui.layout.slider_width);
+    if !steppers {
+        blit(rgb, frame.width, frame.height, x + frame.px(ui.layout.inset_x), y + frame.px(ui.layout.inset_y), &text, ink, scale, glyph);
+        let bar_w = frame.px(ui.layout.slider_width);
+        let bar_h = frame.px(ui.layout.slider_height).max(1);
+        let bx = x + (w - bar_w) / 2;
+        let by = y + h - bar_h - frame.px(ui.layout.inset_bar);
+        paint_bar(rgb, frame, content, hero, bx, by, bar_w, bar_h, fill);
+        return vec![Hit { id: String::new(), x, y, w, h }];
+    }
+    let mut side = h - inset * 2;
+    if side < 8 {
+        side = 8;
+    }
+    if side > w / 5 {
+        side = w / 5;
+    }
+    let top = y + (h - side) / 2;
+    let minus_x = x + inset;
+    let plus_x = x + w - inset - side;
+    let dim = palette(content, &ui.colors.dim);
+    paint_stepper(rgb, frame, content, minus_x, top, side, "-", dim, panel, ink, glyph, scale);
+    paint_stepper(rgb, frame, content, plus_x, top, side, "+", dim, panel, ink, glyph, scale);
+    let gap = frame.px(ui.layout.inset_x).max(2);
+    let text_x = minus_x + side + gap;
+    blit(rgb, frame.width, frame.height, text_x, y + frame.px(ui.layout.inset_y), &text, ink, scale, glyph);
     let bar_h = frame.px(ui.layout.slider_height).max(1);
-    let bx = x + (w - bar_w) / 2;
+    let bar_x = text_x;
+    let bar_w = (plus_x - gap - bar_x).max(1);
     let by = y + h - bar_h - frame.px(ui.layout.inset_bar);
-    rect(rgb, frame.width, frame.height, bx, by, bar_w, bar_h, palette(content, &ui.colors.dim));
-    let fw = ((bar_w as f32) * fill.clamp(0.0, 1.0)).round() as i32;
-    rect(rgb, frame.width, frame.height, bx, by, fw.max(0), bar_h, accent(content, hero));
-    Hit { id: String::new(), x, y, w, h }
+    paint_bar(rgb, frame, content, hero, bar_x, by, bar_w, bar_h, fill);
+    vec![
+        Hit { id: String::new(), x: minus_x + side, y, w: (plus_x - (minus_x + side)).max(1), h },
+        Hit { id: String::new(), x: minus_x, y: top, w: side, h: side },
+        Hit { id: String::new(), x: plus_x, y: top, w: side, h: side },
+    ]
+}
+
+fn paint_bar(rgb: &mut [u8], frame: Frame, content: &Content, hero: Option<&str>, x: i32, y: i32, w: i32, h: i32, fill: f32) {
+    rect(rgb, frame.width, frame.height, x, y, w, h, palette(content, &content.ui.colors.dim));
+    let fw = ((w as f32) * fill.clamp(0.0, 1.0)).round() as i32;
+    rect(rgb, frame.width, frame.height, x, y, fw.max(0), h, accent(content, hero));
+}
+
+fn paint_stepper(
+    rgb: &mut [u8],
+    frame: Frame,
+    content: &Content,
+    x: i32,
+    y: i32,
+    side: i32,
+    label: &str,
+    border: [u8; 3],
+    fill: [u8; 3],
+    ink: [u8; 3],
+    glyph: u32,
+    scale: u32,
+) {
+    rect(rgb, frame.width, frame.height, x, y, side, side, border);
+    let inner = (side / 8).max(1);
+    rect(rgb, frame.width, frame.height, x + inner, y + inner, side - inner * 2, side - inner * 2, fill);
+    let rows = content.crate_reveal.layout.glyph_rows;
+    let tw = measure(label, scale, glyph) as i32;
+    let th = (rows * scale) as i32;
+    blit(rgb, frame.width, frame.height, x + (side - tw) / 2, y + (side - th) / 2, label, ink, scale, glyph);
 }
 
 fn draw_wrapped(rgb: &mut [u8], content: &Content, frame: Frame, text: &str, x: i32, mut y: i32, inner: u32, scale: u32, color: [u8; 3]) -> i32 {
@@ -903,6 +968,40 @@ mod tests {
             assert!(glow > 8, "{id} keeps a mixed accent glow");
             assert_eq!(colored, 0, "{id} locked portrait is grayscale aside from the accent mix");
         }
+    }
+
+    #[test]
+    fn settings_rows_have_minus_and_plus_buttons() {
+        let content = Content::embedded();
+        let prefs = PaintPrefs::defaults(&content);
+        let (rgb, hits) = paint_menu(
+            &content,
+            &MenuShot::Settings { focus: 0, hero_id: String::new(), prefs, notice: false },
+            1280,
+            720,
+        );
+        let row = hits.iter().find(|hit| hit.id == "slider:sensitivity").unwrap();
+        let dec = hits.iter().find(|hit| hit.id == "slider:sensitivity:-").unwrap();
+        let inc = hits.iter().find(|hit| hit.id == "slider:sensitivity:+").unwrap();
+        assert!(dec.w > 8 && dec.h > 8 && inc.w > 8 && inc.h > 8);
+        assert!(dec.x + dec.w <= row.x, "minus overlaps the value");
+        assert!(inc.x >= row.x + row.w, "plus overlaps the value");
+        let ink = bytes(&content, &content.ui.colors.text);
+        assert!(hit_has_ink(&rgb, 1280, dec, ink), "minus glyph is not drawn");
+        assert!(hit_has_ink(&rgb, 1280, inc, ink), "plus glyph is not drawn");
+        assert!(hits.iter().any(|hit| hit.id == "slider:fov:-"));
+        assert!(!hits.iter().any(|hit| hit.id == "toggle:bob:-"), "toggles are not sliders");
+    }
+
+    fn hit_has_ink(rgb: &[u8], width: u32, hit: &Hit, ink: [u8; 3]) -> bool {
+        for y in hit.y..hit.y + hit.h {
+            for x in hit.x..hit.x + hit.w {
+                if sample(rgb, width, x, y) == ink {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     #[test]
