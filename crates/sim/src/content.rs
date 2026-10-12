@@ -132,6 +132,7 @@ impl Content {
         let audio = crate::audio_mix::load_mix(src.audio).map_err(|err| format!("audio_mix.toml: {err}"))?;
         let coop = load_coop(src.coop).map_err(|err| format!("coop.toml: {err}"))?;
         validate_host_away_cues(&audio, &coop)?;
+        validate_act_now_cues(&audio)?;
         let crate_reveal: CrateReveal = parse("crate_reveal.toml", src.crate_reveal)?;
         validate_reveal_cues(&crate_reveal, &audio)?;
         validate_reveal_layout(&crate_reveal)?;
@@ -415,6 +416,22 @@ fn reveal_cue_file<'a>(audio: &'a AudioTable, id: &str) -> Result<&'a str, Strin
         return Ok(sfx.path.as_str());
     }
     Err(format!("reveal cue {id} does not resolve to a mix row with volume_db"))
+}
+
+fn validate_act_now_cues(audio: &AudioTable) -> Result<(), String> {
+    let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+    let check_files = assets.is_dir();
+    for id in ["revive_start", "low_hp_warn", "ammo_low_warn", "ability_ready"] {
+        let row = audio
+            .sfx
+            .iter()
+            .find(|row| row.id == id)
+            .ok_or_else(|| format!("audio_mix.toml is missing {id}"))?;
+        if check_files && !assets.join(&row.path).is_file() {
+            return Err(format!("{id} file {} is missing", row.path));
+        }
+    }
+    Ok(())
 }
 
 fn validate_host_away_cues(audio: &AudioTable, coop: &CoopRules) -> Result<(), String> {

@@ -512,9 +512,7 @@ fn steps_sim(link: &CoopLink) -> bool {
 }
 
 fn watch_act_now(act: &mut ActNow, game: &Game, interact: bool, before: &[act_now::Seat], elapsed: f32) {
-    let Some(ability) = game.content.ability_of(&game.content.hero.id) else {
-        return;
-    };
+    let ability = game.content.ability_of(&game.content.hero.id).expect("combat hero has no ability row");
     act_now::note(
         act,
         game.content.warnings,

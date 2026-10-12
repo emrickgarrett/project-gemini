@@ -355,6 +355,11 @@ pub fn flush_ui_cues(
         return;
     }
     let content = Content::embedded();
+    for id in &asked {
+        if content.sfx(id).is_none() {
+            panic!("flush_ui_cues: unknown id {id}");
+        }
+    }
     let live: Vec<(Entity, Heard)> = live
         .iter()
         .map(|(entity, shot)| {
@@ -376,7 +381,7 @@ pub fn flush_ui_cues(
         }
     }
     for id in admitted.play {
-        let Some(def) = content.sfx(&id) else { continue };
+        let def = content.sfx(&id).unwrap_or_else(|| panic!("flush_ui_cues: unknown id {id}"));
         commands.spawn((
             AudioPlayer::new(assets.load::<AudioSource>(def.path.clone())),
             PlaybackSettings::DESPAWN.with_volume(Volume::Linear(def.volume * bus_gain(&prefs, false))),

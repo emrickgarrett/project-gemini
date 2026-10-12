@@ -2924,6 +2924,23 @@ fn warnings_and_infinite_magazine_fail_closed() {
     let repeat = base.hero.replacen("low_hp_repeat_s = 1.2", "low_hp_repeat_s = 0", 1);
     let err = load(&repeat).expect_err("repeat");
     assert!(err.contains("low_hp_repeat_s"), "{err}");
+
+    for id in ["revive_start", "low_hp_warn", "ammo_low_warn", "ability_ready"] {
+        assert!(content.sfx(id).is_some(), "{id}");
+        let header = format!("[{id}]\n");
+        let start = base.audio.find(&header).unwrap_or_else(|| panic!("{id} row"));
+        let rest = &base.audio[start + header.len()..];
+        let end = rest.find("\n[").map(|index| start + header.len() + index + 1).unwrap_or(base.audio.len());
+        let audio = format!("{}{}", &base.audio[..start], &base.audio[end..]);
+        assert_ne!(audio, base.audio, "{id}");
+        let err = Content::parse(&gemini_sim::content::Sources {
+            audio: &audio,
+            ..sources_with(&base, base.coop)
+        })
+        .expect_err(id);
+        assert!(err.contains(id), "{err}");
+        assert!(err.contains("missing"), "{err}");
+    }
 }
 
 fn sources_ranks<'a>(
