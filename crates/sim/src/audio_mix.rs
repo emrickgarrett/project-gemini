@@ -170,10 +170,14 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
             .and_then(|v| v.as_str())
             .ok_or_else(|| format!("{key} is missing category"))?;
         let mut stealable = match row.get("stealable") {
+            None => return Err(format!("{key} is missing stealable")),
             Some(value) => value
                 .as_bool()
                 .ok_or_else(|| format!("{key} stealable is not a bool"))?,
-            None => true,
+        };
+        let flat = match row.get("flat") {
+            None => return Err(format!("{key} is missing flat")),
+            Some(value) => value.as_bool().ok_or_else(|| format!("{key} flat is not a bool"))?,
         };
         let is_warning = match row.get("is_warning") {
             Some(value) => value
@@ -209,6 +213,7 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
                 category_ui: category == "ui",
                 stealable,
                 is_warning,
+                flat,
             },
         );
     }
@@ -308,7 +313,40 @@ category = "ui"
 is_warning = true
 "#;
         let err = load_mix(text).expect_err("warning defaults to stealable");
+        assert!(err.contains("beep"), "{err}");
         assert!(err.contains("stealable"), "{err}");
+    }
+
+    #[test]
+    fn a_row_missing_stealable_names_itself() {
+        let text = include_str!("../../../content/audio_mix.toml").replacen("stealable = true\n", "", 1);
+        let err = load_mix(&text).expect_err("missing stealable");
+        assert!(err.contains("acid_impact"), "{err}");
+        assert!(err.contains("missing stealable"), "{err}");
+    }
+
+    #[test]
+    fn act_now_rows_are_flat_player_warnings() {
+        let audio = load_mix(include_str!("../../../content/audio_mix.toml")).expect("audio mix");
+        let rows = [
+            ("revive_start", -4.0, 2u32),
+            ("low_hp_warn", -5.0, 1),
+            ("ammo_low_warn", -8.0, 1),
+            ("ability_ready", -3.0, 1),
+        ];
+        for (id, db, cap) in rows {
+            let row = audio.sfx.iter().find(|row| row.id == id).unwrap_or_else(|| panic!("missing {id}"));
+            assert!((row.volume - super::db_to_linear(db)).abs() < 1e-4, "{id}");
+            assert_eq!(row.max_instances, cap, "{id}");
+            assert!(row.is_warning, "{id}");
+            assert!(!row.stealable, "{id}");
+            assert!(row.flat, "{id}");
+            assert!(!row.category_ui, "{id}");
+            assert!(!row.looped, "{id}");
+            assert!(row.pitch_semitones.abs() < 1e-6, "{id}");
+        }
+        let alias = include_str!("../../../content/audio_mix.toml");
+        assert!(alias.contains("hit = \"acid_impact\""));
     }
 }
 

@@ -257,7 +257,7 @@ pub fn play(
             speed = min + (max - min) * t;
             shot_i += 1;
         }
-        let atten = attenuate(&game.content, voice.pos, listener);
+        let atten = if def.flat { 1.0 } else { attenuate(&game.content, voice.pos, listener) };
         let volume = def.volume * atten * bus_gain(&prefs, false);
         let looping = def.looped;
         let settings = if looping {
@@ -327,7 +327,7 @@ pub fn bus_gain(prefs: &Prefs, music: bool) -> f32 {
 }
 
 #[derive(Component)]
-pub(crate) struct UiRequest(String);
+pub(crate) struct UiRequest(pub(crate) String);
 
 /// Queues a UI cue. `flush_ui_cues` runs it through the shared voice picker.
 pub fn ui_cue(commands: &mut Commands, _assets: &AssetServer, content: &Content, _prefs: &Prefs, id: &str) {
@@ -355,6 +355,11 @@ pub fn flush_ui_cues(
         return;
     }
     let content = Content::embedded();
+    for id in &asked {
+        if content.sfx(id).is_none() {
+            panic!("flush_ui_cues: unknown id {id}");
+        }
+    }
     let live: Vec<(Entity, Heard)> = live
         .iter()
         .map(|(entity, shot)| {
@@ -376,7 +381,7 @@ pub fn flush_ui_cues(
         }
     }
     for id in admitted.play {
-        let Some(def) = content.sfx(&id) else { continue };
+        let def = content.sfx(&id).unwrap_or_else(|| panic!("flush_ui_cues: unknown id {id}"));
         commands.spawn((
             AudioPlayer::new(assets.load::<AudioSource>(def.path.clone())),
             PlaybackSettings::DESPAWN.with_volume(Volume::Linear(def.volume * bus_gain(&prefs, false))),

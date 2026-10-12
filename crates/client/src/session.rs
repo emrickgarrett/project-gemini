@@ -18,6 +18,7 @@ use gemini_sim::host_away::{on_host_visibility_changed, AwayPhase, HostAwayClock
 use gemini_sim::math::Vec3 as SimVec3;
 use gemini_sim::sim::{countdown_aim, HitPing, MusicMoment, Phase, PlayerInput, Sim, SoundStop, SIM_DT};
 
+use crate::act_now::{self, ActNow};
 use crate::settings::Prefs;
 use crate::AppState;
 
@@ -174,6 +175,7 @@ pub fn boot(
         view: away_view,
     });
     commands.insert_resource(Page::default());
+    commands.insert_resource(ActNow::default());
 }
 
 fn open_link(launch: &Launch, content: &Content, sim: Sim) -> (Sim, u64, CoopLink) {
@@ -210,6 +212,7 @@ pub fn gather_and_step(
     mut fx: ResMut<FrameFx>,
     mut away: ResMut<Away>,
     mut page: ResMut<Page>,
+    mut act: ResMut<ActNow>,
     #[cfg(not(target_arch = "wasm32"))] mut occluded: MessageReader<WindowOccluded>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
@@ -447,14 +450,25 @@ pub fn gather_and_step(
         #[cfg(not(target_arch = "wasm32"))]
         if away.clock.phase() == AwayPhase::Live {
             if let CoopLink::Client(client) = &mut *link {
+                let before = act_now::seats(&game.sim);
+                let started = game.sim.time;
                 client.apply(&mut game);
+                let elapsed = game.sim.time - started;
+                watch_act_now(&mut act, &game, interact, &before, elapsed);
             }
         }
         // Sim::new emits wave_start before the first tick. step() clears sounds on entry,
         // so keep that cue or the match-start sting never plays.
         fx.sounds.append(&mut game.sim.sounds);
         while clock.acc >= SIM_DT && steps < max_steps {
+            let before = act_now::seats(&game.sim);
+            let started = game.sim.time;
+            let stepping = steps_sim(&link);
             drive(&mut game, &mut link, input);
+            if stepping {
+                let elapsed = game.sim.time - started;
+                watch_act_now(&mut act, &game, interact, &before, elapsed);
+            }
             fx.sounds.append(&mut game.sim.sounds);
             fx.stops.append(&mut game.sim.stops);
             fx.pings.append(&mut game.sim.pings);
@@ -485,6 +499,32 @@ pub fn gather_and_step(
         }
     }
     game.dip = (game.dip - time.delta_secs() * 6.0).max(0.0);
+}
+
+fn steps_sim(link: &CoopLink) -> bool {
+    match link {
+        CoopLink::Solo => true,
+        #[cfg(not(target_arch = "wasm32"))]
+        CoopLink::Host(_) => true,
+        #[cfg(not(target_arch = "wasm32"))]
+        CoopLink::Client(_) => false,
+    }
+}
+
+fn watch_act_now(act: &mut ActNow, game: &Game, interact: bool, before: &[act_now::Seat], elapsed: f32) {
+    let ability = game.content.ability_of(&game.content.hero.id).expect("combat hero has no ability row");
+    act_now::note(
+        act,
+        game.content.warnings,
+        ability,
+        game.content.combat.revive_range,
+        game.token,
+        interact,
+        before,
+        &act_now::seats(&game.sim),
+        game.sim.time,
+        elapsed,
+    );
 }
 
 fn axis(pos: bool, neg: bool) -> f32 {
@@ -609,4 +649,5 @@ pub fn shutdown(mut commands: Commands, mut clock: ResMut<SimClock>) {
     commands.remove_resource::<CoopLink>();
     commands.remove_resource::<Away>();
     commands.remove_resource::<Page>();
+    commands.remove_resource::<ActNow>();
 }

@@ -2883,6 +2883,66 @@ fn persistent_rank_comes_from_outside_and_the_cap_is_loaded() {
     assert_eq!(floor.duplicate_rank, 1);
 }
 
+#[test]
+fn warnings_and_infinite_magazine_fail_closed() {
+    let content = Content::embedded();
+    assert!((content.warnings.low_hp_fraction - 0.30).abs() < 1e-4);
+    assert!((content.warnings.low_hp_rearm_fraction - 0.40).abs() < 1e-4);
+    assert!((content.warnings.low_hp_repeat_s - 1.2).abs() < 1e-4);
+    assert!((content.warnings.ammo_low_fraction - 0.25).abs() < 1e-4);
+    let vex = content.ability_of("vex").unwrap();
+    assert!(vex.infinite_magazine);
+    assert!((vex.cooldown - content.hero.ability_cooldown).abs() < 1e-4);
+    for (id, cooldown) in [("nyra", 24.0), ("brakk", 18.0), ("kip", 16.0)] {
+        let row = content.ability_of(id).unwrap();
+        assert!(!row.infinite_magazine, "{id}");
+        assert!((row.cooldown - cooldown).abs() < 1e-4, "{id}");
+    }
+    let base = gemini_sim::content::embedded_sources();
+    let load = |hero: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            hero,
+            ..sources_with(&base, base.coop)
+        })
+    };
+    let missing = base.hero.replacen("infinite_magazine = false, ", "", 1);
+    let err = load(&missing).expect_err("nyra magazine");
+    assert!(err.contains("nyra"), "{err}");
+    assert!(err.contains("infinite_magazine"), "{err}");
+    let bad = base.hero.replacen("infinite_magazine = false", "infinite_magazine = \"no\"", 1);
+    let err = load(&bad).expect_err("magazine type");
+    assert!(err.contains("infinite_magazine"), "{err}");
+    let no_table = base.hero.replacen("[warnings]\n", "", 1);
+    let err = load(&no_table).expect_err("warnings");
+    assert!(err.contains("warnings"), "{err}");
+    let low = base.hero.replacen("low_hp_fraction = 0.30", "low_hp_fraction = 1", 1);
+    let err = load(&low).expect_err("fraction");
+    assert!(err.contains("low_hp_fraction"), "{err}");
+    let rearm = base.hero.replacen("low_hp_rearm_fraction = 0.40", "low_hp_rearm_fraction = 0.30", 1);
+    let err = load(&rearm).expect_err("rearm");
+    assert!(err.contains("low_hp_rearm_fraction"), "{err}");
+    let repeat = base.hero.replacen("low_hp_repeat_s = 1.2", "low_hp_repeat_s = 0", 1);
+    let err = load(&repeat).expect_err("repeat");
+    assert!(err.contains("low_hp_repeat_s"), "{err}");
+
+    for id in ["revive_start", "low_hp_warn", "ammo_low_warn", "ability_ready"] {
+        assert!(content.sfx(id).is_some(), "{id}");
+        let header = format!("[{id}]\n");
+        let start = base.audio.find(&header).unwrap_or_else(|| panic!("{id} row"));
+        let rest = &base.audio[start + header.len()..];
+        let end = rest.find("\n[").map(|index| start + header.len() + index + 1).unwrap_or(base.audio.len());
+        let audio = format!("{}{}", &base.audio[..start], &base.audio[end..]);
+        assert_ne!(audio, base.audio, "{id}");
+        let err = Content::parse(&gemini_sim::content::Sources {
+            audio: &audio,
+            ..sources_with(&base, base.coop)
+        })
+        .expect_err(id);
+        assert!(err.contains(id), "{err}");
+        assert!(err.contains("missing"), "{err}");
+    }
+}
+
 fn sources_ranks<'a>(
     base: &'a gemini_sim::content::Sources<'a>,
     duplicate_ranks: &'a str,

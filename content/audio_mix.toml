@@ -60,6 +60,8 @@ category = "ui_meta"
 # pitch_rand_semitones  +/- random pitch per play (0 = fixed; UI and timed telegraphs stay fixed).
 # max_instances        concurrent voices of this sound; extra plays steal the oldest (all count toward the global 32-voice cap).
 # loop                 true = seamless loop, play until stopped.
+# stealable            required on every row. Loading names a row that omits it.
+# flat                 required. true = not positioned in the world.
 # category / measured_rms_db are informational. Placeholder levels: tune by ear.
 
 [acid_impact]
@@ -68,6 +70,8 @@ pitch_rand_semitones = 0.5
 max_instances = 4
 loop = false
 category = "enemy"
+stealable = true
+flat = false
 measured_rms_db = -14.4
 
 [blaster_fire]
@@ -76,6 +80,8 @@ pitch_rand_semitones = 0.5
 max_instances = 6
 loop = false
 category = "weapon"
+stealable = true
+flat = false
 measured_rms_db = -8.1
 
 [blaster_fire_02]
@@ -84,6 +90,8 @@ pitch_rand_semitones = 0.5
 max_instances = 6
 loop = false
 category = "weapon"
+stealable = true
+flat = false
 measured_rms_db = -8.4
 
 [blaster_fire_03]
@@ -92,6 +100,8 @@ pitch_rand_semitones = 0.5
 max_instances = 6
 loop = false
 category = "weapon"
+stealable = true
+flat = false
 measured_rms_db = -8.3
 
 [blaster_reload]
@@ -100,6 +110,8 @@ pitch_rand_semitones = 0.5
 max_instances = 4
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -18.5
 
 [brood_death]
@@ -108,6 +120,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "boss_big"
+stealable = true
+flat = false
 measured_rms_db = -7.0
 
 [brood_drone_loop]
@@ -117,6 +131,7 @@ max_instances = 1
 loop = true
 category = "boss"
 stealable = false
+flat = false
 measured_rms_db = -11.1
 
 [brood_pod_charge]
@@ -127,6 +142,7 @@ loop = false
 category = "boss"
 stealable = false
 is_warning = true
+flat = false
 measured_rms_db = -12.1
 
 [brood_pod_fizzle]
@@ -135,6 +151,8 @@ pitch_rand_semitones = 0.3
 max_instances = 3
 loop = false
 category = "boss"
+stealable = true
+flat = false
 measured_rms_db = -14.7
 
 [brood_pod_hatch]
@@ -143,6 +161,8 @@ pitch_rand_semitones = 0.3
 max_instances = 3
 loop = false
 category = "boss"
+stealable = true
+flat = false
 measured_rms_db = -9.7
 
 [brood_roar]
@@ -153,6 +173,7 @@ loop = false
 category = "boss_big"
 stealable = false
 is_warning = true
+flat = false
 measured_rms_db = -10.4
 
 [brute_death]
@@ -161,6 +182,8 @@ pitch_rand_semitones = 0.5
 max_instances = 4
 loop = false
 category = "enemy"
+stealable = true
+flat = false
 measured_rms_db = -8.0
 
 [brute_grunt]
@@ -169,6 +192,8 @@ pitch_rand_semitones = 0.5
 max_instances = 4
 loop = false
 category = "enemy"
+stealable = true
+flat = false
 measured_rms_db = -11.1
 
 [brute_shell_crack]
@@ -177,6 +202,8 @@ pitch_rand_semitones = 0.5
 max_instances = 4
 loop = false
 category = "enemy"
+stealable = true
+flat = false
 measured_rms_db = -14.5
 
 [brute_shell_open]
@@ -185,6 +212,8 @@ pitch_rand_semitones = 0
 max_instances = 4
 loop = false
 category = "enemy"
+stealable = true
+flat = false
 measured_rms_db = -13.4
 
 [brute_step_01]
@@ -193,6 +222,8 @@ pitch_rand_semitones = 1
 max_instances = 4
 loop = false
 category = "step"
+stealable = true
+flat = false
 measured_rms_db = -6.5
 
 [brute_step_02]
@@ -201,6 +232,8 @@ pitch_rand_semitones = 1
 max_instances = 4
 loop = false
 category = "step"
+stealable = true
+flat = false
 measured_rms_db = -7.2
 
 [brute_step_03]
@@ -209,6 +242,8 @@ pitch_rand_semitones = 1
 max_instances = 4
 loop = false
 category = "step"
+stealable = true
+flat = false
 measured_rms_db = -7.3
 
 [crate_open]
@@ -217,6 +252,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -14.0
 
 [crate_tease]
@@ -225,6 +262,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -13.2
 
 [crate_fakeout]
@@ -233,6 +272,8 @@ pitch_rand_semitones = 0
 max_instances = 1
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -13.0
 
 [crate_tease_legendary]
@@ -241,6 +282,8 @@ pitch_rand_semitones = 0
 max_instances = 1
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -13.7
 
 [currency_gain]
@@ -249,6 +292,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -11.9
 
 [currency_tick]
@@ -257,6 +302,8 @@ pitch_rand_semitones = 0
 max_instances = 4
 loop = false
 category = "ui"
+stealable = true
+flat = false
 measured_rms_db = -17.7
 
 [dupe_upgrade]
@@ -265,6 +312,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -12.0
 
 [invite_received]
@@ -273,6 +322,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -12.0
 
 [jetpack_boost]
@@ -281,6 +332,8 @@ pitch_rand_semitones = 0.3
 max_instances = 2
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -9.1
 
 [jetpack_empty]
@@ -291,6 +344,7 @@ loop = false
 category = "player"
 stealable = false
 is_warning = true
+flat = false
 measured_rms_db = -16.6
 
 [jetpack_hover_loop]
@@ -300,6 +354,7 @@ max_instances = 1
 loop = true
 category = "player"
 stealable = false
+flat = false
 measured_rms_db = -15.9
 
 [pickup]
@@ -308,6 +363,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -11.1
 
 [player_downed]
@@ -318,6 +375,7 @@ loop = false
 category = "player_alert"
 stealable = false
 is_warning = true
+flat = false
 measured_rms_db = -5.1
 
 [player_hurt]
@@ -326,6 +384,8 @@ pitch_rand_semitones = 0.5
 max_instances = 2
 loop = false
 category = "player_alert"
+stealable = true
+flat = false
 measured_rms_db = -4.9
 
 [player_join]
@@ -334,6 +394,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -9.7
 
 [player_leave]
@@ -342,6 +404,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -9.1
 
 [reconnect]
@@ -350,6 +414,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -12.0
 
 [revive_complete]
@@ -358,6 +424,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -12.6
 
 [spitter_charge]
@@ -368,6 +436,7 @@ loop = false
 category = "enemy"
 stealable = false
 is_warning = true
+flat = false
 measured_rms_db = -11.8
 
 [spitter_death]
@@ -376,6 +445,8 @@ pitch_rand_semitones = 0.5
 max_instances = 4
 loop = false
 category = "enemy"
+stealable = true
+flat = false
 measured_rms_db = -12.2
 
 [spitter_sac_pop]
@@ -384,6 +455,8 @@ pitch_rand_semitones = 0.5
 max_instances = 4
 loop = false
 category = "enemy"
+stealable = true
+flat = false
 measured_rms_db = -16.8
 
 [spitter_spit]
@@ -392,6 +465,8 @@ pitch_rand_semitones = 0.5
 max_instances = 4
 loop = false
 category = "enemy"
+stealable = true
+flat = false
 measured_rms_db = -16.0
 
 [swarmer_click_01]
@@ -400,6 +475,8 @@ pitch_rand_semitones = 1
 max_instances = 8
 loop = false
 category = "swarm_click"
+stealable = true
+flat = false
 measured_rms_db = -22.6
 
 [swarmer_click_02]
@@ -408,6 +485,8 @@ pitch_rand_semitones = 1
 max_instances = 8
 loop = false
 category = "swarm_click"
+stealable = true
+flat = false
 measured_rms_db = -19.4
 
 [swarmer_click_03]
@@ -416,6 +495,8 @@ pitch_rand_semitones = 1
 max_instances = 8
 loop = false
 category = "swarm_click"
+stealable = true
+flat = false
 measured_rms_db = -19.6
 
 [swarmer_click_04]
@@ -424,6 +505,8 @@ pitch_rand_semitones = 1
 max_instances = 8
 loop = false
 category = "swarm_click"
+stealable = true
+flat = false
 measured_rms_db = -21.2
 
 [swarmer_crowd_loop]
@@ -433,6 +516,7 @@ max_instances = 1
 loop = true
 category = "swarm_bed"
 stealable = false
+flat = false
 measured_rms_db = -17.8
 
 [swarmer_death]
@@ -441,6 +525,8 @@ pitch_rand_semitones = 1
 max_instances = 8
 loop = false
 category = "swarm"
+stealable = true
+flat = false
 measured_rms_db = -13.3
 
 [tyrant_death]
@@ -449,6 +535,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "boss_big"
+stealable = true
+flat = false
 measured_rms_db = -8.4
 
 [tyrant_roar]
@@ -459,6 +547,7 @@ loop = false
 category = "boss_big"
 stealable = false
 is_warning = true
+flat = false
 measured_rms_db = -11.1
 
 [tyrant_scythe_swipe]
@@ -467,6 +556,8 @@ pitch_rand_semitones = 0.3
 max_instances = 3
 loop = false
 category = "boss"
+stealable = true
+flat = false
 measured_rms_db = -13.2
 
 [tyrant_tail_charge]
@@ -477,6 +568,7 @@ loop = false
 category = "boss"
 stealable = false
 is_warning = true
+flat = false
 measured_rms_db = -10.5
 
 [ui_click]
@@ -485,6 +577,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "ui"
+stealable = true
+flat = false
 measured_rms_db = -19.3
 
 # Menu flow. Rows merged from the UI sound drop. `loop` is required by the loader;
@@ -495,6 +589,8 @@ pitch_rand_semitones = 0.3
 max_instances = 2
 loop = false
 category = "ui"
+stealable = true
+flat = false
 
 [ui_confirm]
 volume_db = -10.0
@@ -502,6 +598,8 @@ pitch_rand_semitones = 0.0
 max_instances = 1
 loop = false
 category = "ui"
+stealable = true
+flat = false
 
 [ui_back]
 volume_db = -10.0
@@ -509,6 +607,8 @@ pitch_rand_semitones = 0.0
 max_instances = 1
 loop = false
 category = "ui"
+stealable = true
+flat = false
 
 [ui_error]
 volume_db = -10.0
@@ -516,6 +616,8 @@ pitch_rand_semitones = 0.0
 max_instances = 1
 loop = false
 category = "ui"
+stealable = true
+flat = false
 
 [ui_slider_tick]
 volume_db = -20.0
@@ -523,6 +625,8 @@ pitch_rand_semitones = 0.0
 max_instances = 3
 loop = false
 category = "ui"
+stealable = true
+flat = false
 
 [ui_toggle]
 volume_db = -14.0
@@ -530,6 +634,8 @@ pitch_rand_semitones = 0.0
 max_instances = 1
 loop = false
 category = "ui"
+stealable = true
+flat = false
 
 [pause_open]
 volume_db = -10.0
@@ -537,6 +643,8 @@ pitch_rand_semitones = 0.0
 max_instances = 1
 loop = false
 category = "ui"
+stealable = true
+flat = false
 
 [pause_close]
 volume_db = -10.0
@@ -544,6 +652,8 @@ pitch_rand_semitones = 0.0
 max_instances = 1
 loop = false
 category = "ui"
+stealable = true
+flat = false
 
 [match_start]
 volume_db = -6.0
@@ -551,6 +661,8 @@ pitch_rand_semitones = 0.0
 max_instances = 1
 loop = false
 category = "ui"
+stealable = true
+flat = false
 
 [results_victory]
 volume_db = -6.0
@@ -558,6 +670,8 @@ pitch_rand_semitones = 0.0
 max_instances = 1
 loop = false
 category = "ui"
+stealable = true
+flat = false
 
 [results_defeat]
 volume_db = -6.0
@@ -565,6 +679,8 @@ pitch_rand_semitones = 0.0
 max_instances = 1
 loop = false
 category = "ui"
+stealable = true
+flat = false
 
 [upgrade_pick]
 volume_db = -1.4
@@ -572,6 +688,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -11.6
 
 [wave_clear]
@@ -580,6 +698,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -12.5
 
 [wave_start]
@@ -588,6 +708,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -8.0
 
 [weakpoint_hit]
@@ -596,6 +718,8 @@ pitch_rand_semitones = 0.3
 max_instances = 4
 loop = false
 category = "feedback"
+stealable = true
+flat = false
 measured_rms_db = -17.0
 
 [vex_fire]
@@ -604,6 +728,8 @@ pitch_rand_semitones = 0.4
 max_instances = 6
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -10.4
 
 [vex_reload]
@@ -612,6 +738,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -24.3
 
 [vex_ability]
@@ -620,6 +748,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -7.1
 
 [vex_ability_end]
@@ -628,6 +758,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -9.8
 
 [nyra_fire]
@@ -636,6 +768,8 @@ pitch_rand_semitones = 0.4
 max_instances = 6
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -10.9
 
 [nyra_reload]
@@ -644,6 +778,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -22.3
 
 [nyra_ability]
@@ -652,6 +788,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -11.4
 
 [nyra_ability_loop]
@@ -661,6 +799,7 @@ max_instances = 1
 loop = true
 category = "player"
 stealable = false
+flat = false
 measured_rms_db = -10.0
 
 [nyra_ability_end]
@@ -669,6 +808,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -9.4
 
 [brakk_fire]
@@ -677,6 +818,8 @@ pitch_rand_semitones = 0.4
 max_instances = 3
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -8.0
 
 [brakk_reload]
@@ -685,6 +828,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -20.4
 
 [brakk_ability]
@@ -693,6 +838,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -6.6
 
 [brakk_ability_end]
@@ -701,6 +848,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -10.8
 
 [kip_fire]
@@ -709,6 +858,8 @@ pitch_rand_semitones = 0.4
 max_instances = 3
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -21.7
 
 [kip_reload]
@@ -717,6 +868,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -23.7
 
 [kip_ability]
@@ -725,6 +878,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -7.8
 
 [kip_ability_end]
@@ -733,6 +888,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -9.4
 
 [part_equip]
@@ -741,6 +898,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -23.3
 
 [part_unequip]
@@ -749,6 +908,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -23.0
 
 [shard_gain]
@@ -757,6 +918,8 @@ pitch_rand_semitones = 0
 max_instances = 3
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -12.3
 
 [reroll_spin]
@@ -765,6 +928,8 @@ pitch_rand_semitones = 0
 max_instances = 1
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -19.2
 
 [reroll_result]
@@ -773,6 +938,8 @@ pitch_rand_semitones = 0
 max_instances = 1
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -10.7
 
 [legendary_perk_reveal]
@@ -781,6 +948,8 @@ pitch_rand_semitones = 0
 max_instances = 1
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -5.5
 
 [cosmetic_equip]
@@ -789,6 +958,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "ui_meta"
+stealable = true
+flat = false
 measured_rms_db = -15.4
 
 [jump]
@@ -797,6 +968,8 @@ pitch_rand_semitones = 0.3
 max_instances = 2
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -11.6
 
 [brood_attack]
@@ -805,6 +978,8 @@ pitch_rand_semitones = 0.3
 max_instances = 2
 loop = false
 category = "boss"
+stealable = true
+flat = false
 measured_rms_db = -11.4
 
 [spitter_footstep]
@@ -813,6 +988,8 @@ pitch_rand_semitones = 1.0
 max_instances = 6
 loop = false
 category = "enemy"
+stealable = true
+flat = false
 measured_rms_db = -20.2
 
 [brood_footstep]
@@ -821,6 +998,8 @@ pitch_rand_semitones = 0.3
 max_instances = 2
 loop = false
 category = "enemy"
+stealable = true
+flat = false
 measured_rms_db = -9.4
 
 [tyrant_footstep]
@@ -829,6 +1008,8 @@ pitch_rand_semitones = 0.3
 max_instances = 2
 loop = false
 category = "enemy"
+stealable = true
+flat = false
 measured_rms_db = -12.5
 
 [host_away]
@@ -839,6 +1020,7 @@ loop = false
 category = "ui"
 stealable = false
 is_warning = true
+flat = false
 
 [host_back]
 # 3 ticks at 0/1/2 s line up with the 3-2-1 countdown; the "go" tone lands at 3.0 s when play resumes.
@@ -849,6 +1031,7 @@ loop = false
 category = "ui"
 stealable = false
 is_warning = true
+flat = false
 sync_at = 3.0
 
 # Arena 01. Telegraphs stay fixed-pitch so the 1.5 s warn lines up with the vent and climb windows.
@@ -860,6 +1043,7 @@ loop = false
 category = "enemy"
 stealable = false
 is_warning = true
+flat = false
 measured_rms_db = -12.0
 
 [vent_burst]
@@ -868,6 +1052,8 @@ pitch_rand_semitones = 0.4
 max_instances = 6
 loop = false
 category = "enemy"
+stealable = true
+flat = false
 measured_rms_db = -10.0
 
 [fuel_regen_paused]
@@ -876,6 +1062,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "player"
+stealable = true
+flat = false
 measured_rms_db = -14.0
 
 [perch_climb_warn]
@@ -886,4 +1074,46 @@ loop = false
 category = "enemy"
 stealable = false
 is_warning = true
+flat = false
 measured_rms_db = -12.0
+
+# Act-now warnings. Flat cues play on the local bus, not at a world position.
+[revive_start]
+volume_db = -4.0
+pitch_rand_semitones = 0
+max_instances = 2
+loop = false
+category = "player"
+is_warning = true
+stealable = false
+flat = true
+
+[low_hp_warn]
+volume_db = -5.0
+pitch_rand_semitones = 0
+max_instances = 1
+loop = false
+category = "player"
+is_warning = true
+stealable = false
+flat = true
+
+[ammo_low_warn]
+volume_db = -8.0
+pitch_rand_semitones = 0
+max_instances = 1
+loop = false
+category = "player"
+is_warning = true
+stealable = false
+flat = true
+
+[ability_ready]
+volume_db = -3.0
+pitch_rand_semitones = 0
+max_instances = 1
+loop = false
+category = "player"
+is_warning = true
+stealable = false
+flat = true

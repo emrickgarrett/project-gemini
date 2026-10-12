@@ -29,7 +29,7 @@ accent_key = "hero_nyra"
 max_hp = 90
 move_speed_mult = 1.05
 weapon = "arc_caster"        # chaining beam, short range
-ability = { id = "mend_field", cooldown = 24.0, desc = "drop a 6m field for 8s: heals 8 hp/s, revives inside it take 50% less time" }
+ability = { id = "mend_field", cooldown = 24.0, infinite_magazine = false, desc = "drop a 6m field for 8s: heals 8 hp/s, revives inside it take 50% less time" }
 passive = "revives teammates 25% faster"
 fantasy = "keeps the squad standing; solo she self-heals in her own field"
 
@@ -41,7 +41,7 @@ accent_key = "hero_brakk"
 max_hp = 140
 move_speed_mult = 0.9
 weapon = "scatter_cannon"    # shotgun, big knockback
-ability = { id = "bulwark", cooldown = 18.0, desc = "4s: frontal shield blocks all projectiles, then slams for 150 damage + knockback" }
+ability = { id = "bulwark", cooldown = 18.0, infinite_magazine = false, desc = "4s: frontal shield blocks all projectiles, then slams for 150 damage + knockback" }
 passive = "takes 15% less damage from melee"
 fantasy = "holds the chokepoint against brutes"
 
@@ -53,7 +53,7 @@ accent_key = "hero_kip"
 max_hp = 85
 move_speed_mult = 1.12
 weapon = "rail_needle"       # precision, pierces, slow fire
-ability = { id = "mark", cooldown = 16.0, desc = "ping a 15m area for 6s: marked bugs show weak points through walls and take +30% weak-point damage for the squad" }
+ability = { id = "mark", cooldown = 16.0, infinite_magazine = false, desc = "ping a 15m area for 6s: marked bugs show weak points through walls and take +30% weak-point damage for the squad" }
 passive = "+50% jetpack fuel"
 fantasy = "spots and deletes spitters and boss weak points"
 
@@ -67,3 +67,9 @@ sidearm        = { dmg = 12, rps = 4.0, mag = 12, reserve = 48, reload = 1.2, sp
 [unlock]
 starter = "vex"              # guests start with Vex; others come from crates
 owned = ["vex"]
+
+[warnings]
+low_hp_fraction = 0.30
+low_hp_rearm_fraction = 0.40
+low_hp_repeat_s = 1.2
+ammo_low_fraction = 0.25
