@@ -140,6 +140,10 @@ impl Decodable for DuckedMusic {
 pub(crate) struct OneShot {
     id: String,
     owner: u32,
+    /// Seconds when this voice started. The steal tie-break uses this, not query order.
+    started: f32,
+    /// Monotonic stamp so two voices that share a timestamp still have an order.
+    order: u32,
 }
 
 #[derive(Component)]
@@ -270,6 +274,8 @@ pub fn play(
                 OneShot {
                     id: voice.id.clone(),
                     owner: owner_of(&fx.sounds, &voice.id, voice.pos),
+                    started: time.elapsed_secs(),
+                    order: next_voice_order(),
                 },
             ))
             .id();
@@ -333,7 +339,14 @@ pub fn ui_cue(commands: &mut Commands, _assets: &AssetServer, content: &Content,
 
 /// Live voices occupy `max_instances` and the mix voice cap. A UI cue that needs a
 /// slot stops the quietest stealable one-shot. Warnings and loops stay.
-pub fn flush_ui_cues(mut commands: Commands, assets: Res<AssetServer>, prefs: Res<Prefs>, requests: Query<(Entity, &UiRequest)>, live: Query<(Entity, &OneShot)>) {
+pub fn flush_ui_cues(
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    prefs: Res<Prefs>,
+    time: Res<Time>,
+    requests: Query<(Entity, &UiRequest)>,
+    live: Query<(Entity, &OneShot)>,
+) {
     let asked: Vec<String> = requests.iter().map(|(_, request)| request.0.clone()).collect();
     for (entity, _) in &requests {
         commands.entity(entity).despawn();
@@ -342,17 +355,21 @@ pub fn flush_ui_cues(mut commands: Commands, assets: Res<AssetServer>, prefs: Re
         return;
     }
     let content = Content::embedded();
-    let live: Vec<(Entity, SoundEvent)> = live
+    let live: Vec<(Entity, Heard)> = live
         .iter()
         .map(|(entity, shot)| {
             (
                 entity,
-                SoundEvent { id: shot.id.clone(), pos: SimVec::ZERO, owner: shot.owner },
+                Heard {
+                    id: shot.id.clone(),
+                    started: shot.started,
+                    order: shot.order,
+                },
             )
         })
         .collect();
-    let playing: Vec<SoundEvent> = live.iter().map(|(_, event)| event.clone()).collect();
-    let admitted = admit_ui(&content.audio, &playing, &asked);
+    let playing: Vec<Heard> = live.iter().map(|(_, heard)| heard.clone()).collect();
+    let admitted = admit_ui(&content.audio, &playing, &asked, time.elapsed_secs());
     for index in admitted.stop {
         if let Some((entity, _)) = live.get(index) {
             commands.entity(*entity).despawn();
@@ -363,7 +380,12 @@ pub fn flush_ui_cues(mut commands: Commands, assets: Res<AssetServer>, prefs: Re
         commands.spawn((
             AudioPlayer::new(assets.load::<AudioSource>(def.path.clone())),
             PlaybackSettings::DESPAWN.with_volume(Volume::Linear(def.volume * bus_gain(&prefs, false))),
-            OneShot { id, owner: 0 },
+            OneShot {
+                id,
+                owner: 0,
+                started: time.elapsed_secs(),
+                order: next_voice_order(),
+            },
         ));
     }
 }
@@ -374,32 +396,47 @@ pub struct UiVoices {
     pub stop: Vec<usize>,
 }
 
+#[derive(Clone, Debug)]
+pub struct Heard {
+    pub id: String,
+    pub started: f32,
+    pub order: u32,
+}
+
 struct Occupant {
     id: String,
     loudness: f32,
     stealable: bool,
-    age: u32,
+    started: f32,
+    order: u32,
     /// Index into the `playing` slice. `None` is a cue admitted in this call.
     playing: Option<usize>,
+}
+
+static VOICE_ORDER: AtomicU32 = AtomicU32::new(1);
+
+fn next_voice_order() -> u32 {
+    VOICE_ORDER.fetch_add(1, Ordering::Relaxed)
 }
 
 /// Admits queued cues without going past the voice cap.
 ///
 /// When the cap is full, the cue steals the quietest stealable one-shot that is
-/// already playing. Equal loudness keeps the older voice as the victim. If every
-/// voice is a warning or a loop, the cue is dropped.
-pub fn admit_ui(audio: &gemini_sim::content::AudioTable, playing: &[SoundEvent], asked: &[String]) -> UiVoices {
+/// already playing. Equal loudness keeps the voice with the earlier stored start
+/// time as the victim. If every voice is a warning or a loop, the cue is dropped.
+pub fn admit_ui(audio: &gemini_sim::content::AudioTable, playing: &[Heard], asked: &[String], now: f32) -> UiVoices {
     let cap = audio.voice_cap.max(1);
     let mut occupants: Vec<Occupant> = playing
         .iter()
         .enumerate()
-        .map(|(index, event)| {
-            let def = audio.sfx.iter().find(|row| row.id == event.id);
+        .map(|(index, heard)| {
+            let def = audio.sfx.iter().find(|row| row.id == heard.id);
             Occupant {
-                id: event.id.clone(),
+                id: heard.id.clone(),
                 loudness: def.map(|row| row.loudness).unwrap_or(f32::MAX),
                 stealable: def.is_some_and(|row| row.stealable && !row.looped && !row.is_warning),
-                age: index as u32,
+                started: heard.started,
+                order: heard.order,
                 playing: Some(index),
             }
         })
@@ -425,7 +462,8 @@ pub fn admit_ui(audio: &gemini_sim::content::AudioTable, playing: &[SoundEvent],
                     a.loudness
                         .partial_cmp(&b.loudness)
                         .unwrap_or(std::cmp::Ordering::Equal)
-                        .then(a.age.cmp(&b.age))
+                        .then_with(|| a.started.partial_cmp(&b.started).unwrap_or(std::cmp::Ordering::Equal))
+                        .then_with(|| a.order.cmp(&b.order))
                 });
             let Some((index, _)) = victim else {
                 continue;
@@ -439,7 +477,8 @@ pub fn admit_ui(audio: &gemini_sim::content::AudioTable, playing: &[SoundEvent],
             id: def.id.clone(),
             loudness: def.loudness,
             stealable: def.stealable && !def.looped && !def.is_warning,
-            age: born,
+            started: now,
+            order: 0x8000_0000 + born,
             playing: None,
         });
         born += 1;
@@ -906,39 +945,36 @@ mod tests {
 
     #[test]
     fn repeated_hovers_stay_within_max_instances() {
-        use gemini_sim::audio_mix::SoundEvent;
         use gemini_sim::content::Content;
-        use gemini_sim::math::Vec3;
 
-        use super::admit_ui;
+        use super::{admit_ui, Heard};
 
         let content = Content::embedded();
         let hover = content.ui.sounds.hover.clone();
         let cap = content.sfx(&hover).unwrap().max_instances;
         assert_eq!(cap, 2, "ui_hover max_instances");
         let asked = vec![hover.clone(); 8];
-        let admitted = admit_ui(&content.audio, &[], &asked);
+        let admitted = admit_ui(&content.audio, &[], &asked, 0.0);
         assert_eq!(admitted.play.len() as u32, cap);
         assert!(admitted.stop.is_empty());
-        let playing: Vec<SoundEvent> = admitted
+        let playing: Vec<Heard> = admitted
             .play
             .iter()
-            .map(|id| SoundEvent { id: id.clone(), pos: Vec3::ZERO, owner: 0 })
+            .enumerate()
+            .map(|(index, id)| Heard { id: id.clone(), started: index as f32, order: index as u32 })
             .collect();
-        assert!(admit_ui(&content.audio, &playing, &asked).play.is_empty(), "live hovers already fill the cap");
+        assert!(admit_ui(&content.audio, &playing, &asked, 10.0).play.is_empty(), "live hovers already fill the cap");
         let tick = content.ui.sounds.slider.clone();
         assert_eq!(content.sfx(&tick).unwrap().max_instances, 3, "ui_slider_tick max_instances");
         let ticks = vec![tick; 6];
-        assert_eq!(admit_ui(&content.audio, &[], &ticks).play.len(), 3);
+        assert_eq!(admit_ui(&content.audio, &[], &ticks, 0.0).play.len(), 3);
     }
 
     #[test]
     fn hover_steals_the_quietest_oneshot_and_spares_warnings_and_loops() {
-        use gemini_sim::audio_mix::SoundEvent;
         use gemini_sim::content::Content;
-        use gemini_sim::math::Vec3;
 
-        use super::admit_ui;
+        use super::{admit_ui, Heard};
 
         let content = Content::embedded();
         let voice_cap = content.audio.voice_cap;
@@ -958,29 +994,29 @@ mod tests {
         let louder = content.audio.sfx.iter().find(|row| {
             row.stealable && !row.looped && !row.is_warning && row.id != hover && row.id != quiet.id && row.loudness > quiet.loudness
         });
-        let cue = |id: &str| SoundEvent { id: id.to_string(), pos: Vec3::ZERO, owner: 0 };
-        let mut playing = vec![cue(&quiet.id), cue(&quiet.id)];
+        let cue = |id: &str, started: f32| Heard { id: id.to_string(), started, order: started as u32 };
+        let mut playing = vec![cue(&quiet.id, 0.0), cue(&quiet.id, 1.0)];
         let mut protected = Vec::new();
         for id in warning_ids.iter().chain(loop_ids.iter()) {
             if playing.len() + 1 >= voice_cap {
                 break;
             }
             protected.push(playing.len());
-            playing.push(cue(id));
+            playing.push(cue(id, 10.0 + playing.len() as f32));
         }
         assert!(protected.len() >= 2, "the full list includes a warning and a loop");
         while playing.len() < voice_cap {
             if let Some(row) = louder {
-                playing.push(cue(&row.id));
+                playing.push(cue(&row.id, 20.0 + playing.len() as f32));
             } else {
-                playing.push(cue(warning_ids[playing.len() % warning_ids.len()]));
+                playing.push(cue(warning_ids[playing.len() % warning_ids.len()], 20.0 + playing.len() as f32));
             }
         }
         assert_eq!(playing.len(), voice_cap);
         let asked = vec![hover.clone()];
-        let stolen = admit_ui(&content.audio, &playing, &asked);
-        assert_eq!(stolen.play, vec![hover]);
-        assert_eq!(stolen.stop, vec![0], "the older of the quietest one-shots is the victim");
+        let stolen = admit_ui(&content.audio, &playing, &asked, 100.0);
+        assert_eq!(stolen.play, vec![hover.clone()]);
+        assert_eq!(stolen.stop, vec![0], "the earlier start time of the quietest one-shots is the victim");
         for index in &protected {
             assert!(!stolen.stop.contains(index), "protected {}", playing[*index].id);
             let row = content.sfx(&playing[*index].id).unwrap();
@@ -996,10 +1032,20 @@ mod tests {
             } else {
                 loop_ids[blocked.len() % loop_ids.len()]
             };
-            blocked.push(cue(id));
+            blocked.push(cue(id, blocked.len() as f32));
         }
-        let dropped = admit_ui(&content.audio, &blocked, &asked);
+        let dropped = admit_ui(&content.audio, &blocked, &asked, 100.0);
         assert!(dropped.play.is_empty(), "a full list of warnings and loops drops the cue");
         assert!(dropped.stop.is_empty());
+
+        let mut reversed = vec![
+            Heard { id: quiet.id.clone(), started: 4.0, order: 0 },
+            Heard { id: quiet.id.clone(), started: 1.0, order: 9 },
+        ];
+        while reversed.len() < voice_cap {
+            reversed.push(cue(warning_ids[reversed.len() % warning_ids.len()], 30.0));
+        }
+        let later = admit_ui(&content.audio, &reversed, &asked, 100.0);
+        assert_eq!(later.stop, vec![1], "the stored start time beats list order");
     }
 }

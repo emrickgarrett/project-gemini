@@ -159,7 +159,17 @@ impl Content {
         hero.accent = accent.clone();
         // The palette key on the hero card is the only accent source.
         palette.hero.accent = accent;
-        validate_ui(&ui, &presentation, &controller, &audio, &difficulty, &crate_reveal.layout, &heroes)?;
+        validate_ui(
+            &ui,
+            src.ui,
+            &presentation,
+            &controller,
+            &audio,
+            &difficulty,
+            &crate_reveal.layout,
+            src.crate_reveal,
+            &heroes,
+        )?;
         let arena = load_arena(src.arena).map_err(|err| format!("arena_01.toml: {err}"))?;
         require_arena_colors(&palette, &arena).map_err(|err| format!("arena_01.toml: {err}"))?;
         validate_stage_offset(&palette, &crate_reveal.layout)?;
@@ -1294,6 +1304,13 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>, Vec
         if card.ability.is_empty() || card.role.is_empty() || card.name.is_empty() {
             return Err(format!("characters.toml {id} name, role, and ability desc must be set"));
         }
+        let fantasy = req_str(row, "fantasy", id)?;
+        let passive = req_str(row, "passive", id)?;
+        require_font(&card.name, &format!("characters.toml {id} name"))?;
+        require_font(&card.role, &format!("characters.toml {id} role"))?;
+        require_font(&card.ability, &format!("characters.toml {id} ability"))?;
+        require_font(fantasy, &format!("characters.toml {id} fantasy"))?;
+        require_font(passive, &format!("characters.toml {id} passive"))?;
         cards.push(card);
     }
     for id in &owned {
@@ -1600,12 +1617,12 @@ pub struct ArenaPaint {
 }
 
 /// Sky wash above the arena horizon in the host-away still.
-/// `color` is a palette key. Each channel is `source * num / den`.
+/// `sky` is a palette key. The floor stays put below `horizon`.
+/// Above it, the wash blends `mix + (1 - t) * span` from the floor dark toward that sky.
 #[derive(Clone, Debug)]
 pub struct ArenaEdgeWash {
-    pub color: String,
-    pub num: [u32; 3],
-    pub den: [u32; 3],
+    /// Palette key for the sky above the horizon.
+    pub sky: String,
     pub horizon: f32,
     pub mix: f32,
     pub span: f32,
@@ -2166,22 +2183,13 @@ fn load_arena_paint(value: &toml::Value) -> Result<ArenaPaint, String> {
 
 fn load_edge_wash(value: &toml::Value) -> Result<ArenaEdgeWash, String> {
     let table = value.as_table().ok_or_else(|| "edge_wash is not a table".to_string())?;
-    expect_keys(
-        table,
-        &["color", "num", "den", "horizon", "mix", "span"],
-        "edge_wash",
-    )?;
-    let color = req_string(table, "color", "arena_01.toml edge_wash")?;
-    let num = u32s3(table.get("num").unwrap(), "edge_wash.num")?;
-    let den = u32s3(table.get("den").unwrap(), "edge_wash.den")?;
+    expect_keys(table, &["sky", "horizon", "mix", "span"], "edge_wash")?;
+    let sky = req_string(table, "sky", "arena_01.toml edge_wash")?;
     let horizon = num_at(table, "horizon", "edge_wash.horizon")?;
     let mix = num_at(table, "mix", "edge_wash.mix")?;
     let span = num_at(table, "span", "edge_wash.span")?;
-    if color.is_empty() {
-        return Err("edge_wash color must be a palette key".into());
-    }
-    if den.iter().any(|d| *d == 0) {
-        return Err("edge_wash.den must be > 0".into());
+    if sky.is_empty() {
+        return Err("edge_wash sky must be a palette key".into());
     }
     if !(horizon > 0.0 && horizon < 1.0) {
         return Err("edge_wash.horizon must be in (0, 1)".into());
@@ -2189,14 +2197,7 @@ fn load_edge_wash(value: &toml::Value) -> Result<ArenaEdgeWash, String> {
     if !(mix >= 0.0 && mix <= 1.0) || !(span >= 0.0) {
         return Err("edge_wash mix and span are out of range".into());
     }
-    Ok(ArenaEdgeWash {
-        color,
-        num,
-        den,
-        horizon,
-        mix,
-        span,
-    })
+    Ok(ArenaEdgeWash { sky, horizon, mix, span })
 }
 
 fn num_at(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<f32, String> {
@@ -2211,21 +2212,6 @@ fn req_u32_key(table: &toml::map::Map<String, toml::Value>, key: &str, what: &st
         _ => return Err(format!("{what} {key} must be a non-negative integer")),
     };
     Ok(n)
-}
-
-fn u32s3(value: &toml::Value, what: &str) -> Result<[u32; 3], String> {
-    let arr = value.as_array().ok_or_else(|| format!("{what} must be an array"))?;
-    if arr.len() != 3 {
-        return Err(format!("{what} must have 3 numbers"));
-    }
-    let mut out = [0u32; 3];
-    for (i, item) in arr.iter().enumerate() {
-        out[i] = match item {
-            toml::Value::Integer(n) if *n >= 0 && *n <= u32::MAX as i64 => *n as u32,
-            _ => return Err(format!("{what} must be three non-negative integers")),
-        };
-    }
-    Ok(out)
 }
 
 fn load_rows<T>(
@@ -2748,6 +2734,8 @@ pub struct PaletteKeys {
     pub hero_nyra: String,
     pub hero_brakk: String,
     pub hero_kip: String,
+    pub portrait_field: String,
+    pub arena_sky: String,
 }
 
 impl Palette {
@@ -2770,6 +2758,8 @@ impl Palette {
             "hero_nyra" => self.keys.hero_nyra.as_str(),
             "hero_brakk" => self.keys.hero_brakk.as_str(),
             "hero_kip" => self.keys.hero_kip.as_str(),
+            "portrait_field" => self.keys.portrait_field.as_str(),
+            "arena_sky" => self.keys.arena_sky.as_str(),
             "hero_teal" | "teal" => self.hero.teal.as_str(),
             "hero_cobalt" | "cobalt" => self.hero.cobalt.as_str(),
             "hero_white" | "white" => self.hero.white.as_str(),
@@ -2890,6 +2880,12 @@ pub struct RevealLayout {
     pub stage_base: [f32; 3],
     pub stage_lift: [f32; 3],
     pub stage_vignette: [f32; 3],
+    /// Backdrop center, as a fraction of the frame height.
+    pub stage_y: f32,
+    /// Exponent on the center lift.
+    pub stage_lift_pow: f32,
+    /// Exponent on the corner vignette.
+    pub stage_vignette_pow: f32,
 }
 
 fn validate_reveal_panel(layout: &RevealLayout) -> Result<(), String> {
@@ -2951,6 +2947,12 @@ fn validate_reveal_panel(layout: &RevealLayout) -> Result<(), String> {
             }
         }
     }
+    if !(layout.stage_y > 0.0 && layout.stage_y < 1.0) {
+        return Err("crate_reveal.toml layout stage_y must be in (0, 1)".into());
+    }
+    if !(layout.stage_lift_pow > 0.0) || !(layout.stage_vignette_pow > 0.0) {
+        return Err("crate_reveal.toml layout stage_lift_pow and stage_vignette_pow must be > 0".into());
+    }
     Ok(())
 }
 
@@ -2982,7 +2984,7 @@ fn require_arena_colors(palette: &Palette, arena: &Arena) -> Result<(), String> 
     };
     check("paint floor_light", &arena.paint.floor_light)?;
     check("paint floor_dark", &arena.paint.floor_dark)?;
-    check("edge_wash color", &arena.edge_wash.color)?;
+    check("edge_wash sky", &arena.edge_wash.sky)?;
     Ok(())
 }
 
@@ -3183,6 +3185,27 @@ pub fn body_lift_of(content: &Content, kind: EnemyKind) -> f32 {
     content.bug(kind).hitbox.body.offset[1]
 }
 
+/// True when the crate-reveal pixel font can draw `ch`. Lower case counts as upper case.
+pub fn font_covers(ch: char) -> bool {
+    let ch = match ch {
+        'a'..='z' => (ch as u8 - b'a' + b'A') as char,
+        other => other,
+    };
+    matches!(
+        ch,
+        ' ' | 'A'..='Z' | '0'..='9' | '+' | '-' | '%' | ':' | '.' | ',' | '/' | ';'
+    )
+}
+
+fn require_font(text: &str, what: &str) -> Result<(), String> {
+    for ch in text.chars() {
+        if !font_covers(ch) {
+            return Err(format!("{what} is missing font glyph '{ch}'"));
+        }
+    }
+    Ok(())
+}
+
 /// Fixed-decimal display. Does not change the stored value.
 pub fn format_fixed(value: f32, decimals: u32) -> String {
     let decimals = decimals.min(6) as usize;
@@ -3194,12 +3217,13 @@ pub struct Ui {
     pub colors: UiColors,
     pub copy: UiCopy,
     pub layout: UiLayout,
+    pub portrait: UiPortrait,
     pub settings: UiSettings,
     pub sounds: UiSounds,
 }
 
 impl Ui {
-    pub fn color_keys(&self) -> [(&str, &str); 9] {
+    pub fn color_keys(&self) -> [(&str, &str); 10] {
         [
             ("ui.colors.panel", self.colors.panel.as_str()),
             ("ui.colors.text", self.colors.text.as_str()),
@@ -3210,6 +3234,7 @@ impl Ui {
             ("ui.colors.defeat", self.colors.defeat.as_str()),
             ("ui.colors.locked", self.colors.locked.as_str()),
             ("ui.colors.locked_text", self.colors.locked_text.as_str()),
+            ("ui.portrait.bg", self.portrait.bg.as_str()),
         ]
     }
 }
@@ -3307,6 +3332,39 @@ pub struct UiLayout {
     pub focus_lift: f32,
     pub fit_width: f32,
     pub fit_height: f32,
+    /// Extra pixels between wrapped glyph rows.
+    pub leading: f32,
+    /// Gap after a lock line, a name, and between the two lines of a tier button.
+    pub spacing: f32,
+    /// Gap after a hero role line.
+    pub spacing_role: f32,
+    /// Gap after an ability line, a results line, and between settings rows.
+    pub spacing_block: f32,
+    /// Slider label inset from the row's left edge.
+    pub inset_x: f32,
+    /// Slider label inset from the row's top edge.
+    pub inset_y: f32,
+    /// Gap between the slider track and the bottom of the row.
+    pub inset_bar: f32,
+    /// Padding kept between the portrait and the card's mid line.
+    pub inset_portrait: f32,
+    /// Smallest border inset, in screen pixels after scaling.
+    pub inset_min: f32,
+}
+
+/// Framing for the hero-card portrait raster.
+#[derive(Clone, Debug, Deserialize)]
+pub struct UiPortrait {
+    /// Palette key of the empty field. Pixels of this color are not copied onto the card.
+    pub bg: String,
+    pub raster: u32,
+    pub fov_floor: f32,
+    pub fov_limit: f32,
+    pub fov_step: f32,
+    /// Vertices closer than this, in viewmodel depth, do not fit.
+    pub near: f32,
+    /// NDC limit the FOV search uses. A vertex past this is outside the frame.
+    pub fit: f32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -3373,11 +3431,13 @@ fn load_ui(text: &str) -> Result<Ui, String> {
 
 fn validate_ui(
     ui: &Ui,
+    ui_text: &str,
     presentation: &Presentation,
     controller: &Controller,
     audio: &AudioTable,
     difficulty: &[Tier],
     glyphs: &RevealLayout,
+    reveal_text: &str,
     heroes: &[HeroCard],
 ) -> Result<(), String> {
     let layout = &ui.layout;
@@ -3425,6 +3485,40 @@ fn validate_ui(
     }
     if !(layout.portrait_fraction > 0.0 && layout.portrait_fraction <= 0.5) {
         return Err("ui.toml layout.portrait_fraction must be in (0, 0.5]".into());
+    }
+    for (name, value) in [
+        ("leading", layout.leading),
+        ("spacing", layout.spacing),
+        ("spacing_role", layout.spacing_role),
+        ("spacing_block", layout.spacing_block),
+        ("inset_x", layout.inset_x),
+        ("inset_y", layout.inset_y),
+        ("inset_bar", layout.inset_bar),
+        ("inset_portrait", layout.inset_portrait),
+        ("inset_min", layout.inset_min),
+    ] {
+        if !(value.is_finite() && value >= 0.0) {
+            return Err(format!("ui.toml layout.{name} must be >= 0"));
+        }
+    }
+    let portrait = &ui.portrait;
+    if portrait.bg.is_empty() {
+        return Err("ui.toml portrait.bg must be a palette key".into());
+    }
+    if portrait.raster == 0 {
+        return Err("ui.toml portrait.raster must be > 0".into());
+    }
+    if !(portrait.fov_floor > 0.0 && portrait.fov_limit > portrait.fov_floor && portrait.fov_limit < 180.0) {
+        return Err("ui.toml portrait fov search must sit inside (0, 180)".into());
+    }
+    if !(portrait.fov_step > 0.0) {
+        return Err("ui.toml portrait.fov_step must be > 0".into());
+    }
+    if !(portrait.near > 0.0) {
+        return Err("ui.toml portrait.near must be > 0".into());
+    }
+    if !(portrait.fit > 0.0 && portrait.fit <= 1.0) {
+        return Err("ui.toml portrait.fit must be in (0, 1]".into());
     }
     check_range("sensitivity", settings.sensitivity, settings.sensitivity_min, settings.sensitivity_max, settings.sensitivity_step)?;
     check_range("fov", settings.fov, settings.fov_min, settings.fov_max, settings.fov_step)?;
@@ -3534,6 +3628,85 @@ fn validate_ui(
         + layout.button_height;
     if rows > layout.fit_height {
         return Err(format!("ui.toml hero screen is {rows}px tall and the fit frame is {}", layout.fit_height));
+    }
+    require_drawn_menu_font(ui_text, ui, difficulty, heroes, reveal_text)?;
+    Ok(())
+}
+
+/// Glyphs for every string `paint_menu` draws. Copy comes from the `[copy]` table,
+/// not a field list. Tier ids and rarity names are the labels those screens paint.
+fn require_drawn_menu_font(
+    ui_text: &str,
+    ui: &Ui,
+    difficulty: &[Tier],
+    heroes: &[HeroCard],
+    reveal_text: &str,
+) -> Result<(), String> {
+    let root: toml::Value = toml::from_str(ui_text).map_err(|err| err.to_string())?;
+    let copy = root
+        .get("copy")
+        .and_then(|value| value.as_table())
+        .ok_or_else(|| "ui.toml is missing [copy]".to_string())?;
+    for (field, value) in copy {
+        let text = value
+            .as_str()
+            .ok_or_else(|| format!("ui.toml copy.{field} must be a string"))?;
+        require_font(text, &format!("ui.toml copy.{field}"))?;
+    }
+    for tier in difficulty {
+        require_font(&tier.id, &format!("difficulty.toml {}", tier.id))?;
+        let line = format!(
+            "{} X{}  {} X{}",
+            ui.copy.hp,
+            format_fixed(tier.enemy_hp, ui.layout.mult_decimals),
+            ui.copy.dmg,
+            format_fixed(tier.enemy_dmg, ui.layout.mult_decimals)
+        );
+        require_font(&line, &format!("difficulty.toml {} stats", tier.id))?;
+    }
+    for hero in heroes {
+        require_font(&hero.name, &format!("characters.toml {} name", hero.id))?;
+        require_font(&hero.role, &format!("characters.toml {} role", hero.id))?;
+        require_font(&hero.ability, &format!("characters.toml {} ability", hero.id))?;
+        let stats = format!(
+            "{} {}  {} {}",
+            ui.copy.hp,
+            format_fixed(hero.max_hp, 0),
+            ui.copy.speed,
+            format_fixed(hero.move_speed_mult, ui.layout.stat_decimals)
+        );
+        require_font(&stats, &format!("characters.toml {} stats", hero.id))?;
+    }
+    let settings = &ui.settings;
+    for (what, text) in [
+        ("sensitivity", format_fixed(settings.sensitivity, 2)),
+        ("fov", format_fixed(settings.fov, 0)),
+        ("master", format_fixed(settings.master, 2)),
+        ("music", format_fixed(settings.music, 2)),
+        ("effects", format_fixed(settings.effects, 2)),
+    ] {
+        require_font(&text, &format!("ui.toml settings.{what}"))?;
+    }
+    require_font(&format!("{} 0:00", ui.copy.time), "ui.toml copy.time")?;
+    require_font(
+        &format!("{} {}", ui.copy.currency, format_fixed(0.0, ui.layout.currency_decimals)),
+        "ui.toml copy.currency",
+    )?;
+    let reveal: toml::Value = toml::from_str(reveal_text).map_err(|err| err.to_string())?;
+    let table = reveal
+        .as_table()
+        .ok_or_else(|| "crate_reveal.toml is not a table".to_string())?;
+    let mut rarities = 0u32;
+    for (name, value) in table {
+        let Some(row) = value.as_table() else { continue };
+        if !(row.contains_key("tease") && row.contains_key("sting")) {
+            continue;
+        }
+        rarities += 1;
+        require_font(name, &format!("crate_reveal.toml {name}"))?;
+    }
+    if rarities == 0 {
+        return Err("crate_reveal.toml has no rarity tiers".into());
     }
     Ok(())
 }

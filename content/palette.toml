@@ -53,3 +53,7 @@ hero_vex = "#F97316"
 hero_nyra = "#7DD3FC"
 hero_brakk = "#DC2626"
 hero_kip = "#FDE047"
+# Menu portrait field. The viewmodel raster treats this grey as empty.
+portrait_field = "#8A8A8A"
+# Host-away sky. reveal_ink scaled by [2, 5, 1] / [7, 12, 2] is these bytes.
+arena_sky = "#080A10"

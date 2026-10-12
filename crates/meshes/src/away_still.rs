@@ -119,7 +119,7 @@ pub(crate) fn paint_arena(rgb: &mut [u8], width: u32, height: u32, content: &Con
     let wash = &content.arena.edge_wash;
     let dark = bytes(content, &paint.floor_dark);
     let light = bytes(content, &paint.floor_light);
-    let sky = scaled_palette(content, &wash.color, wash.num, wash.den);
+    let sky = bytes(content, &wash.sky);
     let horizon = wash.horizon;
     for y in 0..height {
         let floor = y as f32 > height as f32 * horizon;
@@ -183,15 +183,6 @@ fn bytes(content: &Content, name: &str) -> [u8; 3] {
     let hex = content.palette.hex(name).unwrap_or_else(|| panic!("unknown palette key {name}"));
     let c = hex_srgb(hex);
     [(c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8]
-}
-
-fn scaled_palette(content: &Content, name: &str, num: [u32; 3], den: [u32; 3]) -> [u8; 3] {
-    let src = bytes(content, name);
-    [
-        (src[0] as u32 * num[0] / den[0].max(1)) as u8,
-        (src[1] as u32 * num[1] / den[1].max(1)) as u8,
-        (src[2] as u32 * num[2] / den[2].max(1)) as u8,
-    ]
 }
 
 fn fill_rect(rgb: &mut [u8], width: u32, height: u32, x: i32, y: i32, w: i32, h: i32, color: [u8; 3], alpha: f32) {
@@ -329,7 +320,8 @@ mod tests {
     fn arena_edge_wash_keeps_the_current_sky() {
         let content = Content::embedded();
         let wash = &content.arena.edge_wash;
-        let sky = scaled_palette(&content, &wash.color, wash.num, wash.den);
+        let sky = bytes(&content, &wash.sky);
+        assert_eq!(wash.sky, "arena_sky");
         assert_eq!(sky, [8, 10, 16]);
         let mut rgb = vec![0u8; 32 * 32 * 3];
         paint_arena(&mut rgb, 32, 32, &content);

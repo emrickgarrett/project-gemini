@@ -85,7 +85,7 @@ pub fn paint_reveal(content: &Content, plan: &RevealPlan, t: f32, width: u32, he
 
 pub(crate) fn paint_stage(rgb: &mut [u8], width: u32, height: u32, content: &Content, layout: &gemini_sim::content::RevealLayout) {
     let cx = (width as f32 - 1.0) * 0.5;
-    let cy = (height as f32 - 1.0) * 0.42;
+    let cy = (height as f32 - 1.0) * layout.stage_y;
     let max_d = (cx * cx + (height as f32) * (height as f32)).sqrt().max(1.0);
     let stage = palette_bytes(content, &layout.stage);
     let base = [
@@ -100,8 +100,8 @@ pub(crate) fn paint_stage(rgb: &mut [u8], width: u32, height: u32, content: &Con
             let dx = x as f32 - cx;
             let dy = y as f32 - cy;
             let d = (dx * dx + dy * dy).sqrt() / max_d;
-            let lift = (1.0 - d).clamp(0.0, 1.0).powf(1.35);
-            let vignette = d.clamp(0.0, 1.0).powf(1.6);
+            let lift = (1.0 - d).clamp(0.0, 1.0).powf(layout.stage_lift_pow);
+            let vignette = d.clamp(0.0, 1.0).powf(layout.stage_vignette_pow);
             // Center lifts toward a cool slate; the corners fall to near-black.
             let r = (base[0] + lift * lift_c[0] - vignette * vig[0]).clamp(0.0, 255.0) as u8;
             let g = (base[1] + lift * lift_c[1] - vignette * vig[1]).clamp(0.0, 255.0) as u8;
@@ -651,13 +651,13 @@ mod tests {
         ];
         assert_eq!(base, [16.0, 12.0, 22.0]);
         let cx = (64.0f32 - 1.0) * 0.5;
-        let cy = (64.0f32 - 1.0) * 0.42;
+        let cy = (64.0f32 - 1.0) * layout.stage_y;
         let max_d = (cx * cx + 64.0 * 64.0).sqrt().max(1.0);
         let dx = 0.0 - cx;
         let dy = 0.0 - cy;
         let d = (dx * dx + dy * dy).sqrt() / max_d;
-        let lift = (1.0 - d).clamp(0.0, 1.0).powf(1.35);
-        let vignette = d.clamp(0.0, 1.0).powf(1.6);
+        let lift = (1.0 - d).clamp(0.0, 1.0).powf(layout.stage_lift_pow);
+        let vignette = d.clamp(0.0, 1.0).powf(layout.stage_vignette_pow);
         let expect = [
             (base[0] + lift * layout.stage_lift[0] - vignette * layout.stage_vignette[0]).clamp(0.0, 255.0) as u8,
             (base[1] + lift * layout.stage_lift[1] - vignette * layout.stage_vignette[1]).clamp(0.0, 255.0) as u8,

@@ -112,12 +112,10 @@ band_x = 48
 band_y = 36
 shade = 0.45
 
-# Host-away still sky, above the horizon. `color` is a palette.toml key.
-# Each channel is source * num / den, which keeps the current sky bytes.
+# Host-away still sky, above the horizon. `sky` is a palette.toml key.
+# arena_sky is the old reveal_ink * [2, 5, 1] / [7, 12, 2] scale.
 [edge_wash]
-color = "reveal_ink"
-num = [2, 5, 1]
-den = [7, 12, 2]
+sky = "arena_sky"
 horizon = 0.42
 mix = 0.25
 span = 0.45
