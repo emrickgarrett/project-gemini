@@ -1,0 +1,32 @@
+# Arena meshes. Collision stays in arena_01.toml. These numbers are visual only.
+# A rock `at` is XZ on the ground. size is the full gem extent. The center sits
+# at half the height so the rock rests on y = 0.
+
+deck_sides = 24
+rail_posts = 16
+rail_thickness = 0.16
+review_stand_gap = 6.0
+
+[[rock]]
+at = [18.0, 14.0]
+size = [2.2, 1.6, 1.8]
+
+[[rock]]
+at = [-20.0, 16.0]
+size = [2.6, 1.9, 2.2]
+
+[[rock]]
+at = [22.0, -10.0]
+size = [1.8, 1.3, 2.0]
+
+[[rock]]
+at = [-18.0, -14.0]
+size = [2.4, 1.7, 1.6]
+
+[[rock]]
+at = [8.0, 22.0]
+size = [1.6, 1.2, 1.5]
+
+[[rock]]
+at = [-28.0, -6.0]
+size = [2.0, 1.5, 1.8]

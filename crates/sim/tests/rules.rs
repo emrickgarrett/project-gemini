@@ -2946,10 +2946,10 @@ fn warnings_and_infinite_magazine_fail_closed() {
 fn hero_portraits_fail_closed() {
     let content = Content::embedded();
     let expect = [
-        ("vex", "pulse_rifle", 0.0, 0.0, 0.78),
-        ("nyra", "gauntlet", 30.0, 12.0, 0.78),
-        ("brakk", "slab_shield", 30.0, 12.0, 0.78),
-        ("kip", "marker_pistol", 30.0, 12.0, 0.78),
+        ("vex", "vex", 20.0, 0.0, 0.86),
+        ("nyra", "nyra", -18.0, 12.0, 0.86),
+        ("brakk", "brakk", 22.0, 8.0, 0.88),
+        ("kip", "kip", -14.0, 10.0, 0.86),
     ];
     for (id, mesh, yaw, pitch, fit) in expect {
         let card = content.heroes.iter().find(|hero| hero.id == id).unwrap();
@@ -2967,14 +2967,14 @@ fn hero_portraits_fail_closed() {
         })
     };
     let missing = base.hero.replacen(
-        "portrait = { mesh = \"gauntlet\", yaw_deg = 30.0, pitch_deg = 12.0, fit = 0.78 }\n",
+        "portrait = { mesh = \"nyra\", yaw_deg = -18.0, pitch_deg = 12.0, fit = 0.86 }\n",
         "",
         1,
     );
     let err = load(&missing).expect_err("nyra portrait");
     assert!(err.contains("nyra"), "{err}");
     assert!(err.contains("portrait"), "{err}");
-    let unknown = base.hero.replacen("mesh = \"marker_pistol\"", "mesh = \"laser_knife\"", 1);
+    let unknown = base.hero.replacen("mesh = \"kip\"", "mesh = \"laser_knife\"", 1);
     let err = load(&unknown).expect_err("unknown mesh");
     assert!(err.contains("kip"), "{err}");
     assert!(err.contains("laser_knife"), "{err}");

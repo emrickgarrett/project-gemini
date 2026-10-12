@@ -5,7 +5,7 @@ use gemini_sim::content::{format_fixed, Content};
 
 use crate::away_still::paint_arena;
 use crate::glyph::{blit, measure};
-use crate::preview::{raster_parts, raster_viewmodel_yaw, ViewmodelFrame};
+use crate::preview::raster_parts;
 use crate::reveal_still::paint_stage;
 
 #[derive(Clone, Debug)]
@@ -500,8 +500,7 @@ fn draw_wrapped(rgb: &mut [u8], content: &Content, frame: Frame, text: &str, x: 
     y
 }
 
-/// Frames the idle viewmodel so the whole weapon is in view, then scales that
-/// painted silhouette into the top half of the card.
+/// Frames the full-body portrait, then scales that silhouette into the top half of the card.
 fn paint_portrait(rgb: &mut [u8], content: &Content, frame: Frame, hero: &gemini_sim::content::HeroCard, card_x: i32, card_y: i32, card_w: i32, card_h: i32, pad: i32) {
     if card_w <= 4 || card_h <= 4 {
         return;
@@ -520,7 +519,7 @@ fn paint_portrait(rgb: &mut [u8], content: &Content, frame: Frame, hero: &gemini
     let dest_h = (card_h as f32 * content.ui.layout.portrait_fraction)
         .round()
         .clamp(1.0, (top_half - frame.px(content.ui.layout.inset_portrait)).max(1) as f32) as i32;
-    // Keep the portrait at portrait_fraction of the card. Crop the wide rifle from the center.
+    // Keep the portrait at portrait_fraction of the card. Crop a wide silhouette from the center.
     let window_w = ((bh as f32) * (inner_w as f32 / dest_h as f32)).round().clamp(1.0, bw as f32) as i32;
     let win_x0 = x0 + (bw - window_w) / 2;
     let win_x1 = win_x0 + window_w;
@@ -541,7 +540,15 @@ fn paint_portrait(rgb: &mut [u8], content: &Content, frame: Frame, hero: &gemini
             }
             if !hero.owned {
                 let away = &content.presentation.hud.away;
-                px = locked_pixel(px, accent_px, content.ui.layout.locked_accent_mix, away.away_dim, away.away_desaturation, away.dim_floor);
+                px = locked_pixel(
+                    px,
+                    accent_px,
+                    content.ui.layout.locked_accent_mix,
+                    away.away_dim,
+                    away.away_desaturation,
+                    content.ui.layout.locked_body_desaturation,
+                    away.dim_floor,
+                );
             }
             put(rgb, frame.width, frame.height, dx + col, dy + row, px);
         }
@@ -592,46 +599,30 @@ fn opaque_bounds(content: &Content, src: &[u8], raster: u32) -> Option<(i32, i32
     if any { Some((x0, y0, x1, y1)) } else { None }
 }
 
+/// Full-body card raster for one hero. Uses that hero's portrait mesh, yaw, pitch, and fit.
+pub fn raster_hero_portrait(content: &Content, hero_id: &str, raster: u32) -> Vec<u8> {
+    let hero = content
+        .heroes
+        .iter()
+        .find(|hero| hero.id == hero_id)
+        .unwrap_or_else(|| panic!("unknown hero {hero_id}"));
+    portrait_raster(content, hero, raster)
+}
+
 fn portrait_raster(content: &Content, hero: &gemini_sim::content::HeroCard, raster: u32) -> Vec<u8> {
-    if hero.portrait.mesh == "pulse_rifle" {
-        let mut view = view_frame(content, hero);
-        view.fov = portrait_fov(content, &view, hero.portrait.fit);
-        return raster_viewmodel_yaw(raster, raster, &view, hero.portrait.yaw_deg, hero.portrait.pitch_deg);
-    }
     let built = crate::portrait::build(&hero.portrait.mesh).unwrap_or_else(|| panic!("unknown portrait mesh {}", hero.portrait.mesh));
     let turned = crate::portrait::turn(&built, hero.portrait.yaw_deg, hero.portrait.pitch_deg);
     let positions: Vec<[f32; 3]> = turned.iter().flat_map(|part| part.mesh.positions.iter().copied()).collect();
     let fov = mesh_fov(content, &positions, hero.portrait.fit);
-    let accent = {
-        let c = content.palette.key(&hero.accent_key);
-        [c[0], c[1], c[2], 1.0]
-    };
-    // White so the key light stays in the mid grays. Cobalt grays down to near-black.
-    let body = content.palette.key("hero_white");
     let parts: Vec<(crate::MeshData, [f32; 4], bool)> = turned
         .iter()
         .map(|part| {
-            let color = if part.glow { accent } else { body };
-            (part.mesh.clone(), color, part.glow)
+            let key = if part.palette == "accent" { hero.accent_key.as_str() } else { part.palette.as_str() };
+            let c = content.palette.key(key);
+            (part.mesh.clone(), [c[0], c[1], c[2], 1.0], part.glow)
         })
         .collect();
     raster_parts(raster, raster, &parts, fov)
-}
-
-/// Widens the idle FOV until the viewmodel vertices sit inside the frame.
-fn portrait_fov(content: &Content, frame: &ViewmodelFrame, fit: f32) -> f32 {
-    let framing = &content.ui.portrait;
-    let vm = crate::viewmodel();
-    let meshes = [&vm.teal, &vm.cobalt, &vm.white, &vm.accent, &vm.core, &vm.barrel];
-    let mut fov = frame.fov.max(framing.fov_floor);
-    let limit = framing.fov_limit;
-    while fov < limit {
-        if vertices_fit(&meshes, frame.offset, fov, framing.near, fit) {
-            return fov;
-        }
-        fov += framing.fov_step;
-    }
-    limit
 }
 
 fn mesh_fov(content: &Content, positions: &[[f32; 3]], fit: f32) -> f32 {
@@ -661,41 +652,6 @@ fn positions_fit(positions: &[[f32; 3]], fov: f32, near: f32, fit: f32) -> bool 
         }
     }
     any
-}
-
-fn vertices_fit(meshes: &[&crate::MeshData], offset: [f32; 3], fov: f32, near: f32, fit: f32) -> bool {
-    let focal = 1.0 / (fov.to_radians() * 0.5).tan();
-    let mut any = false;
-    for mesh in meshes {
-        for p in &mesh.positions {
-            let x = p[0] + offset[0];
-            let y = p[1] + offset[1];
-            let z = -(p[2] + offset[2]);
-            if z < near {
-                return false;
-            }
-            any = true;
-            if (x / z * focal).abs() > fit || (y / z * focal).abs() > fit {
-                return false;
-            }
-        }
-    }
-    any
-}
-
-fn view_frame(content: &Content, hero: &gemini_sim::content::HeroCard) -> ViewmodelFrame {
-    let starter = &content.hero;
-    ViewmodelFrame {
-        accent: content.palette.key(&hero.accent_key),
-        offset: starter.viewmodel_offset,
-        fov: starter.viewmodel_fov,
-        overdrive: false,
-        glow_radius: starter.muzzle_flash_radius,
-        glow_core: starter.muzzle_flash_core,
-        glow_falloff: starter.muzzle_flash_falloff,
-        glow_tip_px: starter.muzzle_flash_tip_px,
-        glow_color: [starter.muzzle_flash_color[0], starter.muzzle_flash_color[1], starter.muzzle_flash_color[2], 1.0],
-    }
 }
 
 fn rect(rgb: &mut [u8], width: u32, height: u32, x: i32, y: i32, w: i32, h: i32, color: [u8; 3]) {
@@ -747,9 +703,11 @@ fn gray(px: [u8; 3]) -> [u8; 3] {
     [y, y, y]
 }
 
-fn locked_pixel(px: [u8; 3], accent: [u8; 3], mix: f32, dim: f32, desat: f32, floor: f32) -> [u8; 3] {
+fn locked_pixel(px: [u8; 3], accent: [u8; 3], mix: f32, dim: f32, accent_desat: f32, body_desat: f32, floor: f32) -> [u8; 3] {
+    let accent_px = px == accent;
+    let desat = if accent_px { accent_desat } else { body_desat };
     let body = crate::away_still::grade(px[0], px[1], px[2], dim, desat, floor);
-    if px == accent { lift(body, accent, mix) } else { body }
+    if accent_px { lift(body, accent, mix) } else { body }
 }
 
 fn lift(base: [u8; 3], toward: [u8; 3], amount: f32) -> [u8; 3] {
@@ -947,31 +905,41 @@ mod tests {
     }
 
     #[test]
-    fn vex_yaw_zero_matches_the_unrotated_viewmodel_and_a_turn_changes_it() {
+    fn portraits_are_full_bodies_and_the_content_turn_changes_them() {
         let content = Content::embedded();
-        let hero = content.heroes.iter().find(|hero| hero.id == "vex").unwrap();
-        assert_eq!(hero.portrait.yaw_deg, 0.0);
-        assert_eq!(hero.portrait.pitch_deg, 0.0);
         let raster = content.ui.portrait.raster;
-        let painted = portrait_raster(&content, hero, raster);
-        let mut view = view_frame(&content, hero);
-        view.fov = portrait_fov(&content, &view, hero.portrait.fit);
-        assert_eq!(painted, crate::preview::raster_viewmodel(raster, raster, &view));
-        assert_ne!(painted, raster_viewmodel_yaw(raster, raster, &view, 12.0, 0.0));
-        assert_ne!(painted, raster_viewmodel_yaw(raster, raster, &view, 0.0, -12.0));
+        let listed: Vec<&str> = gemini_sim::content::PORTRAIT_MESHES.to_vec();
+        let built_ids = crate::portrait::ids();
+        assert_eq!(built_ids.len(), listed.len());
+        for id in &built_ids {
+            assert!(listed.contains(&id.as_str()), "{id} is not a portrait mesh");
+        }
+        for hero in &content.heroes {
+            let (x0, y0, x1, y1) = opaque_bounds(&content, &portrait_raster(&content, hero, raster), raster).unwrap();
+            let w = x1 - x0;
+            let h = y1 - y0;
+            assert!(h > w, "{} portrait is {w}x{h}, wider than a body", hero.id);
+            let turned = portrait_raster(&content, hero, raster);
+            let mut flat_hero = hero.clone();
+            flat_hero.portrait.yaw_deg = 0.0;
+            flat_hero.portrait.pitch_deg = 0.0;
+            let flat = portrait_raster(&content, &flat_hero, raster);
+            if hero.portrait.yaw_deg == 0.0 && hero.portrait.pitch_deg == 0.0 {
+                assert_eq!(turned, flat, "{}", hero.id);
+            } else {
+                assert_ne!(turned, flat, "{}", hero.id);
+            }
+        }
     }
 
     #[test]
     fn portrait_builders_follow_the_content_list() {
         for id in gemini_sim::content::PORTRAIT_MESHES {
             let built = crate::portrait::build(id);
-            if *id == "pulse_rifle" {
-                assert!(built.is_none(), "{id} stays on the viewmodel");
-            } else {
-                assert!(built.is_some_and(|parts| !parts.is_empty()), "{id}");
-            }
+            assert!(built.is_some_and(|parts| !parts.is_empty()), "{id}");
         }
         assert!(crate::portrait::build("laser_knife").is_none());
+        assert!(crate::portrait::build("pulse_rifle").is_none());
     }
 
     fn round_bytes(content: &Content, key: &str) -> [u8; 3] {

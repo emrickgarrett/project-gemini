@@ -200,29 +200,11 @@ pub fn scene(
         Transform::IDENTITY,
         PlayPiece,
     ));
-    let deck = upload(
-        &mut meshes,
-        &box_at(
-            [arena.platform.center.x, arena.platform.height * 0.5, arena.platform.center.z],
-            [arena.platform.radius * 2.0, arena.platform.height, arena.platform.radius * 2.0],
-        ),
-    );
-    commands.spawn((
-        Mesh3d(deck),
-        MeshMaterial3d(mat_of(&bank, "arena_light", false, false)),
-        Transform::IDENTITY,
-        PlayPiece,
-    ));
-    for ramp in &arena.platform.ramps {
-        let mid = (ramp.from + ramp.to) * 0.5;
-        let len = SimVec::new(ramp.to.x - ramp.from.x, 0.0, ramp.to.z - ramp.from.z).length().max(0.2);
-        let mesh = upload(
-            &mut meshes,
-            &box_at([mid.x, arena.platform.height * 0.25, mid.z], [len, arena.platform.height * 0.5, ramp.width]),
-        );
+    for piece in gemini_meshes::arena_pieces() {
+        let mesh = upload(&mut meshes, &piece.mesh);
         commands.spawn((
             Mesh3d(mesh),
-            MeshMaterial3d(mat_of(&bank, "arena_light", false, false)),
+            MeshMaterial3d(mat_of(&bank, &piece.palette, false, false)),
             Transform::IDENTITY,
             PlayPiece,
         ));

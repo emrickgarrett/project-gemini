@@ -1273,7 +1273,7 @@ pub struct HeroPortrait {
 }
 
 /// Meshes a hero portrait may name. `portrait::build` follows this list.
-pub const PORTRAIT_MESHES: &[&str] = &["pulse_rifle", "gauntlet", "slab_shield", "marker_pistol"];
+pub const PORTRAIT_MESHES: &[&str] = &["vex", "nyra", "brakk", "kip"];
 
 /// One hero's ability, as the act-now cues read it. No hero or ability id.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -3478,6 +3478,8 @@ pub struct UiLayout {
     pub portrait_fraction: f32,
     /// Locked portrait glow mixes this far from grayscale back toward the accent.
     pub locked_accent_mix: f32,
+    /// Non-accent portrait pixels desaturate this far on a locked card. 1 is fully gray.
+    pub locked_body_desaturation: f32,
     pub card_pad: f32,
     pub pause_keep: f32,
     pub pause_panel_width: f32,
@@ -3679,6 +3681,9 @@ fn validate_ui(
     }
     if !(layout.locked_accent_mix > 0.0 && layout.locked_accent_mix < 1.0) {
         return Err("ui.toml layout.locked_accent_mix must be in (0, 1)".into());
+    }
+    if !(layout.locked_body_desaturation >= 0.0 && layout.locked_body_desaturation <= 1.0) {
+        return Err("ui.toml layout.locked_body_desaturation must be in [0, 1]".into());
     }
     check_range("sensitivity", settings.sensitivity, settings.sensitivity_min, settings.sensitivity_max, settings.sensitivity_step)?;
     check_range("fov", settings.fov, settings.fov_min, settings.fov_max, settings.fov_step)?;

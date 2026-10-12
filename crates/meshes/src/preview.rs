@@ -332,11 +332,27 @@ fn draw(
     open_shell: bool,
     camera: Option<([f32; 3], [f32; 3], f32)>,
 ) -> Vec<u8> {
+    draw_scene(visual, palette, width, height, silhouette, open_shell, camera, [0.0, 0.0, 0.0], BG, &[])
+}
+
+/// Bug at `shift`, plus optional world meshes (the arena), on `bg`.
+fn draw_scene(
+    visual: &EnemyVisual,
+    palette: &dyn Fn(&str) -> [f32; 4],
+    width: u32,
+    height: u32,
+    silhouette: bool,
+    open_shell: bool,
+    camera: Option<([f32; 3], [f32; 3], f32)>,
+    shift: [f32; 3],
+    bg: [u8; 3],
+    extras: &[(&crate::MeshData, [f32; 4])],
+) -> Vec<u8> {
     let w = width.max(8);
     let h = height.max(8);
     let mut color = Vec::with_capacity((w * h * 3) as usize);
     for _ in 0..(w * h) {
-        color.extend_from_slice(&BG);
+        color.extend_from_slice(&bg);
     }
     let mut depth = vec![f32::INFINITY; (w * h) as usize];
     let mut anim = still_anim();
@@ -368,7 +384,7 @@ fn draw(
         for p in &mesh.positions {
             let scaled = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
             let r = crate::pose::rotate_vec(xf.rot, scaled);
-            verts.push([r[0] + xf.pos[0], r[1] + xf.pos[1], r[2] + xf.pos[2]]);
+            verts.push([r[0] + xf.pos[0] + shift[0], r[1] + xf.pos[1] + shift[1], r[2] + xf.pos[2] + shift[2]]);
         }
         for tri in mesh.indices.chunks(3) {
             if tri.len() < 3 {
@@ -401,7 +417,91 @@ fn draw(
             fill_tri(&mut color, &mut depth, w, h, a, b, c, rgb);
         }
     }
+    if !silhouette {
+        for (mesh, albedo) in extras {
+            for tri in mesh.indices.chunks(3) {
+                if tri.len() < 3 {
+                    continue;
+                }
+                let ia = tri[0] as usize;
+                let ib = tri[1] as usize;
+                let ic = tri[2] as usize;
+                let nw = mesh.normals[ia];
+                let ndot = (nw[0] * key[0] + nw[1] * key[1] + nw[2] * key[2]).clamp(0.0, 1.0);
+                let ndot2 = (nw[0] * fill[0] + nw[1] * fill[1] + nw[2] * fill[2]).clamp(0.0, 1.0);
+                let shade = (0.62 + 0.40 * ndot + 0.22 * ndot2).clamp(0.0, 1.0);
+                let rgb = [albedo[0] * shade, albedo[1] * shade, albedo[2] * shade];
+                let Some(a) = project(mesh.positions[ia], eye, right, up, forward, focal, aspect, w, h) else {
+                    continue;
+                };
+                let Some(b) = project(mesh.positions[ib], eye, right, up, forward, focal, aspect, w, h) else {
+                    continue;
+                };
+                let Some(c) = project(mesh.positions[ic], eye, right, up, forward, focal, aspect, w, h) else {
+                    continue;
+                };
+                fill_tri(&mut color, &mut depth, w, h, a, b, c, rgb);
+            }
+        }
+    }
     color
+}
+
+/// In-arena color still. The camera sits `review_distance` meters from the bug.
+pub fn raster_in_arena(id: &str, width: u32, height: u32) -> Vec<u8> {
+    use gemini_sim::content::Content;
+    let content = Content::embedded();
+    let distance = review_distance();
+    let visual = bug(id);
+    // Bug stands on the deck. The eye is `review_distance` meters out along the
+    // concept camera, so the still is the bug in the arena rather than a camera
+    // buried in the platform.
+    let look = [0.0, visual.height * 0.45, 0.0];
+    let dir = norm(sub(visual.camera.eye, visual.camera.target));
+    let mut eye = [look[0] + dir[0] * distance, look[1] + dir[1] * distance, look[2] + dir[2] * distance];
+    let clearance = content.arena.platform.radius + crate::review_stand_gap();
+    let flat = (eye[0] * eye[0] + eye[2] * eye[2]).sqrt();
+    if flat < clearance {
+        let scale = clearance / flat.max(1.0e-4);
+        eye[0] *= scale;
+        eye[2] *= scale;
+    }
+    let sky = content.palette.key("arena_sky");
+    let bg = [byte(sky[0]), byte(sky[1]), byte(sky[2])];
+    let palette = |name: &str| content.palette.key(name);
+    let ground = crate::review_ground();
+    let pieces = crate::arena_pieces();
+    let mut owned: Vec<(crate::MeshData, [f32; 4])> = Vec::new();
+    owned.push((ground, palette("arena_dark")));
+    for piece in &pieces {
+        owned.push((piece.mesh.clone(), palette(&piece.palette)));
+    }
+    let extras: Vec<(&crate::MeshData, [f32; 4])> = owned.iter().map(|(mesh, color)| (mesh, *color)).collect();
+    draw_scene(
+        visual,
+        &palette,
+        width,
+        height,
+        false,
+        false,
+        Some((eye, look, visual.camera.fov)),
+        [0.0, 0.0, 0.0],
+        bg,
+        &extras,
+    )
+}
+
+pub fn review_distance() -> f32 {
+    let text = include_str!("../../../content/bugs.toml");
+    let root: toml::Value = toml::from_str(text).unwrap_or_else(|err| panic!("bugs.toml: {err}"));
+    let distance = root
+        .get("review_distance")
+        .and_then(|v| v.as_float().or_else(|| v.as_integer().map(|n| n as f64)))
+        .unwrap_or_else(|| panic!("bugs.toml is missing review_distance")) as f32;
+    if !(distance > 0.0) {
+        panic!("bugs.toml review_distance must be > 0");
+    }
+    distance
 }
 
 pub fn palette_of() -> impl Fn(&str) -> [f32; 4] {

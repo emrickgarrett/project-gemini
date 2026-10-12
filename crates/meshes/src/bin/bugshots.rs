@@ -12,8 +12,8 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use gemini_meshes::{
-    catalog, missing_glow_keys, missing_glow_keys_open, paint_away, paint_reveal, painted_pixels, raster_bug, raster_top,
-    reveal_still_is_flat, still, still_color_stats, still_open, still_top, AwayShot,
+    catalog, missing_glow_keys, missing_glow_keys_open, paint_away, paint_reveal, painted_pixels, raster_bug, raster_in_arena,
+    raster_top, reveal_still_is_flat, review_distance, still, still_color_stats, still_open, still_top, AwayShot,
 };
 use gemini_sim::content::Content;
 use gemini_sim::reveal::plan;
@@ -75,6 +75,20 @@ fn main() {
         let open_path = format!("{out}/{}_open.png", visual.id);
         write_png(&open_path, ow, oh, &open);
         println!("wrote {open_path} ({open_painted} px)");
+    }
+    let distance = review_distance();
+    let far_dir = format!("{out}/at_15m");
+    fs::create_dir_all(&far_dir).expect("create distance dir");
+    for id in &ids {
+        let rgb = raster_in_arena(id, panel, panel);
+        let painted = painted_pixels(&rgb);
+        if painted < 40 {
+            eprintln!("{id} arena still failed ({painted} px at {distance} m)");
+            failed = true;
+        }
+        let path = format!("{far_dir}/{id}.png");
+        write_png(&path, panel, panel, &rgb);
+        println!("wrote {path} ({painted} px, {distance} m)");
     }
     if write_reveals(&out) {
         failed = true;

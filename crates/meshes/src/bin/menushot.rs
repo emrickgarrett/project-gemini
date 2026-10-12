@@ -9,7 +9,7 @@ use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use gemini_meshes::{paint_menu, MenuShot, PaintPrefs};
+use gemini_meshes::{paint_menu, raster_hero_portrait, MenuShot, PaintPrefs};
 use gemini_sim::content::Content;
 
 fn main() {
@@ -61,6 +61,13 @@ fn main() {
     let path = format!("{out}/pause_1920x1080.png");
     write_png(&path, &rgb, 1920, 1080);
     println!("wrote {path}");
+    let raster = content.ui.portrait.raster;
+    for hero in &content.heroes {
+        let rgb = raster_hero_portrait(&content, &hero.id, raster);
+        let path = format!("{out}/portrait_{}.png", hero.id);
+        write_png(&path, &rgb, raster, raster);
+        println!("wrote {path}");
+    }
 }
 
 fn write_png(path: &str, rgb: &[u8], width: u32, height: u32) {

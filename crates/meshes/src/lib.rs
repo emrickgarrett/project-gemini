@@ -1,6 +1,7 @@
 //! Procedural placeholder meshes. One shared mesh set per bug type.
 //! Colors are filled in by the client from `content/palette.toml`.
 
+mod arena;
 mod away_still;
 mod geom;
 mod glyph;
@@ -11,14 +12,15 @@ mod preview;
 mod reveal_still;
 mod visual;
 
-pub use menu_still::{paint_menu, Hit, MenuShot, PaintPrefs};
+pub use menu_still::{paint_menu, raster_hero_portrait, Hit, MenuShot, PaintPrefs};
 
+pub use arena::{pieces as arena_pieces, review_ground, review_stand_gap, ArenaPiece};
 pub use away_still::{paint_away, AwayShot};
 pub use reveal_still::{paint_reveal, reveal_still_is_flat, still_color_stats};
 
 pub use pose::{pose, AnimInput, Pose, Xform};
 pub use preview::{
-    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_top, raster_viewmodel, still,
+    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_in_arena, raster_top, raster_viewmodel, review_distance, still,
     still_open, still_top, ViewmodelFrame,
 };
 pub use visual::{bug, catalog, flat_shaded, EnemyVisual, Gate, Joint, Part, ShotCamera};
@@ -187,25 +189,25 @@ fn glove(vm: &mut Viewmodel, anchor: [f32; 3], side: f32, ink: [f32; 4]) {
     geom::gem(
         &mut vm.cobalt,
         [anchor[0], anchor[1] + 0.01, anchor[2] + 0.08],
-        [0.08, 0.055, 0.13],
+        [0.11, 0.075, 0.16],
         8,
         6,
         ink,
     );
     geom::plate(
         &mut vm.teal,
-        [anchor[0], anchor[1] + 0.045, anchor[2] + 0.02],
-        0.12,
-        0.11,
-        0.02,
+        [anchor[0], anchor[1] + 0.055, anchor[2] + 0.02],
+        0.16,
+        0.14,
+        0.028,
         8,
         5,
         ink,
     );
     geom::gem(
         &mut vm.teal,
-        [anchor[0] - side * 0.01, anchor[1] - 0.015, anchor[2] - 0.05],
-        [0.065, 0.048, 0.08],
+        [anchor[0] - side * 0.01, anchor[1] - 0.02, anchor[2] - 0.06],
+        [0.09, 0.065, 0.11],
         8,
         6,
         ink,

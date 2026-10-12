@@ -75,6 +75,18 @@ jobs:
               if a != b:
                   sys.exit(f"{name} does not match a fresh bugshots render ({len(a)} vs {len(b)} bytes)")
           print(f"{len(names)} bugshots match")
+          far = Path("art/bugs/at_15m")
+          fresh_far = fresh / "at_15m"
+          far_names = sorted(p.name for p in far.glob("*.png"))
+          got_far = sorted(p.name for p in fresh_far.glob("*.png"))
+          if far_names != got_far:
+              sys.exit(f"arena still set mismatch\ncommitted {far_names}\nfresh {got_far}")
+          for name in far_names:
+              a = raw(far / name)
+              b = raw(fresh_far / name)
+              if a != b:
+                  sys.exit(f"at_15m/{name} does not match a fresh bugshots render")
+          print(f"{len(far_names)} arena stills match")
           PY
       - name: hero stills match committed pictures
         run: |

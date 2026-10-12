@@ -76,6 +76,8 @@ card_gap = 16.0
 portrait_fraction = 0.40
 # Locked cards stay grayscale. Glowing portrait pixels mix this far back toward the accent.
 locked_accent_mix = 0.35
+# Non-accent portrait pixels desaturate this far on a locked card. 1 is fully gray.
+locked_body_desaturation = 1.0
 card_pad = 12.0
 pause_keep = 0.60
 pause_panel_width = 480.0
