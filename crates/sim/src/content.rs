@@ -460,11 +460,8 @@ fn validate_reveal_layout(reveal: &CrateReveal) -> Result<(), String> {
     if !(card.title_pad >= 0.0) {
         return Err("crate_reveal.toml card.title_pad must be non-negative".into());
     }
-    if !(card.title_max_scale > 0.0) {
-        return Err("crate_reveal.toml card.title_max_scale must be positive".into());
-    }
-    if !(card.legendary_title_max_scale > card.title_max_scale) {
-        return Err("crate_reveal.toml card.legendary_title_max_scale must exceed title_max_scale".into());
+    if !(card.title_max_scale > 0.0) || !(card.legendary_title_max_scale > 0.0) {
+        return Err("crate_reveal.toml card title scales must be positive".into());
     }
     validate_reveal_panel(&reveal.layout)
 }
@@ -2630,6 +2627,11 @@ pub struct RevealLayout {
     pub title_height_div: u32,
     pub title_scale_min: u32,
     pub title_scale_max: u32,
+    pub border_px: u32,
+    pub border_mix: f32,
+    pub gem_height: f32,
+    pub gem_glow: f32,
+    pub divider_px: u32,
     pub stage: String,
     pub ink_dark: String,
     pub ink_light: String,
@@ -2656,6 +2658,31 @@ fn validate_reveal_panel(layout: &RevealLayout) -> Result<(), String> {
     }
     if layout.title_scale_max < layout.title_scale_min {
         return Err("crate_reveal.toml layout title_scale_max must be >= title_scale_min".into());
+    }
+    if layout.border_px == 0 {
+        return Err("crate_reveal.toml layout border_px must be > 0".into());
+    }
+    let border = layout.border_px as f32;
+    if border * 2.0 >= layout.panel_width || border * 2.0 >= layout.panel_height {
+        return Err("crate_reveal.toml layout border_px must leave a face inside the panel".into());
+    }
+    if !(layout.border_mix > 0.0 && layout.border_mix <= 1.0) {
+        return Err("crate_reveal.toml layout border_mix must be in (0, 1]".into());
+    }
+    if !(layout.gem_height > 0.0 && layout.gem_height <= 1.0) {
+        return Err("crate_reveal.toml layout gem_height must be in (0, 1]".into());
+    }
+    if !(layout.gem_glow > 0.0) {
+        return Err("crate_reveal.toml layout gem_glow must be > 0".into());
+    }
+    if layout.divider_px == 0 {
+        return Err("crate_reveal.toml layout divider_px must be > 0".into());
+    }
+    let face_w = layout.panel_width - border * 2.0;
+    let legend = 9.0 * layout.title_glyph_px as f32;
+    let pad = layout.title_pad_px as f32 * 2.0;
+    if !(face_w > pad && (face_w - pad) / legend >= layout.title_scale_min as f32) {
+        return Err("crate_reveal.toml layout title scale must fit LEGENDARY inside the padded face".into());
     }
     for (name, rgb) in [
         ("stage_base", layout.stage_base),

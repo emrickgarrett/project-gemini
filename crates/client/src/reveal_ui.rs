@@ -57,7 +57,7 @@ pub fn tick(
     let title = view.shown.to_uppercase();
     let hint = if view.card { "ENTER" } else { "SKIP" };
     let hint_style = &content.crate_reveal.hint;
-    let title_px = title_font_px(&title, view.shown.eq_ignore_ascii_case("legendary"), &content.crate_reveal.card);
+    let title_px = layout.title_px;
     commands.spawn((
         Node {
             width: Val::Percent(100.0),
@@ -137,22 +137,6 @@ pub fn from_env(spec: &str) -> Option<RevealRun> {
     let content = Content::embedded();
     let (rarity, fakeout) = spec.split_once('+').map(|(rarity, tease)| (rarity, Some(tease))).unwrap_or((spec, None));
     RevealRun::start(&content, rarity.trim(), fakeout).ok()
-}
-
-fn title_font_px(label: &str, legendary: bool, card: &gemini_sim::content::CardTitle) -> f32 {
-    const PANEL_W: f32 = 420.0;
-    const PANEL_H: f32 = 240.0;
-    let pad = card.title_pad;
-    let avail_w = (PANEL_W - pad * 2.0).max(1.0);
-    let avail_h = (PANEL_H - pad * 2.0).max(1.0);
-    let cols = label.chars().count().max(1) as f32;
-    let fit = (avail_w / (cols * 0.6)).min(avail_h * 0.45);
-    let cap = if legendary {
-        card.legendary_title_max_scale
-    } else {
-        card.title_max_scale
-    };
-    fit.min(cap * 7.0).max(8.0)
 }
 
 fn play_cue(commands: &mut Commands, assets: &AssetServer, content: &Content, id: &str) {

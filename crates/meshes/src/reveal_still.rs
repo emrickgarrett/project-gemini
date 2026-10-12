@@ -114,75 +114,87 @@ fn paint_card(
     ink: [u8; 3],
     light: [u8; 3],
     shown: &str,
-    card: &gemini_sim::content::CardTitle,
+    _card: &gemini_sim::content::CardTitle,
     layout: &gemini_sim::content::RevealLayout,
 ) {
     let (x, y, panel_w, panel_h) = card_panel(width, height, layout);
-    let cx = x + panel_w / 2;
-    let cy = y + panel_h / 2;
-    add_glow(rgb, width, height, cx, cy, panel_w.max(panel_h), color, 0.72);
-    let frame = blend(color, light, 0.42);
-    let shade = blend(color, [8, 6, 12], 0.55);
-    fill(rgb, width, height, x, y, panel_w, panel_h, shade);
-    let border = (panel_w / 18).clamp(4, 16);
-    // Top rail is lighter than the bottom rail, so the frame reads as a beveled card.
-    for row in 0..border {
-        let t = row as f32 / border.max(1) as f32;
-        let rail = blend(light, frame, 0.35 + t * 0.5);
-        fill(rgb, width, height, x, y + row, panel_w, 1, rail);
-        fill(rgb, width, height, x, y + panel_h - 1 - row, panel_w, 1, blend(shade, frame, t));
-    }
-    for col in 0..border {
-        fill(rgb, width, height, x + col, y, 1, panel_h, blend(frame, shade, col as f32 / border.max(1) as f32));
-        fill(rgb, width, height, x + panel_w - 1 - col, y, 1, panel_h, frame);
-    }
+    let frame = blend(color, light, layout.border_mix);
+    fill(rgb, width, height, x, y, panel_w, panel_h, frame);
+    let border = layout.border_px.min(panel_w / 2).min(panel_h / 2);
     let face_x = x + border;
     let face_y = y + border;
     let face_w = panel_w.saturating_sub(border * 2);
     let face_h = panel_h.saturating_sub(border * 2);
     fill(rgb, width, height, face_x, face_y, face_w, face_h, color);
-    // Sheen across the upper face. The middle of the face stays the rarity color.
-    let sheen_h = (face_h / 5).max(2);
-    for row in 0..sheen_h {
-        let t = 0.28 * (1.0 - row as f32 / sheen_h as f32);
-        let tone = blend(color, light, t);
-        fill(rgb, width, height, face_x + 2, face_y + 2 + row, face_w.saturating_sub(4), 1, tone);
-    }
-    paint_gem(rgb, width, height, face_x, face_y, face_w, face_h, color, light, ink);
+
+    let scale = shared_title_scale(layout);
     let label = shown.to_uppercase();
-    let legendary = shown.eq_ignore_ascii_case("legendary");
-    let scale = title_scale(face_w, face_h, label.chars().count() as u32, legendary, card);
-    let pad = card.title_pad.round().max(0.0) as u32;
-    let text_w = label.chars().count() as u32 * 6 * scale;
-    let text_h = 7 * scale;
-    let inner_x = face_x + pad.min(face_w / 4);
-    let inner_w = face_w.saturating_sub(pad.min(face_w / 4) * 2);
-    let text_x = inner_x + inner_w.saturating_sub(text_w) / 2;
-    let text_y = face_y + face_h.saturating_sub(pad.min(face_h / 4) + text_h);
+    let glyph = layout.title_glyph_px.max(1);
+    let text_w = label.chars().count() as u32 * glyph * scale;
+    let text_h = GLYPH_ROWS * scale;
+    let gem_h = (layout.panel_height * layout.gem_height).round().max(1.0) as u32;
+    let div_h = layout.divider_px.max(1);
+    let stack = gem_h.saturating_add(div_h).saturating_add(text_h);
+    let gap = face_h.saturating_sub(stack) as f32 / 4.0;
+    let gem_top = face_y as f32 + gap;
+    let div_top = gem_top + gem_h as f32 + gap;
+    let text_top = div_top + div_h as f32 + gap;
+    let cx = face_x + face_w / 2;
+    paint_gem(
+        rgb,
+        width,
+        height,
+        cx,
+        gem_top.round() as u32,
+        gem_h,
+        color,
+        light,
+        layout.gem_glow,
+        (face_x, face_y, face_w, face_h),
+    );
+    let rule_w = (face_w * 2 / 3).max(1);
+    fill(
+        rgb,
+        width,
+        height,
+        face_x + face_w.saturating_sub(rule_w) / 2,
+        div_top.round() as u32,
+        rule_w,
+        div_h,
+        blend(ink, color, 0.45),
+    );
+    let text_x = face_x + face_w.saturating_sub(text_w) / 2;
+    let text_y = text_top.round() as u32;
     blit_at(rgb, width, height, text_x + scale / 2, text_y + scale / 2, &label, blend(ink, [0, 0, 0], 0.65), scale);
     blit_at(rgb, width, height, text_x, text_y, &label, ink, scale);
-    let rule_y = text_y.saturating_sub(scale.max(2));
-    fill(rgb, width, height, face_x + face_w / 6, rule_y, face_w * 2 / 3, (scale / 3).max(1), blend(ink, color, 0.45));
 }
 
-fn paint_gem(rgb: &mut [u8], width: u32, height: u32, face_x: u32, face_y: u32, face_w: u32, face_h: u32, color: [u8; 3], light: [u8; 3], ink: [u8; 3]) {
-    let gem_h = (face_h / 5).max(6);
-    let gem_w = (face_w / 5).max(6);
-    let cx = face_x + face_w / 2;
-    let top = face_y + (face_h / 12).max(2);
-    let stone = blend(color, light, 0.55);
-    let edge = blend(ink, color, 0.35);
+fn paint_gem(
+    rgb: &mut [u8],
+    width: u32,
+    height: u32,
+    cx: u32,
+    top: u32,
+    gem_h: u32,
+    color: [u8; 3],
+    light: [u8; 3],
+    glow: f32,
+    face: (u32, u32, u32, u32),
+) {
+    let gem_h = gem_h.max(1);
+    let cy = top + gem_h / 2;
+    add_glow(rgb, width, height, cx, cy, gem_h, blend(color, light, 0.7), glow, face);
+    let mid = (gem_h as f32 - 1.0) * 0.5;
     for row in 0..gem_h {
-        let t = if row < gem_h / 2 {
-            row as f32 / (gem_h / 2).max(1) as f32
-        } else {
-            (gem_h - 1 - row) as f32 / (gem_h / 2).max(1) as f32
-        };
-        let half = ((gem_w as f32) * 0.5 * t.clamp(0.15, 1.0)) as u32;
+        let t = 1.0 - (row as f32 - mid).abs() / mid.max(0.5);
+        let half = ((gem_h as f32) * 0.5 * t.clamp(0.0, 1.0)).round().max(1.0) as u32;
         let y = top + row;
-        fill(rgb, width, height, cx.saturating_sub(half), y, half.saturating_mul(2).max(1), 1, if row == 0 || row + 1 == gem_h { edge } else { stone });
-        if half > 2 && row > 0 && row + 1 < gem_h {
-            put(rgb, width, cx, y, light);
+        let x = cx.saturating_sub(half);
+        let w = half.saturating_mul(2).max(1);
+        fill(rgb, width, height, x, y, w, 1, color);
+        put(rgb, width, x, y, blend(color, light, 0.45));
+        if w > 1 {
+            put(rgb, width, x + w - 1, y, blend(color, light, 0.45));
         }
     }
 }
@@ -197,7 +209,17 @@ fn paint_crate(rgb: &mut [u8], width: u32, height: u32, view: &gemini_sim::revea
     let top = y.saturating_sub(crate_h / 2);
     let cx = width / 2;
     let left = cx.saturating_sub(crate_w / 2);
-    add_glow(rgb, width, height, cx, top + crate_h / 2, crate_w.saturating_mul(3).max(24), color, 0.8);
+    add_glow(
+        rgb,
+        width,
+        height,
+        cx,
+        top + crate_h / 2,
+        crate_w.saturating_mul(3).max(24),
+        color,
+        0.8,
+        (0, 0, width, height),
+    );
     let shadow_w = crate_w.saturating_mul(2);
     let shadow_h = (crate_h / 8).max(3);
     let shadow_x = cx.saturating_sub(shadow_w / 2);
@@ -353,22 +375,23 @@ fn card_panel(width: u32, height: u32, layout: &gemini_sim::content::RevealLayou
     (x, y, panel_w, panel_h)
 }
 
-fn title_scale(face_w: u32, face_h: u32, cols: u32, legendary: bool, card: &gemini_sim::content::CardTitle) -> u32 {
+const GLYPH_ROWS: u32 = 7;
+
+fn shared_title_scale(layout: &gemini_sim::content::RevealLayout) -> u32 {
+    let panel_w = layout.panel_width.round().max(0.0) as u32;
+    let panel_h = layout.panel_height.round().max(0.0) as u32;
+    let face_w = panel_w.saturating_sub(layout.border_px.saturating_mul(2));
+    let face_h = panel_h.saturating_sub(layout.border_px.saturating_mul(2));
+    title_scale(face_w, face_h, "LEGENDARY".chars().count() as u32, layout)
+}
+
+fn title_scale(face_w: u32, face_h: u32, cols: u32, layout: &gemini_sim::content::RevealLayout) -> u32 {
     let cols = cols.max(1);
-    let pad = card.title_pad.round().max(0.0) as u32;
-    let pad_x = pad.min(face_w / 4);
-    let pad_y = pad.min(face_h / 4);
-    let avail_w = face_w.saturating_sub(pad_x * 2).max(1);
-    let avail_h = face_h.saturating_sub(pad_y * 2).max(1);
-    let fit_w = avail_w / (cols * 6);
-    let fit_h = avail_h / 7;
-    let cap = if legendary {
-        card.legendary_title_max_scale
-    } else {
-        card.title_max_scale
-    };
-    let cap = cap.round().max(1.0) as u32;
-    fit_w.min(fit_h).min(cap).max(1)
+    let glyph = layout.title_glyph_px.max(1);
+    let rows = layout.title_height_div.max(1);
+    let fit_w = face_w.saturating_sub(layout.title_pad_px.saturating_mul(2)) / (cols * glyph);
+    let fit_h = face_h / rows;
+    fit_w.min(fit_h).clamp(layout.title_scale_min, layout.title_scale_max)
 }
 
 fn paint_hint(rgb: &mut [u8], width: u32, height: u32, text: &str, ink: [u8; 3], hint: &gemini_sim::content::RevealHint) {
@@ -382,13 +405,23 @@ fn paint_hint(rgb: &mut [u8], width: u32, height: u32, text: &str, ink: [u8; 3],
     blit_alpha(rgb, width, height, origin_x, origin_y, text, ink, scale, hint.opacity.clamp(0.0, 1.0));
 }
 
-fn add_glow(rgb: &mut [u8], width: u32, height: u32, cx: u32, cy: u32, radius: u32, color: [u8; 3], strength: f32) {
+fn add_glow(
+    rgb: &mut [u8],
+    width: u32,
+    height: u32,
+    cx: u32,
+    cy: u32,
+    radius: u32,
+    color: [u8; 3],
+    strength: f32,
+    clip: (u32, u32, u32, u32),
+) {
     let radius = radius.max(4);
     let r2 = (radius as f32) * (radius as f32);
-    let x0 = cx.saturating_sub(radius);
-    let y0 = cy.saturating_sub(radius);
-    let x1 = (cx + radius).min(width);
-    let y1 = (cy + radius).min(height);
+    let x0 = cx.saturating_sub(radius).max(clip.0);
+    let y0 = cy.saturating_sub(radius).max(clip.1);
+    let x1 = (cx + radius).min(width).min(clip.0.saturating_add(clip.2));
+    let y1 = (cy + radius).min(height).min(clip.1.saturating_add(clip.3));
     for y in y0..y1 {
         for x in x0..x1 {
             let dx = x as f32 - cx as f32;
@@ -541,22 +574,25 @@ mod tests {
     }
 
     #[test]
-    fn legendary_title_glyphs_are_larger_than_shorter_rarities() {
+    fn every_rarity_word_fits_at_the_shared_title_size() {
         let content = Content::embedded();
-        let card = &content.crate_reveal.card;
-        // Face of the 960x540 card still: panel 46% by 64%, border clamped to 16.
-        let face_w = 960 * 46 / 100 - 32;
-        let face_h = 540 * 64 / 100 - 32;
-        let common = title_scale(face_w, face_h, "COMMON".len() as u32, false, card);
-        let epic = title_scale(face_w, face_h, "EPIC".len() as u32, false, card);
-        let legendary = title_scale(face_w, face_h, "LEGENDARY".len() as u32, true, card);
-        assert!(legendary > epic, "legendary {legendary} epic {epic}");
-        assert!(legendary > common, "legendary {legendary} common {common}");
-        let pad = card.title_pad as u32;
-        let text_w = "LEGENDARY".len() as u32 * 6 * legendary;
-        let text_h = 7 * legendary;
-        assert!(text_w + pad * 2 <= face_w, "title wider than the padded face");
-        assert!(text_h + pad * 2 <= face_h, "title taller than the padded face");
+        let layout = &content.crate_reveal.layout;
+        let scale = shared_title_scale(layout);
+        let panel_w = layout.panel_width.round() as u32;
+        let panel_h = layout.panel_height.round() as u32;
+        let inner_w = panel_w - layout.border_px * 2 - layout.title_pad_px * 2;
+        let inner_h = panel_h - layout.border_px * 2 - layout.title_pad_px * 2;
+        let face_w = panel_w - layout.border_px * 2;
+        let face_h = panel_h - layout.border_px * 2;
+        for word in ["COMMON", "RARE", "EPIC", "LEGENDARY"] {
+            let box_w = word.chars().count() as u32 * layout.title_glyph_px * scale;
+            let box_h = GLYPH_ROWS * scale;
+            assert!(box_w <= inner_w, "{word} is {box_w}px wide, padding leaves {inner_w}");
+            assert!(box_h <= inner_h, "{word} is {box_h}px tall, padding leaves {inner_h}");
+        }
+        assert_eq!(scale, title_scale(face_w, face_h, "LEGENDARY".chars().count() as u32, layout));
+        let common = title_scale(face_w, face_h, "COMMON".chars().count() as u32, layout);
+        assert!(common > scale, "a shorter word would be larger if each card sized itself");
     }
 
     #[test]

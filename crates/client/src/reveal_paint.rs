@@ -27,8 +27,8 @@ mod tests {
             let planned = plan(&content, rarity, None).unwrap();
             let rgb = paint(&content, &planned, planned.card_at, 320, 180);
             let expect = bytes(content.palette.key(&format!("rarity_{rarity}")));
-            // Middle of the card face, clear of the frame, gem, and title.
-            let swatch = pixel(&rgb, 320, 160, 90);
+            // Lower-left of the face, clear of the frame, gem, and title.
+            let swatch = pixel(&rgb, 320, 12, 168);
             assert_eq!(swatch, expect, "{rarity} card {swatch:?}");
         }
         let teased = plan(&content, "rare", Some("epic")).unwrap();
@@ -37,7 +37,7 @@ mod tests {
         let rare = bytes(content.palette.key("rarity_rare"));
         assert!(rgb_contains(&mid, epic), "fakeout window shows the teased tier");
         let card = paint(&content, &teased, teased.card_at, 320, 180);
-        assert_eq!(pixel(&card, 320, 160, 90), rare, "the card settles on the server rarity");
+        assert_eq!(pixel(&card, 320, 12, 168), rare, "the card settles on the server rarity");
     }
 
     #[test]
