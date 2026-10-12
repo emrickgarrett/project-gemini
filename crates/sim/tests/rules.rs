@@ -607,6 +607,7 @@ fn sim_step_cap_comes_from_controller() {
             bugs: base.bugs,
             crate_reveal: base.crate_reveal,
             coop: base.coop,
+            cosmetics: base.cosmetics,
         })
     };
     let missing = base
@@ -658,6 +659,7 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         bugs: base.bugs,
         crate_reveal: base.crate_reveal,
         coop: base.coop,
+        cosmetics: base.cosmetics,
     })
     .expect_err("missing hatch_fan_step");
     assert!(err.contains("hatch_fan_step"), "{err}");
@@ -684,6 +686,7 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         bugs: base.bugs,
         crate_reveal: base.crate_reveal,
         coop: base.coop,
+        cosmetics: base.cosmetics,
     })
     .expect_err("spawn_radius inside the body");
     assert!(err.contains("spawn_radius"), "{err}");
@@ -712,6 +715,7 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         bugs: base.bugs,
         crate_reveal: base.crate_reveal,
         coop: base.coop,
+        cosmetics: base.cosmetics,
     })
     .expect_err("zero hatch telegraph");
     assert!(err.contains("hatch_telegraph"), "{err}");
@@ -741,6 +745,7 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         bugs: base.bugs,
         crate_reveal: base.crate_reveal,
         coop: base.coop,
+        cosmetics: base.cosmetics,
     })
     .expect_err("missing hatch telegraph");
     assert!(err.contains("hatch_telegraph"), "{err}");
@@ -883,6 +888,7 @@ fn missing_weakpoint_anchor_fails_content_load() {
             bugs,
             crate_reveal: base.crate_reveal,
             coop: base.coop,
+        cosmetics: base.cosmetics,
         })
     };
 
@@ -1042,6 +1048,7 @@ fn leg_layout_comes_from_bugs() {
         bugs: &bugs,
         crate_reveal: base.crate_reveal,
         coop: base.coop,
+        cosmetics: base.cosmetics,
     })
     .expect_err("missing layout");
     assert!(err.contains("layout"), "{err}");
@@ -1101,6 +1108,7 @@ fn vex_overdrive_comes_from_characters() {
         bugs: base.bugs,
         crate_reveal: base.crate_reveal,
         coop: base.coop,
+        cosmetics: base.cosmetics,
     })
     .expect_err("missing overdrive duration");
     assert!(err.contains("duration"), "{err}");
@@ -1127,6 +1135,7 @@ fn vex_overdrive_comes_from_characters() {
             bugs: base.bugs,
             crate_reveal: base.crate_reveal,
             coop: base.coop,
+        cosmetics: base.cosmetics,
         })
     };
     let text = include_str!("../../../content/characters.toml");
@@ -1269,6 +1278,7 @@ fn arena_01_vents_perches_and_pickups() {
             bugs: base.bugs,
             crate_reveal: base.crate_reveal,
             coop: base.coop,
+        cosmetics: base.cosmetics,
         })
     };
     for key in [
@@ -1456,6 +1466,7 @@ fn sources_with<'a>(base: &'a gemini_sim::content::Sources<'a>, coop: &'a str) -
         bugs: base.bugs,
         crate_reveal: base.crate_reveal,
         coop,
+        cosmetics: base.cosmetics,
     }
 }
 
@@ -1704,4 +1715,78 @@ fn overdrive_is_per_player_and_the_killer_gets_the_refund() {
     let killer = sim.players.iter().find(|player| player.id == mate_id).unwrap();
     assert!((host.ability_cd - ticked).abs() < 1e-3, "assist cd {}", host.ability_cd);
     assert!((killer.ability_cd - refunded).abs() < 1e-3, "killer cd {}", killer.ability_cd);
+}
+
+#[test]
+fn persistent_rank_comes_from_outside_and_the_cap_is_loaded() {
+    let content = Content::embedded();
+    assert_eq!(content.roster, ["vex", "nyra", "brakk", "kip"]);
+    assert!(content.cosmetics.shard_shop);
+    assert_eq!(content.cosmetics.shard_cost.legendary, 600);
+    assert_eq!(content.cosmetics.shards_for("legendary").unwrap(), 600);
+    let err = content.cosmetics.shards_for("mythic").expect_err("unknown rarity");
+    assert!(err.contains("mythic"), "{err}");
+    assert_eq!(content.duplicate.max_rank, 6);
+    assert_eq!(content.duplicate.rank.len() as u32, content.duplicate.max_rank);
+
+    let base = gemini_sim::content::embedded_sources();
+    let missing = base
+        .duplicate_ranks
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("max_rank"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let err = Content::parse(&sources_ranks(&base, &missing)).expect_err("missing max_rank");
+    assert!(err.contains("max_rank"), "{err}");
+    let short = base.duplicate_ranks.replacen("max_rank = 6", "max_rank = 5", 1);
+    let err = Content::parse(&sources_ranks(&base, &short)).expect_err("max_rank must match rows");
+    assert!(err.contains("max_rank"), "{err}");
+    assert!(err.contains("[[rank]]"), "{err}");
+
+    let cap = content.duplicate.max_rank;
+    let mut earned = Sim::new(&content, "normal", 3);
+    earned.players[0].upgrades.insert("glass_cannon".into(), 1);
+    earned.apply_persistent_rank(&content, cap);
+    let ranked_hp = earned.players[0].max_hp;
+
+    let mut fresh = Sim::new(&content, "normal", 4);
+    fresh.apply_persistent_rank(&content, cap + 10);
+    assert!(fresh.players[0].upgrades.is_empty(), "run upgrades clear every match");
+    assert_eq!(fresh.duplicate_rank, cap);
+    assert!((fresh.players[0].max_hp - ranked_hp).abs() < 1e-3);
+    let base_sim = Sim::new(&content, "normal", 5);
+    assert!(fresh.players[0].max_hp > base_sim.players[0].max_hp);
+
+    let mut floor = Sim::new(&content, "normal", 6);
+    floor.apply_persistent_rank(&content, 0);
+    assert_eq!(floor.duplicate_rank, 1);
+}
+
+fn sources_ranks<'a>(
+    base: &'a gemini_sim::content::Sources<'a>,
+    duplicate_ranks: &'a str,
+) -> gemini_sim::content::Sources<'a> {
+    gemini_sim::content::Sources {
+        waves: base.waves,
+        difficulty: base.difficulty,
+        controller: base.controller,
+        run_upgrades: base.run_upgrades,
+        endless: base.endless,
+        currency: base.currency,
+        banners: base.banners,
+        duplicate_ranks,
+        bosses: base.bosses,
+        weapons: base.weapons,
+        hero: base.hero,
+        arena: base.arena,
+        presentation: base.presentation,
+        combat: base.combat,
+        palette: base.palette,
+        music: base.music,
+        audio: base.audio,
+        bugs: base.bugs,
+        crate_reveal: base.crate_reveal,
+        coop: base.coop,
+        cosmetics: base.cosmetics,
+    }
 }

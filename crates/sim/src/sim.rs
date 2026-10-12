@@ -421,6 +421,18 @@ impl Sim {
         sim
     }
 
+    /// Copy crate-pull rank onto a fresh match and rebuild base HP from it.
+    /// Run upgrades are not part of this; a new `Sim` starts with an empty map.
+    pub fn apply_persistent_rank(&mut self, content: &Content, rank: u32) {
+        self.duplicate_rank = rank.clamp(1, content.duplicate.max_rank);
+        let mods = Modifiers::default();
+        let new_max = max_hp(content, &mods, self.duplicate_rank);
+        for player in &mut self.players {
+            player.max_hp = new_max;
+            player.hp = new_max;
+        }
+    }
+
     pub fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
         bincode::serialize(self)
     }

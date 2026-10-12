@@ -2807,6 +2807,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "gemini-backend"
+version = "0.1.0"
+dependencies = [
+ "gemini-sim",
+]
+
+[[package]]
 name = "gemini-client"
 version = "0.1.0"
 dependencies = [

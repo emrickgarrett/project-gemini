@@ -27,6 +27,31 @@ jobs:
           sudo apt-get install -y pkg-config libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libvulkan-dev libasound2-dev libudev-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev ffmpeg
       - name: tests
         run: cargo test --workspace
+      - name: sim and client do not depend on backend
+        run: |
+          set -euo pipefail
+          check() {
+            local pkg="$1"
+            if cargo tree -p "$pkg" -i gemini-backend --prefix none >"/tmp/tree-$pkg.txt" 2>"/tmp/tree-$pkg.err"; then
+              echo "$pkg depends on crates/backend"
+              cat "/tmp/tree-$pkg.txt"
+              exit 1
+            fi
+          }
+          check gemini-sim
+          check gemini-client
+          echo "gemini-sim and gemini-client do not depend on gemini-backend"
+      - name: backend does not build for wasm32
+        run: |
+          set +e
+          cargo check -p gemini-backend --target wasm32-unknown-unknown
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            echo "gemini-backend built for wasm32"
+            exit 1
+          fi
+          echo "gemini-backend refused wasm32"
       - name: bugshots match committed stills
         run: |
           cargo run -p gemini-meshes --bin bugshots -- --out /tmp/bugshots-ci

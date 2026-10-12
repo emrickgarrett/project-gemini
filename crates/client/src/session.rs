@@ -105,10 +105,23 @@ impl SimClock {
     }
 }
 
-pub fn boot(mut commands: Commands, pending: Res<PendingDifficulty>, mut clock: ResMut<SimClock>, launch: Res<Launch>) {
+/// Duplicate rank supplied to the match. The client does not roll crates.
+#[derive(Resource)]
+pub struct Account {
+    pub rank: u32,
+}
+
+pub fn boot(
+    mut commands: Commands,
+    pending: Res<PendingDifficulty>,
+    mut clock: ResMut<SimClock>,
+    launch: Res<Launch>,
+    account: Res<Account>,
+) {
     clock.reset();
     let content = Content::embedded();
-    let sim = Sim::new(&content, &pending.0, 7);
+    let mut sim = Sim::new(&content, &pending.0, 7);
+    sim.apply_persistent_rank(&content, account.rank);
     let (sim, token, link) = open_link(&launch, &content, sim);
     let fov = content.controller.camera.fov_default;
     commands.insert_resource(Game {
