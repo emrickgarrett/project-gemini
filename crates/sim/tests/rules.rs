@@ -710,6 +710,7 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         audio: base.audio,
         bugs: base.bugs,
         crate_reveal: base.crate_reveal,
+        coop: base.coop,
     })
     .expect_err("zero hatch telegraph");
     assert!(err.contains("hatch_telegraph"), "{err}");
@@ -738,6 +739,7 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         audio: base.audio,
         bugs: base.bugs,
         crate_reveal: base.crate_reveal,
+        coop: base.coop,
     })
     .expect_err("missing hatch telegraph");
     assert!(err.contains("hatch_telegraph"), "{err}");
