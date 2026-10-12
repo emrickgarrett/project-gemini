@@ -2812,6 +2812,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "gemini-meshes",
+ "gemini-proto",
  "gemini-sim",
 ]
 
@@ -2837,6 +2838,7 @@ dependencies = [
 name = "gemini-server"
 version = "0.1.0"
 dependencies = [
+ "gemini-proto",
  "gemini-sim",
 ]
 

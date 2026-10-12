@@ -342,7 +342,7 @@ pub fn sync(
     time: Res<Time>,
     assets: Res<AssetServer>,
 ) {
-    let player = game.sim.players.first().cloned();
+    let player = game.local().cloned();
     let eye = player.as_ref().map(|p| p.pos).unwrap_or(SimVec::ZERO);
     let alive: HashMap<u32, usize> = game
         .sim
@@ -654,7 +654,7 @@ pub fn camera(
     mut cameras: Query<(&mut Transform, &mut Projection), (With<Camera3d>, Without<ViewmodelCamera>)>,
     time: Res<Time>,
 ) {
-    let Some(player) = game.sim.players.first() else { return };
+    let Some(player) = game.local() else { return };
     let eye_y = game.content.view_eye(player.crouching);
     let speed = (player.vel.x * player.vel.x + player.vel.z * player.vel.z).sqrt();
     let bob = if game.bob && player.grounded && speed > 0.4 {
@@ -688,7 +688,7 @@ pub fn sync_viewmodel(
     mut barrels: Query<(&BarrelGlow, &mut MeshMaterial3d<StandardMaterial>)>,
     cam: Query<Entity, With<ViewmodelCamera>>,
 ) {
-    let Some(player) = game.sim.players.first() else { return };
+    let Some(player) = game.local() else { return };
     let overdrive = player.overdrive_left > 0.0;
     for (glow, mut material) in &mut barrels {
         material.0 = if overdrive { glow.hot.clone() } else { glow.idle.clone() };

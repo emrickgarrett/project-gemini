@@ -145,6 +145,24 @@ pub struct Player {
     pub kills_since_nova: u32,
     pub drone_angle: f32,
     pub alive: bool,
+    /// Stable seat id. Host is 1. Zero means the seat was built before a session assigned one.
+    #[serde(default)]
+    pub token: u64,
+    #[serde(default = "default_connected")]
+    pub connected: bool,
+    /// Seconds left before a disconnected seat is dropped. Zero while the player is in the match.
+    #[serde(default)]
+    pub hold_left: f32,
+    #[serde(default)]
+    pub is_host: bool,
+    #[serde(default)]
+    pub catchup_left: u32,
+    #[serde(default)]
+    pub catchup_options: Vec<String>,
+}
+
+fn default_connected() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -237,6 +255,14 @@ pub struct Enemy {
     /// Swarmer is on a resin streak toward a perch. Anti-camp only.
     #[serde(default)]
     pub climbing: bool,
+    /// Player id of the last hit that dealt health damage. Zero means no player hit.
+    #[serde(default)]
+    pub last_hit_by: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PendingJoin {
+    pub token: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -306,6 +332,14 @@ pub struct Sim {
     pub pending_vents: Vec<PendingVent>,
     /// Seconds every living player has stayed on a jetpack perch.
     pub all_perched_for: f32,
+    /// Joiners waiting for the next breather. Counted toward the lobby cap.
+    #[serde(default)]
+    pub pending_joins: Vec<PendingJoin>,
+    /// Wave numbers credited per player token. Survives a seat drop when leave_keeps_earned.
+    #[serde(default)]
+    pub credits: BTreeMap<u64, Vec<u32>>,
+    #[serde(default)]
+    pub next_token: u64,
     #[serde(skip)]
     pub spatial: SpatialGrid,
     #[serde(skip)]
@@ -367,6 +401,9 @@ impl Sim {
             endless_mode: false,
             pending_vents: Vec::new(),
             all_perched_for: 0.0,
+            pending_joins: Vec::new(),
+            credits: BTreeMap::new(),
+            next_token: 2,
             spatial: SpatialGrid::new(content.combat.cell_size, content.arena.half_extent),
             sounds: Vec::new(),
             stops: Vec::new(),
@@ -374,7 +411,7 @@ impl Sim {
             music: Vec::new(),
             landed_pulse: 0.0,
         };
-        let player = sim.make_player(content);
+        let player = sim.make_player(content, 1, true);
         sim.players.push(player);
         sim.music.push(MusicMoment::MatchStart);
         sim.begin_wave(content);
@@ -417,7 +454,7 @@ impl Sim {
         id
     }
 
-    fn make_player(&mut self, content: &Content) -> Player {
+    fn make_player(&mut self, content: &Content, token: u64, is_host: bool) -> Player {
         let primary = content.weapon(&content.hero.primary).expect("primary");
         let sidearm = content.weapon(&content.hero.sidearm).expect("sidearm");
         let mods = Modifiers::default();
@@ -458,10 +495,24 @@ impl Sim {
             kills_since_nova: 0,
             drone_angle: 0.0,
             alive: true,
+            token,
+            connected: true,
+            hold_left: 0.0,
+            is_host,
+            catchup_left: 0,
+            catchup_options: Vec::new(),
         }
     }
 
     pub fn step(&mut self, content: &Content, input: PlayerInput) {
+        let mut inputs = vec![PlayerInput::default(); self.players.len().max(1)];
+        if !inputs.is_empty() {
+            inputs[0] = input;
+        }
+        self.step_peers(content, &inputs);
+    }
+
+    pub fn step_peers(&mut self, content: &Content, inputs: &[PlayerInput]) {
         self.sounds.clear();
         self.stops.clear();
         self.pings.clear();
@@ -474,10 +525,14 @@ impl Sim {
             return;
         }
 
+        let dt = SIM_DT;
+        self.tick_slot_holds(content, dt);
+
         if let Phase::Upgrade { options } = &self.phase {
-            if let Some(choice) = input.upgrade_choice {
+            let choice = inputs.first().and_then(|input| input.upgrade_choice);
+            if let Some(choice) = choice {
                 if let Some(id) = options.get(choice as usize).cloned() {
-                    self.grant_upgrade(content, &id);
+                    self.grant_upgrade(content, 0, &id);
                     let next = self.director.wave.saturating_add(1);
                     let now = content.combat_loop_id(self.director.wave, self.endless_mode);
                     let upcoming = content.combat_loop_id(next, self.endless_mode);
@@ -490,13 +545,19 @@ impl Sim {
                         left: content.waves.budget.breather_seconds,
                     };
                     self.spawn_breather_pickups(content);
+                    self.flush_pending_joins(content);
                 }
             }
+            self.apply_catchup_inputs(content, inputs);
             return;
         }
 
-        let dt = SIM_DT;
-        self.tick_player(content, input, dt);
+        self.apply_catchup_inputs(content, inputs);
+        let seats = self.players.len();
+        for seat in 0..seats {
+            let input = inputs.get(seat).copied().unwrap_or_default();
+            self.tick_player(content, seat, input, dt);
+        }
         self.note_perches(content, dt);
         if !matches!(self.phase, Phase::Combat) {
             self.tick_breather(content, dt);
@@ -506,7 +567,10 @@ impl Sim {
         launch_pending_shots(self, content);
         self.rebuild_grid(content);
         self.tick_melee(content);
-        self.tick_weapons(content, input, dt);
+        for seat in 0..self.players.len() {
+            let input = inputs.get(seat).copied().unwrap_or_default();
+            self.tick_weapons(content, seat, input, dt);
+        }
         self.tick_projectiles(content, dt);
         self.tick_drones(content, dt);
         self.tick_pickups(content);
@@ -514,7 +578,11 @@ impl Sim {
         self.tick_vents(content, dt);
         self.tick_spawner(content, dt);
         self.reap(content);
-        self.tick_downed(content, input.interact_held, dt);
+        for seat in 0..self.players.len() {
+            let input = inputs.get(seat).copied().unwrap_or_default();
+            self.tick_downed(content, seat, input.interact_held, inputs, dt);
+        }
+        self.squad_wipe(content);
         self.emit_crowd();
         self.finish_wave(content);
     }
@@ -534,7 +602,12 @@ impl Sim {
         if self.director.wave == 0 {
             self.director.wave = 1;
         }
+        if content.coop.budget_rescale == "next_wave" {
+            let connected = self.connected_count().max(1) as u32;
+            self.player_count = connected;
+        }
         let wave_n = self.director.wave;
+        self.credit_round(content, wave_n);
         let budget = wave_budget(
             &content.waves.budget,
             wave_n,
@@ -564,6 +637,249 @@ impl Sim {
         }
     }
 
+    pub fn connected_count(&self) -> usize {
+        self.players.iter().filter(|player| player.connected).count()
+    }
+
+    pub fn lobby_ready(&self, content: &Content) -> bool {
+        self.connected_count() >= content.coop.min_players.max(1) as usize
+    }
+
+    /// Queue or spawn a joiner. The token is stable even while the seat waits for a breather.
+    pub fn request_join(&mut self, content: &Content) -> Result<u64, String> {
+        if matches!(self.phase, Phase::Victory | Phase::Defeat) {
+            return Err("match already ended".into());
+        }
+        if self.occupied_seats() >= content.coop.max_players as usize {
+            return Err("lobby full".into());
+        }
+        let token = self.next_token.max(2);
+        self.next_token = token.saturating_add(1);
+        if self.join_spawns_now() {
+            self.spawn_joiner(content, token);
+        } else if content.coop.join_allowed_during == "breather_only" {
+            self.pending_joins.push(PendingJoin { token });
+        } else {
+            return Err(format!(
+                "join is not implemented for {}",
+                content.coop.join_allowed_during
+            ));
+        }
+        Ok(token)
+    }
+
+    pub fn disconnect_token(&mut self, content: &Content, token: u64) -> Result<(), String> {
+        if let Some(index) = self.pending_joins.iter().position(|join| join.token == token) {
+            self.pending_joins.remove(index);
+            return Ok(());
+        }
+        let seat = self.seat_by_token(token)?;
+        if self.players[seat].is_host && content.coop.host_leave == "match_ends_rounds_kept" {
+            self.players[seat].connected = false;
+            self.phase = Phase::Defeat;
+            self.music.push(MusicMoment::MatchEnd);
+            return Ok(());
+        }
+        self.players[seat].connected = false;
+        self.players[seat].hold_left = content.coop.slot_hold_seconds;
+        Ok(())
+    }
+
+    pub fn reconnect_token(&mut self, content: &Content, token: u64) -> Result<usize, String> {
+        let seat = self.seat_by_token(token)?;
+        if self.players[seat].connected {
+            return Ok(seat);
+        }
+        if self.players[seat].hold_left <= 0.0 {
+            return Err("slot expired".into());
+        }
+        let pos = if content.coop.downed_on_return {
+            self.players[seat].pos
+        } else {
+            self.squad_centroid(content, Some(seat))
+        };
+        let player = &mut self.players[seat];
+        player.connected = true;
+        player.hold_left = 0.0;
+        if !content.coop.downed_on_return {
+            player.alive = true;
+            player.downed = false;
+            player.hp = player.max_hp;
+            player.bleedout = content.controller.downed.bleedout_time;
+            player.revive_progress = 0.0;
+            player.self_revive_held = 0.0;
+            player.pos = pos;
+        }
+        Ok(seat)
+    }
+
+    pub fn choose_catchup(&mut self, content: &Content, token: u64, choice: u8) -> Result<(), String> {
+        let seat = self.seat_by_token(token)?;
+        if self.players[seat].catchup_left == 0 {
+            return Err("no catch-up picks left".into());
+        }
+        let id = self.players[seat]
+            .catchup_options
+            .get(choice as usize)
+            .cloned()
+            .ok_or_else(|| "catch-up choice is out of range".to_string())?;
+        self.grant_upgrade(content, seat, &id);
+        let left = self.players[seat].catchup_left.saturating_sub(1);
+        self.players[seat].catchup_left = left;
+        if left == 0 {
+            self.players[seat].catchup_options.clear();
+            return Ok(());
+        }
+        let owned = self.players[seat].upgrades.clone();
+        let count = content.coop.catchup_pick_count as usize;
+        self.players[seat].catchup_options = upgrade::roll_offers(&mut self.rng, content, &owned, count);
+        Ok(())
+    }
+
+    fn occupied_seats(&self) -> usize {
+        self.players
+            .iter()
+            .filter(|player| player.connected || player.hold_left > 0.0)
+            .count()
+            + self.pending_joins.len()
+    }
+
+    fn seat_by_token(&self, token: u64) -> Result<usize, String> {
+        self.players
+            .iter()
+            .position(|player| player.token == token)
+            .ok_or_else(|| format!("unknown token {token}"))
+    }
+
+    fn join_spawns_now(&self) -> bool {
+        matches!(self.phase, Phase::Breather { .. } | Phase::Upgrade { .. })
+    }
+
+    fn spawn_joiner(&mut self, content: &Content, token: u64) {
+        let picks = if content.coop.upgrade_catchup == "match_lowest" {
+            self.lowest_upgrade_stacks()
+        } else {
+            0
+        };
+        let mut player = self.make_player(content, token, false);
+        player.pos = self.squad_centroid(content, None);
+        player.catchup_left = picks;
+        if picks > 0 {
+            let count = content.coop.catchup_pick_count as usize;
+            player.catchup_options = upgrade::roll_offers(&mut self.rng, content, &player.upgrades, count);
+        }
+        self.players.push(player);
+    }
+
+    fn lowest_upgrade_stacks(&self) -> u32 {
+        self.players
+            .iter()
+            .filter(|player| player.connected)
+            .map(|player| player.upgrades.values().copied().sum::<u32>())
+            .min()
+            .unwrap_or(0)
+    }
+
+    fn flush_pending_joins(&mut self, content: &Content) {
+        let pending = std::mem::take(&mut self.pending_joins);
+        for join in pending {
+            self.spawn_joiner(content, join.token);
+        }
+    }
+
+    fn squad_centroid(&self, content: &Content, except: Option<usize>) -> Vec3 {
+        let mut count = 0.0;
+        let mut acc = Vec3::ZERO;
+        for (index, player) in self.players.iter().enumerate() {
+            if Some(index) == except || !player.connected {
+                continue;
+            }
+            acc += player.pos;
+            count += 1.0;
+        }
+        if count > 0.0 {
+            acc * (1.0 / count)
+        } else {
+            content.arena.player_spawn
+        }
+    }
+
+    fn tick_slot_holds(&mut self, content: &Content, dt: f32) {
+        let mut drop = Vec::new();
+        for (index, player) in self.players.iter_mut().enumerate() {
+            if player.connected || player.hold_left <= 0.0 {
+                continue;
+            }
+            player.hold_left = (player.hold_left - dt).max(0.0);
+            if player.hold_left <= 0.0 {
+                drop.push(index);
+            }
+        }
+        for index in drop.into_iter().rev() {
+            self.drop_seat(content, index);
+        }
+    }
+
+    fn drop_seat(&mut self, content: &Content, index: usize) {
+        let token = self.players[index].token;
+        if !content.coop.leave_keeps_earned {
+            self.credits.remove(&token);
+        }
+        self.players.remove(index);
+    }
+
+    fn credit_round(&mut self, content: &Content, wave: u32) {
+        if content.coop.currency_credit != "per_round_present" {
+            return;
+        }
+        let tokens: Vec<u64> = self
+            .players
+            .iter()
+            .filter(|player| player.connected)
+            .map(|player| player.token)
+            .collect();
+        for token in tokens {
+            let entry = self.credits.entry(token).or_default();
+            if !entry.contains(&wave) {
+                entry.push(wave);
+            }
+        }
+    }
+
+    fn apply_catchup_inputs(&mut self, content: &Content, inputs: &[PlayerInput]) {
+        let choices: Vec<(u64, u8)> = self
+            .players
+            .iter()
+            .enumerate()
+            .filter_map(|(seat, player)| {
+                if player.catchup_left == 0 {
+                    return None;
+                }
+                if seat == 0 && matches!(self.phase, Phase::Upgrade { .. }) {
+                    return None;
+                }
+                inputs.get(seat).and_then(|input| input.upgrade_choice).map(|choice| (player.token, choice))
+            })
+            .collect();
+        for (token, choice) in choices {
+            let _ = self.choose_catchup(content, token, choice);
+        }
+    }
+
+    fn squad_wipe(&mut self, content: &Content) {
+        if content.coop.squad_wipe != "all_downed" {
+            return;
+        }
+        let connected: Vec<&Player> = self.players.iter().filter(|player| player.connected).collect();
+        if connected.len() < 2 {
+            return;
+        }
+        if connected.iter().all(|player| !player.alive || player.downed) {
+            self.phase = Phase::Defeat;
+            self.music.push(MusicMoment::MatchEnd);
+        }
+    }
+
     /// Move unspent budget into the queue, capped at one wave of *this* wave's budget.
     pub fn park_budget(&mut self, queue_cap_waves: f32) {
         let cap = (queue_cap_waves * self.director.wave_budget).max(0.0);
@@ -574,11 +890,11 @@ impl Sim {
         self.director.parked = true;
     }
 
-    fn tick_player(&mut self, content: &Content, input: PlayerInput, dt: f32) {
-        let Some(player) = self.players.first_mut() else {
+    fn tick_player(&mut self, content: &Content, seat: usize, input: PlayerInput, dt: f32) {
+        let Some(player) = self.players.get_mut(seat) else {
             return;
         };
-        if !player.alive {
+        if !player.alive || !player.connected {
             return;
         }
         let mods = upgrade::collect(content, &player.upgrades);
@@ -733,8 +1049,10 @@ impl Sim {
         if just_landed {
             self.landed_pulse = 1.0;
             let radius = mods.landing_knockback_radius_m;
+            let origin = player.pos;
+            let owner = player.id;
             if radius > 0.0 {
-                self.shockwave(content, radius);
+                self.shockwave(content, origin, radius, owner);
             }
         }
         let _ = was_grounded;
@@ -744,8 +1062,7 @@ impl Sim {
         }
     }
 
-    fn shockwave(&mut self, content: &Content, radius: f32) {
-        let origin = self.players[0].pos;
+    fn shockwave(&mut self, content: &Content, origin: Vec3, radius: f32, owner: u32) {
         let dmg = content.combat.shockwave_damage;
         let impulse = content.combat.shockwave_impulse;
         for enemy in &mut self.enemies {
@@ -767,12 +1084,24 @@ impl Sim {
             enemy.vel.x += push.x;
             enemy.vel.z += push.z;
             enemy.hp -= dmg;
+            if owner != 0 {
+                enemy.last_hit_by = owner;
+            }
         }
     }
 
     fn tick_enemies(&mut self, content: &Content, dt: f32) {
-        let player_pos = self.players.first().map(|p| p.pos).unwrap_or(Vec3::ZERO);
-        let player_alive = self.players.first().map(|p| p.alive && !p.downed).unwrap_or(false);
+        let player_alive = self
+            .players
+            .iter()
+            .any(|player| player.connected && player.alive && !player.downed);
+        let player_pos = self
+            .players
+            .iter()
+            .find(|player| player.connected && player.alive && !player.downed)
+            .or_else(|| self.players.first())
+            .map(|player| player.pos)
+            .unwrap_or(Vec3::ZERO);
         self.rebuild_grid(content);
         let separation = content.combat.separation_radius;
         let mut pushes = vec![Vec3::ZERO; self.enemies.len()];
@@ -851,21 +1180,33 @@ impl Sim {
     }
 
     fn tick_melee(&mut self, content: &Content) {
-        let Some(player) = self.players.first() else {
-            return;
-        };
-        if !player.alive {
+        let targets: Vec<(usize, Vec3)> = self
+            .players
+            .iter()
+            .enumerate()
+            .filter(|(_, player)| player.connected && player.alive)
+            .map(|(seat, player)| (seat, player.pos))
+            .collect();
+        if targets.is_empty() {
             return;
         }
-        let player_pos = player.pos;
         let player_r = content.combat.hit_radius.player;
-        let mut hits: Vec<(f32, bool)> = Vec::new();
+        let mut hits: Vec<(usize, f32, bool)> = Vec::new();
         for enemy in &mut self.enemies {
             if !enemy.alive || enemy.attack_cd > 0.0 {
                 continue;
             }
             let reach = hit_radius_of(content, enemy.kind) + player_r + 0.15;
-            let dist = Vec3::new(enemy.pos.x - player_pos.x, 0.0, enemy.pos.z - player_pos.z).length();
+            let mut best: Option<(usize, f32)> = None;
+            for (seat, pos) in &targets {
+                let dist = Vec3::new(enemy.pos.x - pos.x, 0.0, enemy.pos.z - pos.z).length();
+                if best.map(|(_, so_far)| dist < so_far).unwrap_or(true) {
+                    best = Some((*seat, dist));
+                }
+            }
+            let Some((seat, dist)) = best else {
+                continue;
+            };
             let lunging = matches!(enemy.ai, AiState::Lunge { .. });
             let melee_kind = matches!(
                 enemy.kind,
@@ -873,8 +1214,7 @@ impl Sim {
             );
             if melee_kind && (lunging || dist < reach) && !matches!(enemy.ai, AiState::Telegraph { .. } | AiState::Recover { .. })
             {
-                let acid = false;
-                hits.push((enemy.contact, acid));
+                hits.push((seat, enemy.contact, false));
                 enemy.attack_cd = match enemy.kind {
                     EnemyKind::Swarmer => content.combat.swarmer_melee_interval,
                     EnemyKind::Brute => content.combat.brute_cooldown,
@@ -882,31 +1222,34 @@ impl Sim {
                 };
             }
         }
-        for (dmg, acid) in hits {
-            self.hurt_player(content, dmg, acid);
+        for (seat, dmg, acid) in hits {
+            self.hurt_player(content, seat, dmg, acid);
         }
     }
 
-    fn tick_weapons(&mut self, content: &Content, input: PlayerInput, dt: f32) {
+    fn tick_weapons(&mut self, content: &Content, seat: usize, input: PlayerInput, dt: f32) {
+        if self.players.get(seat).map(|player| !player.connected || !player.alive).unwrap_or(true) {
+            return;
+        }
         let mods = {
-            let player = &self.players[0];
+            let player = &self.players[seat];
             upgrade::collect(content, &player.upgrades)
         };
         {
-            let player = &mut self.players[0];
+            let player = &mut self.players[seat];
             player.primary.cooldown = (player.primary.cooldown - dt).max(0.0);
             player.sidearm.cooldown = (player.sidearm.cooldown - dt).max(0.0);
             tick_reload(&mut player.primary, dt);
             tick_reload(&mut player.sidearm, dt);
         }
         if input.reload {
-            self.arm_reload(content, &mods, self.players[0].downed);
+            self.arm_reload(content, seat, &mods, self.players[seat].downed);
         }
-        if input.ability && self.players[0].ability_cd <= 0.0 && !self.players[0].downed {
-            self.cast_ability(content, &mods);
+        if input.ability && self.players[seat].ability_cd <= 0.0 && !self.players[seat].downed {
+            self.cast_ability(content, seat, &mods);
         }
         let (alive, downed, sprinting, lock, weapon_id) = {
-            let player = &self.players[0];
+            let player = &self.players[seat];
             let downed = player.downed;
             let weapon_id = if downed {
                 player.sidearm.weapon_id.clone()
@@ -935,9 +1278,9 @@ impl Sim {
         };
         let (busy, empty) = {
             let gun = if downed {
-                &self.players[0].sidearm
+                &self.players[seat].sidearm
             } else {
-                &self.players[0].primary
+                &self.players[seat].primary
             };
             (gun.reload > 0.0 || gun.cooldown > 0.0, gun.ammo == 0)
         };
@@ -945,17 +1288,17 @@ impl Sim {
             return;
         }
         if empty {
-            self.arm_reload(content, &mods, downed);
+            self.arm_reload(content, seat, &mods, downed);
             return;
         }
-        let overdrive = self.players[0].overdrive_left > 0.0;
+        let overdrive = self.players[seat].overdrive_left > 0.0;
         let infinite = overdrive && content.hero.infinite_magazine;
         let rate = if overdrive { content.hero.overdrive_fire_rate } else { 0.0 };
         {
             let gun = if downed {
-                &mut self.players[0].sidearm
+                &mut self.players[seat].sidearm
             } else {
-                &mut self.players[0].primary
+                &mut self.players[seat].primary
             };
             if !infinite {
                 gun.ammo -= 1;
@@ -963,24 +1306,25 @@ impl Sim {
             gun.cooldown = spec.fire_interval / (1.0 + mods.fire_rate_pct + rate).max(0.05);
         }
         let kind = if downed { ShotKind::Sidearm } else { ShotKind::Coil };
-        self.spawn_player_shot(content, &spec, &mods, kind);
+        self.spawn_player_shot(content, seat, &spec, &mods, kind);
     }
 
     fn spawn_player_shot(
         &mut self,
         content: &Content,
+        seat: usize,
         spec: &WeaponDef,
         mods: &Modifiers,
         kind: ShotKind,
     ) {
         let (mut dir, eye, origin_base, owner) = {
-            let player = &self.players[0];
+            let player = &self.players[seat];
             let eye = content.view_eye(player.crouching || player.downed);
             (look_dir(player.yaw, player.pitch), eye, player.pos, player.id)
         };
         if spec.spread > 0.0 {
-            let yaw = self.players[0].yaw + (self.rng.next_f32() - 0.5) * 2.0 * spec.spread;
-            let pitch = self.players[0].pitch + (self.rng.next_f32() - 0.5) * 2.0 * spec.spread;
+            let yaw = self.players[seat].yaw + (self.rng.next_f32() - 0.5) * 2.0 * spec.spread;
+            let pitch = self.players[seat].pitch + (self.rng.next_f32() - 0.5) * 2.0 * spec.spread;
             dir = look_dir(yaw, pitch);
         }
         let origin = origin_base + Vec3::new(0.0, eye, 0.0) + dir * 0.4;
@@ -1015,12 +1359,12 @@ impl Sim {
         });
     }
 
-    fn cast_ability(&mut self, content: &Content, mods: &Modifiers) {
+    fn cast_ability(&mut self, content: &Content, seat: usize, mods: &Modifiers) {
         let cdr = mods.ability_cooldown_reduction.clamp(0.0, 0.95);
         let hero = &content.hero;
-        self.players[0].ability_cd = hero.ability_cooldown * (1.0 - cdr);
-        self.players[0].overdrive_left = hero.overdrive_duration;
-        let origin = self.players[0].pos;
+        self.players[seat].ability_cd = hero.ability_cooldown * (1.0 - cdr);
+        self.players[seat].overdrive_left = hero.overdrive_duration;
+        let origin = self.players[seat].pos;
         let id = format!("{}_ability", hero.id);
         self.sound_at(&id, origin);
     }
@@ -1034,6 +1378,10 @@ impl Sim {
             let team = self.projectiles[i].team;
             let blocked = content.arena.blocks_shot(p0, p1) || p1.y < 0.0 || p1.y > 40.0;
             if team == Team::Player {
+                if content.coop.friendly_fire && self.player_shot_hits_player(content, i, p0, p1) {
+                    self.projectiles.swap_remove(i);
+                    continue;
+                }
                 let hits = gather_enemy_hits(content, &self.enemies, &self.projectiles[i], p0, p1);
                 let mut remove = blocked;
                 if !hits.is_empty() {
@@ -1061,7 +1409,9 @@ impl Sim {
     }
 
     fn apply_player_hits(&mut self, content: &Content, proj_index: usize, hits: &[(usize, f32, HitSpot)]) -> bool {
-        let mods = upgrade::collect(content, &self.players[0].upgrades);
+        let owner = self.projectiles[proj_index].owner;
+        let seat = self.players.iter().position(|player| player.id == owner).unwrap_or(0);
+        let mods = upgrade::collect(content, &self.players[seat].upgrades);
         let mut remove = false;
         for &(enemy_index, _t, spot) in hits {
             let enemy_id = self.enemies[enemy_index].id;
@@ -1096,6 +1446,7 @@ impl Sim {
                         self.enemies[enemy_index].tail_broken = true;
                     }
                     self.enemies[enemy_index].hp -= dmg;
+                    self.enemies[enemy_index].last_hit_by = owner;
                     ping_pos = self.enemies[enemy_index].pos;
                 }
                 HitSpot::Weak => {
@@ -1128,6 +1479,7 @@ impl Sim {
                         self.sound_owned(&pop_id, pos, enemy_id);
                     }
                     self.enemies[enemy_index].hp -= dmg;
+                    self.enemies[enemy_index].last_hit_by = owner;
                     ping_pos = weak_world(content, &self.enemies[enemy_index]);
                 }
                 HitSpot::Body => {
@@ -1138,6 +1490,7 @@ impl Sim {
                         dmg *= armor;
                     }
                     self.enemies[enemy_index].hp -= dmg;
+                    self.enemies[enemy_index].last_hit_by = owner;
                 }
             }
             self.projectiles[proj_index].hit.push(enemy_id);
@@ -1153,7 +1506,7 @@ impl Sim {
                 self.sound_at("hit", ping_pos);
             }
             if !matches!(spot, HitSpot::Pod(_)) {
-                self.try_chain(content, &mods, enemy_index, dmg);
+                self.try_chain(content, &mods, enemy_index, dmg, owner);
             }
             if self.projectiles[proj_index].pierce > 0 {
                 self.projectiles[proj_index].pierce -= 1;
@@ -1170,7 +1523,7 @@ impl Sim {
         remove
     }
 
-    fn try_chain(&mut self, content: &Content, mods: &Modifiers, from: usize, damage: f32) {
+    fn try_chain(&mut self, content: &Content, mods: &Modifiers, from: usize, damage: f32, owner: u32) {
         if mods.arc_proc_chance <= 0.0 || self.rng.next_f32() > mods.arc_proc_chance {
             return;
         }
@@ -1187,6 +1540,9 @@ impl Sim {
         let arc = content.combat.chain_damage_pct * damage;
         for idx in near.into_iter().take(content.combat.chain_targets as usize) {
             self.enemies[idx].hp -= arc;
+            if owner != 0 {
+                self.enemies[idx].last_hit_by = owner;
+            }
         }
     }
 
@@ -1218,26 +1574,60 @@ impl Sim {
         true
     }
 
-    fn acid_hits_player(&mut self, content: &Content, proj_index: usize, p0: Vec3, p1: Vec3) -> bool {
-        let player = &self.players[0];
-        if !player.alive {
-            return true;
-        }
-        let center = player.pos + Vec3::new(0.0, content.view_eye(false) * 0.5, 0.0);
+    fn player_shot_hits_player(&mut self, content: &Content, proj_index: usize, p0: Vec3, p1: Vec3) -> bool {
+        let owner = self.projectiles[proj_index].owner;
         let radius = content.combat.hit_radius.player + self.projectiles[proj_index].radius;
-        if segment_hits_sphere(p0, p1, center, radius).is_some() {
-            let dmg = self.projectiles[proj_index].damage;
-            let ward = self.projectiles[proj_index].acid_ward;
-            self.hurt_player(content, dmg, ward);
+        let dmg = self.projectiles[proj_index].damage;
+        let mut hit_seat = None;
+        for (seat, player) in self.players.iter().enumerate() {
+            if !player.connected || !player.alive || player.id == owner {
+                continue;
+            }
+            let center = player.pos + Vec3::new(0.0, content.view_eye(false) * 0.5, 0.0);
+            if segment_hits_sphere(p0, p1, center, radius).is_some() {
+                hit_seat = Some(seat);
+                break;
+            }
+        }
+        if let Some(seat) = hit_seat {
+            self.hurt_player(content, seat, dmg, false);
             true
         } else {
             false
         }
     }
 
-    fn hurt_player(&mut self, content: &Content, mut amount: f32, acid_ward: bool) {
-        let player = &mut self.players[0];
-        if !player.alive || player.invuln > 0.0 || amount <= 0.0 {
+    fn acid_hits_player(&mut self, content: &Content, proj_index: usize, p0: Vec3, p1: Vec3) -> bool {
+        let radius = content.combat.hit_radius.player + self.projectiles[proj_index].radius;
+        let dmg = self.projectiles[proj_index].damage;
+        let ward = self.projectiles[proj_index].acid_ward;
+        let mut hit_seat = None;
+        let mut any_living = false;
+        for (seat, player) in self.players.iter().enumerate() {
+            if !player.connected || !player.alive {
+                continue;
+            }
+            any_living = true;
+            let center = player.pos + Vec3::new(0.0, content.view_eye(false) * 0.5, 0.0);
+            if segment_hits_sphere(p0, p1, center, radius).is_some() {
+                hit_seat = Some(seat);
+                break;
+            }
+        }
+        if let Some(seat) = hit_seat {
+            self.hurt_player(content, seat, dmg, ward);
+            true
+        } else {
+            !any_living
+        }
+    }
+
+    fn hurt_player(&mut self, content: &Content, seat: usize, mut amount: f32, acid_ward: bool) {
+        let solo = self.connected_count() <= 1;
+        let Some(player) = self.players.get_mut(seat) else {
+            return;
+        };
+        if !player.connected || !player.alive || player.invuln > 0.0 || amount <= 0.0 {
             return;
         }
         if acid_ward {
@@ -1265,7 +1655,6 @@ impl Sim {
             if player.hp <= 0.0 {
                 player.hp = 0.0;
                 if !player.downed {
-                    let solo = self.player_count <= 1;
                     let used = player.self_revives_used;
                     let cap = content.controller.downed.solo_self_revives_per_wave;
                     player.sprinting = false;
@@ -1293,16 +1682,25 @@ impl Sim {
     }
 
     fn tick_drones(&mut self, content: &Content, dt: f32) {
-        let mods = upgrade::collect(content, &self.players[0].upgrades);
+        for seat in 0..self.players.len() {
+            self.tick_seat_drones(content, seat, dt);
+        }
+    }
+
+    fn tick_seat_drones(&mut self, content: &Content, seat: usize, dt: f32) {
+        if !self.players[seat].connected || !self.players[seat].alive {
+            return;
+        }
+        let mods = upgrade::collect(content, &self.players[seat].upgrades);
         let count = mods.drone_count.round().max(0.0) as i32;
         if count <= 0 {
             return;
         }
-        self.players[0].drone_angle += content.combat.drone_orbit_speed * dt;
-        let origin = self.players[0].pos;
+        self.players[seat].drone_angle += content.combat.drone_orbit_speed * dt;
+        let origin = self.players[seat].pos;
         let dps = content.combat.drone_dps * dt;
         for i in 0..count {
-            let ang = self.players[0].drone_angle
+            let ang = self.players[seat].drone_angle
                 + i as f32 * std::f32::consts::TAU / count as f32;
             let pos = origin
                 + Vec3::new(
@@ -1322,20 +1720,32 @@ impl Sim {
             }
             if let Some((idx, _)) = best {
                 self.enemies[idx].hp -= dps;
+                self.enemies[idx].last_hit_by = self.players[seat].id;
             }
         }
     }
 
     fn tick_pickups(&mut self, content: &Content) {
-        let mods = upgrade::collect(content, &self.players[0].upgrades);
-        let radius = content.combat.pickup_base_radius * (1.0 + mods.pickup_radius_pct);
-        let pos = self.players[0].pos;
         let mut i = 0;
         while i < self.pickups.len() {
-            let d = Vec3::new(self.pickups[i].pos.x - pos.x, 0.0, self.pickups[i].pos.z - pos.z).length();
-            if d <= radius {
-                self.players[0].primary.reserve += self.pickups[i].ammo;
-                self.sound_at("pickup", self.pickups[i].pos);
+            let mut taken = None;
+            for seat in 0..self.players.len() {
+                if !self.players[seat].connected || !self.players[seat].alive {
+                    continue;
+                }
+                let mods = upgrade::collect(content, &self.players[seat].upgrades);
+                let radius = content.combat.pickup_base_radius * (1.0 + mods.pickup_radius_pct);
+                let pos = self.players[seat].pos;
+                let pickup = self.pickups[i].pos;
+                let d = Vec3::new(pickup.x - pos.x, 0.0, pickup.z - pos.z).length();
+                if d <= radius {
+                    taken = Some((seat, pickup, self.pickups[i].ammo));
+                    break;
+                }
+            }
+            if let Some((seat, pos, ammo)) = taken {
+                self.players[seat].primary.reserve += ammo;
+                self.sound_at("pickup", pos);
                 self.pickups.swap_remove(i);
             } else {
                 i += 1;
@@ -1578,13 +1988,22 @@ impl Sim {
                 }
             }
         }
-        let player = self.players.first().map(|p| p.pos).unwrap_or(Vec3::ZERO);
-        let dist = Vec3::new(player.x - origin.x, 0.0, player.z - origin.z).length();
+        let nearest = self
+            .players
+            .iter()
+            .enumerate()
+            .filter(|(_, player)| player.connected && player.alive)
+            .map(|(seat, player)| {
+                let dist = Vec3::new(player.pos.x - origin.x, 0.0, player.pos.z - origin.z).length();
+                (dist, seat)
+            })
+            .min_by(|left, right| left.0.total_cmp(&right.0));
+        let (dist, seat) = nearest.unwrap_or((f32::MAX, 0));
         if scythe_ready && dist <= row.scythe_range {
             let dmg = row.scythe_damage;
             let id = def.scythe_sfx.clone();
             self.enemies[index].scythe_cd = row.scythe_interval;
-            if let Some(player) = self.players.first_mut() {
+            if let Some(player) = self.players.get_mut(seat) {
                 if player.alive && player.invuln <= 0.0 {
                     player.hp -= dmg;
                 }
@@ -1714,7 +2133,10 @@ impl Sim {
     }
 
     fn all_perched(&self, content: &Content) -> bool {
-        let alive = self.players.iter().filter(|player| player.alive && !player.downed);
+        let alive = self
+            .players
+            .iter()
+            .filter(|player| player.connected && player.alive && !player.downed);
         let mut any = false;
         for player in alive {
             any = true;
@@ -1731,7 +2153,7 @@ impl Sim {
         }
         let mut best: Option<(f32, Vec3)> = None;
         for player in &self.players {
-            if !player.alive || !player.grounded || content.arena.on_perch(player.pos) {
+            if !player.connected || !player.alive || !player.grounded || content.arena.on_perch(player.pos) {
                 continue;
             }
             let d = Vec3::new(player.pos.x - from.x, 0.0, player.pos.z - from.z).length();
@@ -1821,6 +2243,7 @@ impl Sim {
             reinforce_warn: 0.0,
             cue: EnemyCue::None,
             climbing: false,
+            last_hit_by: 0,
         });
     }
 
@@ -1887,6 +2310,7 @@ impl Sim {
             reinforce_warn: 0.0,
             cue: EnemyCue::None,
             climbing: false,
+            last_hit_by: 0,
         });
         let _ = dmg;
         if !def.intro_sfx.is_empty() {
@@ -1924,27 +2348,36 @@ impl Sim {
         if boss_id.is_some() {
             self.boss_kills += 1;
         }
-        let mods = upgrade::collect(content, &self.players[0].upgrades);
-        if self.players[0].overdrive_left > 0.0 {
-            self.players[0].ability_cd = (self.players[0].ability_cd - content.hero.kill_cd_refund).max(0.0);
-        }
-        if mods.heal_per_kill_flat > 0.0 {
-            self.players[0].hp = (self.players[0].hp + mods.heal_per_kill_flat).min(self.players[0].max_hp);
-        }
-        if mods.nova_kill_interval > 0.0 {
-            self.players[0].kills_since_nova += 1;
-            if self.players[0].kills_since_nova as f32 >= mods.nova_kill_interval {
-                self.players[0].kills_since_nova = 0;
-                self.nova(content, pos);
+        let killer = self.enemies[index].last_hit_by;
+        let seat = self.players.iter().position(|player| player.id == killer);
+        if let Some(seat) = seat {
+            let player = &self.players[seat];
+            let mods = upgrade::collect(content, &player.upgrades);
+            let overdrive = player.overdrive_left > 0.0;
+            let heal = mods.heal_per_kill_flat;
+            let nova_every = mods.nova_kill_interval;
+            let ammo_chance = mods.ammo_drop_chance;
+            if overdrive {
+                self.players[seat].ability_cd = (self.players[seat].ability_cd - content.hero.kill_cd_refund).max(0.0);
             }
-        }
-        if mods.ammo_drop_chance > 0.0 && self.rng.next_f32() < mods.ammo_drop_chance {
-            let id = self.alloc_id();
-            self.pickups.push(Pickup {
-                id,
-                pos,
-                ammo: content.combat.ammo_pickup_amount,
-            });
+            if heal > 0.0 {
+                self.players[seat].hp = (self.players[seat].hp + heal).min(self.players[seat].max_hp);
+            }
+            if nova_every > 0.0 {
+                self.players[seat].kills_since_nova += 1;
+                if self.players[seat].kills_since_nova as f32 >= nova_every {
+                    self.players[seat].kills_since_nova = 0;
+                    self.nova(content, pos, killer);
+                }
+            }
+            if ammo_chance > 0.0 && self.rng.next_f32() < ammo_chance {
+                let id = self.alloc_id();
+                self.pickups.push(Pickup {
+                    id,
+                    pos,
+                    ammo: content.combat.ammo_pickup_amount,
+                });
+            }
         }
         if let Some(boss_id) = boss_id {
             if let Some(def) = content.boss(boss_id) {
@@ -1961,7 +2394,7 @@ impl Sim {
         }
     }
 
-    fn nova(&mut self, content: &Content, pos: Vec3) {
+    fn nova(&mut self, content: &Content, pos: Vec3, owner: u32) {
         let radius = content.combat.nova_radius;
         let dmg = content.combat.nova_damage;
         for enemy in &mut self.enemies {
@@ -1971,18 +2404,52 @@ impl Sim {
             let d = Vec3::new(enemy.pos.x - pos.x, 0.0, enemy.pos.z - pos.z).length();
             if d <= radius {
                 enemy.hp -= dmg;
+                if owner != 0 {
+                    enemy.last_hit_by = owner;
+                }
             }
         }
     }
 
-    fn tick_downed(&mut self, content: &Content, interact_held: bool, dt: f32) {
-        let solo = self.player_count <= 1;
-        let cap = content.controller.downed.solo_self_revives_per_wave;
-        let hold_needed = content.controller.downed.solo_self_revive_time;
-        let player = &mut self.players[0];
-        if !player.downed || !player.alive {
+    fn tick_downed(
+        &mut self,
+        content: &Content,
+        seat: usize,
+        interact_held: bool,
+        inputs: &[PlayerInput],
+        dt: f32,
+    ) {
+        if self
+            .players
+            .get(seat)
+            .map(|player| !player.connected || !player.downed || !player.alive)
+            .unwrap_or(true)
+        {
             return;
         }
+        let solo = self.connected_count() <= 1;
+        let revivers = if solo {
+            0
+        } else {
+            self.reviver_count(content, seat, inputs)
+        };
+        if revivers > 0 {
+            let extra = revivers.saturating_sub(1).min(content.coop.max_extra_revivers);
+            let speed = 1.0 + content.coop.multi_reviver_speedup * extra as f32;
+            self.players[seat].revive_progress += dt * speed;
+            if !content.coop.bleedout_pause_while_reviving {
+                self.players[seat].bleedout -= dt;
+            }
+            if self.players[seat].revive_progress >= content.controller.downed.revive_time {
+                let frac = content.controller.downed.solo_self_revive_hp_fraction;
+                self.finish_team_revive(content, seat, frac);
+            }
+            return;
+        }
+        self.players[seat].revive_progress = 0.0;
+        let cap = content.controller.downed.solo_self_revives_per_wave;
+        let hold_needed = content.controller.downed.solo_self_revive_time;
+        let player = &mut self.players[seat];
         if solo && player.self_revives_used < cap && interact_held {
             player.self_revive_held += dt;
             if player.self_revive_held >= hold_needed {
@@ -2005,10 +2472,37 @@ impl Sim {
             player.hp = 0.0;
         }
         let _ = player;
-        if defeated {
+        if defeated && solo {
             self.phase = Phase::Defeat;
             self.music.push(MusicMoment::MatchEnd);
         }
+    }
+
+    fn reviver_count(&self, content: &Content, downed: usize, inputs: &[PlayerInput]) -> u32 {
+        let pos = self.players[downed].pos;
+        let range = content.combat.revive_range;
+        self.players
+            .iter()
+            .enumerate()
+            .filter(|(seat, player)| {
+                *seat != downed
+                    && player.connected
+                    && player.alive
+                    && !player.downed
+                    && inputs.get(*seat).map(|input| input.interact_held).unwrap_or(false)
+                    && Vec3::new(player.pos.x - pos.x, 0.0, player.pos.z - pos.z).length() <= range
+            })
+            .count() as u32
+    }
+
+    fn finish_team_revive(&mut self, content: &Content, seat: usize, frac: f32) {
+        let player = &mut self.players[seat];
+        player.downed = false;
+        player.revive_progress = 0.0;
+        player.self_revive_held = 0.0;
+        player.invuln = content.controller.downed.revive_invuln;
+        player.hp = (player.max_hp * frac).max(1.0);
+        player.bleedout = content.controller.downed.bleedout_time;
     }
 
     fn emit_crowd(&mut self) {
@@ -2042,8 +2536,10 @@ impl Sim {
         self.phase = Phase::Upgrade { options };
     }
 
-    fn grant_upgrade(&mut self, content: &Content, id: &str) {
-        let player = &mut self.players[0];
+    fn grant_upgrade(&mut self, content: &Content, seat: usize, id: &str) {
+        let Some(player) = self.players.get_mut(seat) else {
+            return;
+        };
         let entry = player.upgrades.entry(id.to_string()).or_insert(0);
         *entry += 1;
         let mods = upgrade::collect(content, &player.upgrades);
@@ -2626,9 +3122,9 @@ fn tick_reload(gun: &mut Gun, dt: f32) {
 }
 
 impl Sim {
-    fn arm_reload(&mut self, content: &Content, mods: &Modifiers, downed: bool) {
+    fn arm_reload(&mut self, content: &Content, seat: usize, mods: &Modifiers, downed: bool) {
         let weapon_id = {
-            let player = &self.players[0];
+            let player = &self.players[seat];
             if downed {
                 player.sidearm.weapon_id.clone()
             } else {
@@ -2639,11 +3135,11 @@ impl Sim {
             return;
         };
         let time = spec.reload_time / (1.0 + mods.reload_speed_pct).max(0.05);
-        let pos = self.players[0].pos;
+        let pos = self.players[seat].pos;
         let gun = if downed {
-            &mut self.players[0].sidearm
+            &mut self.players[seat].sidearm
         } else {
-            &mut self.players[0].primary
+            &mut self.players[seat].primary
         };
         if gun.reload > 0.0 || gun.ammo >= gun.mag_size || gun.reserve == 0 {
             return;

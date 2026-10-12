@@ -61,7 +61,7 @@ pub fn draw(
             }
         }
     }
-    let Some(player) = game.sim.players.first() else { return };
+    let Some(player) = game.local() else { return };
     let teal = color(&game, "hero_teal");
     let white = color(&game, "hero_white");
     let accent_rgb = gemini_sim::content::hex_srgb(&game.content.hero.accent);

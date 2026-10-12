@@ -2,6 +2,8 @@
 
 mod audio;
 mod hud;
+#[cfg(not(target_arch = "wasm32"))]
+mod net;
 mod session;
 mod world;
 
@@ -49,6 +51,7 @@ fn install_match(app: &mut App) {
     app.init_state::<AppState>()
         .insert_resource(session::PendingDifficulty("normal".into()))
         .insert_resource(session::SimClock::default())
+        .insert_resource(session::launch_from_env())
         .add_systems(OnEnter(AppState::Menu), (menu, audio::menu_theme))
         .add_systems(OnExit(AppState::Menu), (despawn_menu, audio::stop_all))
         .add_systems(OnEnter(AppState::Playing), (session::boot, world::scene, audio::boot).chain())
@@ -68,7 +71,7 @@ fn install_match(app: &mut App) {
                 .chain()
                 .run_if(in_state(AppState::Playing)),
         )
-        .add_systems(Update, menu_keys.run_if(in_state(AppState::Menu)));
+        .add_systems(Update, (menu_keys, session::autoplay).run_if(in_state(AppState::Menu)));
 }
 
 #[derive(Component)]

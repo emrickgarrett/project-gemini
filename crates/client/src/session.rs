@@ -23,6 +23,53 @@ pub struct Game {
     pub bob: bool,
     pub dip: f32,
     pub difficulty: String,
+    pub token: u64,
+    pub seat: usize,
+}
+
+#[derive(Resource, Clone)]
+pub enum Launch {
+    Solo,
+    #[cfg(not(target_arch = "wasm32"))]
+    Host(String),
+    #[cfg(not(target_arch = "wasm32"))]
+    Join { addr: String, token: Option<u64> },
+}
+
+#[derive(Resource)]
+pub enum CoopLink {
+    Solo,
+    #[cfg(not(target_arch = "wasm32"))]
+    Host(crate::net::Host),
+    #[cfg(not(target_arch = "wasm32"))]
+    Client(crate::net::Client),
+}
+
+impl Game {
+    pub fn local(&self) -> Option<&gemini_sim::sim::Player> {
+        self.sim
+            .players
+            .iter()
+            .find(|player| player.token == self.token)
+            .or_else(|| self.sim.players.first())
+    }
+}
+
+pub fn launch_from_env() -> Launch {
+    #[cfg(target_arch = "wasm32")]
+    {
+        Launch::Solo
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::net::launch_from_env()
+    }
+}
+
+pub fn autoplay(launch: Res<Launch>, mut next: ResMut<NextState<AppState>>) {
+    if !matches!(*launch, Launch::Solo) {
+        next.set(AppState::Playing);
+    }
 }
 
 #[derive(Resource, Default)]
@@ -58,10 +105,11 @@ impl SimClock {
     }
 }
 
-pub fn boot(mut commands: Commands, pending: Res<PendingDifficulty>, mut clock: ResMut<SimClock>) {
+pub fn boot(mut commands: Commands, pending: Res<PendingDifficulty>, mut clock: ResMut<SimClock>, launch: Res<Launch>) {
     clock.reset();
     let content = Content::embedded();
     let sim = Sim::new(&content, &pending.0, 7);
+    let (sim, token, link) = open_link(&launch, &content, sim);
     let fov = content.controller.camera.fov_default;
     commands.insert_resource(Game {
         content,
@@ -72,14 +120,31 @@ pub fn boot(mut commands: Commands, pending: Res<PendingDifficulty>, mut clock: 
         bob: true,
         dip: 0.0,
         difficulty: pending.0.clone(),
+        token,
+        seat: 0,
     });
+    commands.insert_resource(link);
     commands.insert_resource(FrameFx::default());
+}
+
+fn open_link(launch: &Launch, content: &Content, sim: Sim) -> (Sim, u64, CoopLink) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::net::prepare(launch, content, sim)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (launch, content);
+        let token = sim.players.first().map(|player| player.token).unwrap_or(1);
+        (sim, token, CoopLink::Solo)
+    }
 }
 
 pub fn gather_and_step(
     time: Res<Time>,
     mut clock: ResMut<SimClock>,
     mut game: ResMut<Game>,
+    mut link: ResMut<CoopLink>,
     mut fx: ResMut<FrameFx>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
@@ -212,10 +277,7 @@ pub fn gather_and_step(
     // so keep that cue or the match-start sting never plays.
     fx.sounds.append(&mut game.sim.sounds);
     while clock.acc >= SIM_DT && steps < max_steps {
-        {
-            let Game { sim, content, .. } = &mut *game;
-            sim.step(content, input);
-        }
+        drive(&mut game, &mut link, input);
         fx.sounds.append(&mut game.sim.sounds);
         fx.stops.append(&mut game.sim.stops);
         fx.pings.append(&mut game.sim.pings);
@@ -238,7 +300,7 @@ pub fn gather_and_step(
     }
     fx.tick = game.sim.tick;
     if using_pad {
-        let aim = game.sim.players.first().map(|player| (player.yaw, player.pitch));
+        let aim = game.local().map(|player| (player.yaw, player.pitch));
         if let Some((yaw, pitch)) = aim {
             game.yaw = yaw;
             game.pitch = pitch;
@@ -280,8 +342,22 @@ fn save_bug_stills() {
     }
 }
 
+fn drive(game: &mut Game, link: &mut CoopLink, input: PlayerInput) {
+    match link {
+        CoopLink::Solo => game.sim.step(&game.content, input),
+        #[cfg(not(target_arch = "wasm32"))]
+        CoopLink::Host(host) => host.tick(game, input),
+        #[cfg(not(target_arch = "wasm32"))]
+        CoopLink::Client(client) => client.tick(game, input),
+    }
+    if let Some(seat) = game.sim.players.iter().position(|player| player.token == game.token) {
+        game.seat = seat;
+    }
+}
+
 pub fn shutdown(mut commands: Commands, mut clock: ResMut<SimClock>) {
     clock.reset();
     commands.remove_resource::<Game>();
     commands.remove_resource::<FrameFx>();
+    commands.remove_resource::<CoopLink>();
 }
