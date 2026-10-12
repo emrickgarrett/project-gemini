@@ -418,25 +418,22 @@ impl StemMixer {
     }
 }
 
-/// Open cutoff. High enough that the low-pass is a bypass for music.
-pub const MUSIC_OPEN_HZ: f32 = 18_000.0;
-/// Muffled cutoff while the host is away. Glows in the mix stay, the top end does not.
-pub const MUSIC_DUCK_LOWPASS_HZ: f32 = 800.0;
-
 /// Gain and low-pass for the away mix. `look` is 1 while away and eases to 0 over the countdown.
 /// The stem clock is not an input: ducking never restarts the beat.
+/// `duck_hz` is the away cutoff from content. Look 0 bypasses the filter, so there is no second frequency.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AwayMix {
     pub gain: f32,
     pub lowpass_hz: f32,
 }
 
-pub fn away_mix(look: f32, duck_db: f32) -> AwayMix {
+pub fn away_mix(look: f32, duck_db: f32, duck_hz: f32) -> AwayMix {
     let look = if look.is_finite() { look.clamp(0.0, 1.0) } else { 0.0 };
     let ducked = 10f32.powf(duck_db / 20.0);
+    let lowpass_hz = if look <= 0.0 { f32::INFINITY } else { duck_hz / look };
     AwayMix {
         gain: 1.0 + (ducked - 1.0) * look,
-        lowpass_hz: MUSIC_OPEN_HZ + (MUSIC_DUCK_LOWPASS_HZ - MUSIC_OPEN_HZ) * look,
+        lowpass_hz,
     }
 }
 
@@ -482,7 +479,7 @@ impl Lowpass {
     pub fn process(&mut self, sample: f32, cutoff_hz: f32, sample_rate: f32) -> f32 {
         let sample = if sample.is_finite() { sample } else { 0.0 };
         let rate = if sample_rate > 1.0 { sample_rate } else { 44_100.0 };
-        let open = cutoff_hz >= MUSIC_OPEN_HZ - 1.0 || cutoff_hz >= rate * 0.45;
+        let open = !cutoff_hz.is_finite() || cutoff_hz >= rate * 0.45;
         if open {
             self.x1 = sample;
             self.x2 = sample;

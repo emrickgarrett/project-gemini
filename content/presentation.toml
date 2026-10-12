@@ -26,6 +26,7 @@ panel_pad = 18.0
 title_px = 28.0
 row_gap = 10.0
 bar_height = 10.0
+# Timer-bar track, as a fraction of the slate. This is the darkest the empty bar gets.
 bar_track = 0.45
 count_px = 180.0
 count_scale_from = 1.45
@@ -33,7 +34,11 @@ count_scale_to = 0.8
 away_desaturation = 0.6
 away_dim = 0.3
 music_duck_db = -12.0
+music_duck_lowpass_hz = 800.0
+# Dim minimum. The grade never multiplies a pixel darker than this.
 dim_floor = 0.05
+# ox/oy are fractions of count_shadow_soft_px, added to count_shadow_px. weight is the ink mix.
+count_shadow_samples = [{ ox = 0.0, oy = 0.0, weight = 1.0 }, { ox = 0.5, oy = 0.0, weight = 0.45 }, { ox = -0.5, oy = 0.0, weight = 0.45 }, { ox = 0.0, oy = 0.5, weight = 0.45 }, { ox = 0.0, oy = -0.5, weight = 0.45 }, { ox = 0.5, oy = 0.5, weight = 0.45 }, { ox = -0.5, oy = 0.5, weight = 0.45 }, { ox = 0.5, oy = -0.5, weight = 0.45 }, { ox = -0.5, oy = -0.5, weight = 0.45 }]
 
 [hud.away.coop]
 text = "HOST AWAY"

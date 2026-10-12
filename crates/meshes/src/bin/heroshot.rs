@@ -26,27 +26,21 @@ fn main() {
         }
     }
     fs::create_dir_all(&out).expect("create out dir");
-    let (accent, offset, fov, glow_radius) = vex_viewmodel();
+    let vex = vex_viewmodel();
     let idle = raster_viewmodel(
         W,
         H,
         &ViewmodelFrame {
-            accent,
-            offset,
-            fov,
             overdrive: false,
-            glow_radius,
+            ..vex
         },
     );
     let drive = raster_viewmodel(
         W,
         H,
         &ViewmodelFrame {
-            accent,
-            offset,
-            fov,
             overdrive: true,
-            glow_radius,
+            ..vex
         },
     );
     assert_lower_right(&idle, "idle");
@@ -113,7 +107,7 @@ fn orange_pixels(rgb: &[u8]) -> u32 {
         .count() as u32
 }
 
-fn vex_viewmodel() -> ([f32; 4], [f32; 3], f32, f32) {
+fn vex_viewmodel() -> ViewmodelFrame {
     let text = include_str!("../../../../content/characters.toml");
     let root: toml::Value = toml::from_str(text).expect("characters.toml");
     let starter = root
@@ -138,12 +132,23 @@ fn vex_viewmodel() -> ([f32; 4], [f32; 3], f32, f32) {
         .get("viewmodel_fov")
         .map(num)
         .expect("vex is missing viewmodel_fov");
-    let glow_radius = row
-        .get("muzzle_flash_radius")
-        .map(num)
-        .filter(|radius| *radius > 0.0)
-        .expect("vex is missing a positive muzzle_flash_radius");
-    (accent, offset, fov, glow_radius)
+    let color = row
+        .get("muzzle_flash_color")
+        .and_then(|v| v.as_array())
+        .filter(|v| v.len() == 3)
+        .map(|v| [num(&v[0]), num(&v[1]), num(&v[2]), 1.0])
+        .expect("vex is missing muzzle_flash_color");
+    ViewmodelFrame {
+        accent,
+        offset,
+        fov,
+        overdrive: false,
+        glow_radius: num(row.get("muzzle_flash_radius").expect("muzzle_flash_radius")),
+        glow_core: num(row.get("muzzle_flash_core").expect("muzzle_flash_core")),
+        glow_falloff: num(row.get("muzzle_flash_falloff").expect("muzzle_flash_falloff")),
+        glow_tip_px: num(row.get("muzzle_flash_tip_px").expect("muzzle_flash_tip_px")),
+        glow_color: color,
+    }
 }
 
 fn parse_hex(hex: &str) -> [f32; 4] {

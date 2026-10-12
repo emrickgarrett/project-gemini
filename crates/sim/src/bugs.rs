@@ -468,7 +468,7 @@ fn bake_pods(bug: &str, visual: &BugVisual, hitbox: &mut BugHitbox) -> Result<()
     if pod.count == 0 {
         return Err(format!("{bug} visual pod count is missing"));
     }
-    if pod.ring_radius <= 0.0 {
+    if !(pod.ring_radius > 0.0) {
         return Err(format!("{bug} visual pod ring_radius is missing"));
     }
     let ext = size_extents(&host.size).ok_or_else(|| format!("{bug} visual pod host is missing size"))?;

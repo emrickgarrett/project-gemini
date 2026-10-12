@@ -19,6 +19,11 @@ regen_delay = 0.8
 thrust_up = 26.0            # slightly above gravity, so you can hover and climb slowly
 dash_impulse = 12.0         # tap boost + direction
 dash_cost = 30.0
+[ledge_catch]               # jetpack perches. Meters and meters/second.
+snap = 0.4                  # |y - lip| within this catches
+fall_speed = 0.15           # vel_y at or below this can still catch
+above = 0.25                # meters above the lip
+below = 1.3                 # meters below the lip
 [camera]
 fov_default = 90            # player-adjustable 75 to 110
 fov_sprint_add = 6

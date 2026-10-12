@@ -46,6 +46,43 @@ fn tables_drive_the_controller_and_clocks() {
 }
 
 #[test]
+fn ledge_catch_fails_when_missing_or_not_positive() {
+    let base = gemini_sim::content::embedded_sources();
+    let load = |controller: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            controller,
+            ..sources_with(&base, base.coop)
+        })
+    };
+    let missing = base
+        .controller
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            !(trimmed.starts_with("[ledge_catch]")
+                || trimmed.starts_with("snap ")
+                || trimmed.starts_with("fall_speed ")
+                || trimmed.starts_with("above ")
+                || trimmed.starts_with("below "))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let err = load(&missing).expect_err("missing ledge_catch");
+    assert!(err.contains("ledge_catch"), "{err}");
+    for (from, to, key) in [
+        ("snap = 0.4", "snap = 0", "snap"),
+        ("snap = 0.4", "snap = nan", "snap"),
+        ("fall_speed = 0.15", "fall_speed = -1", "fall_speed"),
+        ("above = 0.25", "above = 0", "above"),
+        ("below = 1.3", "below = nan", "below"),
+    ] {
+        let text = base.controller.replace(from, to);
+        let err = load(&text).expect_err(key);
+        assert!(err.contains(key), "{key}: {err}");
+    }
+}
+
+#[test]
 fn jump_reads_controller() {
     let mut content = Content::embedded();
     content.controller.jump.jump_velocity = 30.0;
@@ -979,7 +1016,8 @@ fn crate_reveal_reads_tease_and_fakeout() {
     assert!((reveal.hint.margin_x - 28.0).abs() < 1e-4);
     assert!((reveal.hint.margin_y - 22.0).abs() < 1e-4);
     assert!((reveal.card.title_pad - 20.0).abs() < 1e-4);
-    assert!(reveal.card.legendary_title_max_scale > reveal.card.title_max_scale);
+    assert!((reveal.layout.gem_height - 0.30).abs() < 1e-4);
+    assert_eq!(reveal.layout.border_px, 8);
 
     let base = gemini_sim::content::embedded_sources();
     let missing_hint = base.crate_reveal.lines().filter(|line| !line.contains("text_px")).collect::<Vec<_>>().join("\n");
@@ -988,6 +1026,16 @@ fn crate_reveal_reads_tease_and_fakeout() {
     let flat = base.crate_reveal.replacen("opacity = 0.60", "opacity = 0.0", 1);
     let err = Content::parse(&sources_reveal(&base, &flat)).expect_err("zero hint opacity");
     assert!(err.contains("hint.opacity"), "{err}");
+    for key in ["border_px", "border_mix", "gem_height", "gem_glow", "divider_px"] {
+        let text = base
+            .crate_reveal
+            .lines()
+            .filter(|line| !line.trim_start().starts_with(&format!("{key} ")))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let err = Content::parse(&sources_reveal(&base, &text)).expect_err(key);
+        assert!(err.contains(key), "{key}: {err}");
+    }
 }
 
 fn sources_reveal<'a>(base: &'a gemini_sim::content::Sources<'a>, crate_reveal: &'a str) -> gemini_sim::content::Sources<'a> {
@@ -1227,7 +1275,7 @@ fn vex_overdrive_comes_from_characters() {
     assert!((off[0] - 0.44).abs() < 1e-4 && (off[1] + 0.28).abs() < 1e-4 && (off[2] + 0.48).abs() < 1e-4);
     assert!((content.hero.viewmodel_fov - 40.0).abs() < 1e-4);
     assert!((content.hero.muzzle_flash_secs - 0.05).abs() < 1e-4);
-    assert!((content.hero.muzzle_flash_radius - 0.045).abs() < 1e-4);
+    assert!((content.hero.muzzle_flash_radius - 0.11).abs() < 1e-4);
     assert!(content.weapon("coil_rifle").is_none());
     let gun = content.weapon("pulse_rifle").unwrap();
     assert!((gun.fire_interval - 1.0 / 9.0).abs() < 1e-4);
@@ -1300,7 +1348,7 @@ fn vex_overdrive_comes_from_characters() {
     let zero = text.replace("viewmodel_fov = 40", "viewmodel_fov = 0");
     let err = load_hero(&zero).expect_err("zero viewmodel fov");
     assert!(err.contains("viewmodel_fov"), "{err}");
-    for (key, sample) in [("muzzle_flash_secs", "0.05"), ("muzzle_flash_radius", "0.045")] {
+    for (key, sample) in [("muzzle_flash_secs", "0.05"), ("muzzle_flash_radius", "0.11")] {
         let zeroed = text.replace(&format!("{key} = {sample}"), &format!("{key} = 0"));
         let err = load_hero(&zeroed).expect_err(key);
         assert!(err.contains(key), "{err}");
@@ -1399,12 +1447,18 @@ fn arena_01_vents_perches_and_pickups() {
     assert!((content.arena.perch_rules.climb_trigger_distance - 1.8).abs() < 1e-4);
     assert!((content.arena.perch_rules.climb_slide_rate - 0.4).abs() < 1e-4);
     assert!((content.arena.perch_rules.climb_target_radius - 2.0).abs() < 1e-4);
+    assert!((content.arena.perch_rules.climb_clearance - 0.5).abs() < 1e-4);
+    let catch = &content.controller.ledge_catch;
+    assert!((catch.snap - 0.4).abs() < 1e-4);
+    assert!((catch.fall_speed - 0.15).abs() < 1e-4);
+    assert!((catch.above - 0.25).abs() < 1e-4);
+    assert!((catch.below - 1.3).abs() < 1e-4);
     let tower = content.arena.ledges.iter().find(|ledge| ledge.id == "tower").unwrap().pos;
     assert!(content.arena.on_perch(Vec3::new(tower.x + 1.4, tower.y, tower.z)));
     assert!(content.arena.on_perch(Vec3::new(tower.x, tower.y + 0.4, tower.z)));
     assert!(!content.arena.on_perch(Vec3::new(tower.x, tower.y + 0.5, tower.z)));
-    assert!((content.arena.support_y(tower.x + 1.3, tower.y, tower.z, 0.0) - tower.y).abs() < 1e-3);
-    assert!(content.arena.support_y(tower.x + 1.6, tower.y, tower.z, 0.0).abs() < 1e-3);
+    assert!((content.arena.support_y(tower.x + 1.3, tower.y, tower.z, 0.0, catch) - tower.y).abs() < 1e-3);
+    assert!(content.arena.support_y(tower.x + 1.6, tower.y, tower.z, 0.0, catch).abs() < 1e-3);
     assert!((content.controller.camera.eye_height - 1.62).abs() < 1e-4);
     assert!((content.controller.camera.crouch_eye - 1.02).abs() < 1e-4);
 
@@ -1440,6 +1494,7 @@ fn arena_01_vents_perches_and_pickups() {
         "climb_trigger_distance",
         "climb_slide_rate",
         "climb_target_radius",
+        "climb_clearance",
     ] {
         let missing_key = include_str!("../../../content/arena_01.toml")
             .lines()
@@ -1448,6 +1503,16 @@ fn arena_01_vents_perches_and_pickups() {
             .join("\n");
         let err = parse(&missing_key).expect_err(key);
         assert!(err.contains(key), "{err}");
+    }
+    for bad in ["climb_clearance = 0", "climb_clearance = nan", "climb_clearance = -1"] {
+        let text = include_str!("../../../content/arena_01.toml").replacen("climb_clearance = 0.5", bad, 1);
+        let err = parse(&text).expect_err(bad);
+        assert!(err.contains("climb_clearance"), "{err}");
+    }
+    for bad in ["perch_height_slack = 0", "perch_height_slack = nan", "perch_height_slack = -0.1"] {
+        let text = include_str!("../../../content/arena_01.toml").replacen("perch_height_slack = 0.45", bad, 1);
+        let err = parse(&text).expect_err(bad);
+        assert!(err.contains("perch_height_slack"), "{err}");
     }
     for bad in ["climb_target_radius = 0.0", "climb_target_radius = -2.0"] {
         let text = include_str!("../../../content/arena_01.toml").replacen("climb_target_radius = 2.0", bad, 1);
@@ -1552,6 +1617,82 @@ fn arena_01_vents_perches_and_pickups() {
 }
 
 #[test]
+fn perch_disk_pauses_fuel_once_and_ground_chase_stays_outside_it() {
+    use gemini_sim::content::EnemyKind;
+    let content = Content::embedded();
+    let tower = content
+        .arena
+        .ledges
+        .iter()
+        .find(|ledge| ledge.id == "tower")
+        .unwrap()
+        .pos;
+    assert!(content.arena.on_perch(Vec3::new(tower.x + 1.4, tower.y, tower.z)));
+    assert!(!content.arena.on_perch(Vec3::new(tower.x + 1.6, tower.y, tower.z)));
+
+    let mut perched = Sim::new(&content, "normal", 11);
+    perched.enemies.clear();
+    perched.pending_vents.clear();
+    perched.director.pool = 0.0;
+    perched.director.parked = true;
+    perched.players[0].pos = Vec3::new(tower.x + 1.4, tower.y, tower.z);
+    perched.players[0].vel = Vec3::ZERO;
+    perched.players[0].grounded = true;
+    perched.players[0].fuel = 40.0;
+    perched.players[0].fuel_delay = 0.0;
+    perched.players[0].regen_pause_cue = false;
+    perched.step(&content, PlayerInput::default());
+    assert_eq!(
+        perched.sounds.iter().filter(|sound| sound.id == "fuel_regen_paused").count(),
+        1
+    );
+    assert!(content.arena.on_perch(perched.players[0].pos));
+    assert!((perched.players[0].fuel - 40.0).abs() < 1e-3, "fuel {}", perched.players[0].fuel);
+    perched.step(&content, PlayerInput::default());
+    assert_eq!(
+        perched.sounds.iter().filter(|sound| sound.id == "fuel_regen_paused").count(),
+        0
+    );
+    assert!((perched.players[0].fuel - 40.0).abs() < 1e-3, "fuel {}", perched.players[0].fuel);
+
+    let mut grounded = Sim::new(&content, "normal", 12);
+    grounded.enemies.clear();
+    grounded.pending_vents.clear();
+    grounded.director.pool = 0.0;
+    grounded.director.parked = true;
+    grounded.players[0].pos = Vec3::new(tower.x + 1.6, 0.0, tower.z);
+    grounded.players[0].vel = Vec3::ZERO;
+    grounded.players[0].grounded = true;
+    grounded.players[0].fuel = 40.0;
+    grounded.players[0].fuel_delay = 0.0;
+    grounded.players[0].regen_pause_cue = false;
+    grounded.all_perched_for = content.arena.perch_rules.all_perched_grace;
+    let mut swarmer = bug(EnemyKind::Swarmer);
+    swarmer.speed = 4.0;
+    swarmer.pos = Vec3::new(tower.x + 1.6, 0.0, tower.z + 6.0);
+    grounded.enemies.push(swarmer);
+    let start = grounded.enemies[0].pos;
+    for _ in 0..8 {
+        grounded.step(&content, PlayerInput::default());
+        assert!(
+            !grounded.sounds.iter().any(|sound| sound.id == "fuel_regen_paused"),
+            "fuel pause outside the perch disk"
+        );
+    }
+    let player = grounded.players[0].pos;
+    assert!(grounded.players[0].grounded);
+    assert!(!content.arena.on_perch(player));
+    assert!(grounded.players[0].fuel > 40.0, "fuel {}", grounded.players[0].fuel);
+    assert!(!grounded.players[0].regen_pause_cue);
+    let enemy = &grounded.enemies[0];
+    assert!(!enemy.climbing);
+    assert!(enemy.pos.y.abs() < 1e-3, "y {}", enemy.pos.y);
+    let before = (start.x - player.x).powi(2) + (start.z - player.z).powi(2);
+    let after = (enemy.pos.x - player.x).powi(2) + (enemy.pos.z - player.z).powi(2);
+    assert!(after < before, "ground chase {before} -> {after}");
+}
+
+#[test]
 fn coop_table_rejects_missing_keys() {
     let content = Content::embedded();
     let sim = Sim::new(&content, "normal", 1);
@@ -1647,6 +1788,10 @@ fn coop_table_rejects_missing_keys() {
     assert!((content.presentation.hud.away.away_desaturation - 0.6).abs() < 1e-4);
     assert!((content.presentation.hud.away.away_dim - 0.3).abs() < 1e-4);
     assert!((content.presentation.hud.away.music_duck_db - -12.0).abs() < 1e-4);
+    assert!((content.presentation.hud.away.music_duck_lowpass_hz - 800.0).abs() < 1e-3);
+    assert!((content.presentation.hud.away.bar_track - 0.45).abs() < 1e-4);
+    assert!((content.presentation.hud.away.dim_floor - 0.05).abs() < 1e-4);
+    assert!(!content.presentation.hud.away.count_shadow_samples.is_empty());
     assert!((content.presentation.hud.away.count_outline_px - 4.0).abs() < 1e-4);
 
     let unknown = format!("{}\n[extra]\nnope = 1\n", base.coop);
@@ -1681,10 +1826,14 @@ fn away_look_and_duck_fail_load() {
         "away_desaturation",
         "away_dim",
         "music_duck_db",
+        "music_duck_lowpass_hz",
         "count_shadow",
         "count_shadow_px",
         "count_shadow_soft_px",
         "count_shadow_alpha",
+        "count_shadow_samples",
+        "bar_track",
+        "dim_floor",
     ] {
         let stripped = base
             .presentation
@@ -1705,12 +1854,95 @@ fn away_look_and_duck_fail_load() {
         ("count_shadow_px = 14.0", "count_shadow_px = 0.0", "count_shadow_px"),
         ("count_shadow_alpha = 0.40", "count_shadow_alpha = 0.0", "count_shadow_alpha"),
         ("count_shadow_soft_px = 8.0", "count_shadow_soft_px = -1", "count_shadow_soft_px"),
+        ("music_duck_lowpass_hz = 800.0", "music_duck_lowpass_hz = 0.0", "music_duck_lowpass_hz"),
+        ("music_duck_lowpass_hz = 800.0", "music_duck_lowpass_hz = nan", "music_duck_lowpass_hz"),
+        ("music_duck_lowpass_hz = 800.0", "music_duck_lowpass_hz = -4.0", "music_duck_lowpass_hz"),
+        ("bar_track = 0.45", "bar_track = 0.0", "bar_track"),
+        ("bar_track = 0.45", "bar_track = nan", "bar_track"),
+        ("dim_floor = 0.05", "dim_floor = 0.0", "dim_floor"),
+        ("dim_floor = 0.05", "dim_floor = nan", "dim_floor"),
+        ("weight = 0.45", "weight = 0.0", "count_shadow_samples"),
+        ("weight = 0.45", "weight = nan", "count_shadow_samples"),
     ];
     for (from, to, key) in cases {
         let text = base.presentation.replace(from, to);
         let err = Content::parse(&sources_present(&base, &text)).expect_err(key);
         assert!(err.contains(key), "{key}: {err}");
     }
+}
+
+#[test]
+fn empty_palette_color_name_fails_load() {
+    let base = gemini_sim::content::embedded_sources();
+    let text = base.presentation.replace("slate = \"ui_panel_slate\"", "slate = \"\"");
+    let err = Content::parse(&sources_present(&base, &text)).expect_err("empty slate");
+    assert!(err.contains("does not resolve"), "{err}");
+    let part = base.bugs.replace("color=\"swarmer_amber\"", "color=\"\"");
+    let sources = gemini_sim::content::Sources {
+        bugs: &part,
+        ..sources_with(&base, base.coop)
+    };
+    let err = Content::parse(&sources).expect_err("empty part color");
+    assert!(err.contains("does not resolve"), "{err}");
+}
+
+#[test]
+fn reveal_layout_fails_when_missing_or_invalid() {
+    let base = gemini_sim::content::embedded_sources();
+    let stripped = base
+        .crate_reveal
+        .lines()
+        .filter(|line| !line.contains("panel_width ="))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let sources = gemini_sim::content::Sources {
+        crate_reveal: &stripped,
+        ..sources_with(&base, base.coop)
+    };
+    let err = Content::parse(&sources).expect_err("missing panel");
+    assert!(err.contains("panel_width"), "{err}");
+    let zero = base.crate_reveal.replace("panel_width = 420.0", "panel_width = nan");
+    let sources = gemini_sim::content::Sources {
+        crate_reveal: &zero,
+        ..sources_with(&base, base.coop)
+    };
+    let err = Content::parse(&sources).expect_err("nan panel");
+    assert!(err.contains("panel_width"), "{err}");
+    let layout = &Content::embedded().crate_reveal.layout;
+    assert!((layout.panel_width - 420.0).abs() < 1e-3);
+    assert!((layout.panel_height - 240.0).abs() < 1e-3);
+    assert!((layout.ink_luma - 0.62).abs() < 1e-4);
+    assert_eq!(layout.title_pad_px, 8);
+    assert_eq!(layout.title_glyph_px, 6);
+    assert_eq!(layout.title_height_div, 16);
+    assert_eq!(layout.title_scale_min, 2);
+    assert_eq!(layout.title_scale_max, 14);
+}
+
+#[test]
+fn muzzle_flash_rejects_nan_and_non_positive() {
+    let base = gemini_sim::content::embedded_sources();
+    let cases = [
+        ("muzzle_flash_secs = 0.05", "muzzle_flash_secs = nan", "muzzle_flash_secs"),
+        ("muzzle_flash_secs = 0.05", "muzzle_flash_secs = 0.0", "muzzle_flash_secs"),
+        ("muzzle_flash_radius = 0.11", "muzzle_flash_radius = -1", "muzzle_flash_radius"),
+        ("muzzle_flash_core = 0.40", "muzzle_flash_core = nan", "muzzle_flash_core"),
+        ("muzzle_flash_falloff = 1.65", "muzzle_flash_falloff = 0.0", "muzzle_flash_falloff"),
+        ("muzzle_flash_tip_px = 5.0", "muzzle_flash_tip_px = nan", "muzzle_flash_tip_px"),
+    ];
+    for (from, to, key) in cases {
+        let hero = base.hero.replace(from, to);
+        let sources = gemini_sim::content::Sources {
+            hero: &hero,
+            ..sources_with(&base, base.coop)
+        };
+        let err = Content::parse(&sources).expect_err(key);
+        assert!(err.contains(key), "{key}: {err}");
+    }
+    let hero = &Content::embedded().hero;
+    assert!((hero.muzzle_flash_secs - 0.05).abs() < 1e-4);
+    assert!((hero.muzzle_flash_tip_px - 5.0).abs() < 1e-4);
+    assert!(hero.muzzle_flash_core > 0.0 && hero.muzzle_flash_core <= 1.0);
 }
 
 fn sources_present<'a>(base: &'a gemini_sim::content::Sources<'a>, presentation: &'a str) -> gemini_sim::content::Sources<'a> {
@@ -2206,26 +2438,27 @@ fn countdown_input_changes_the_camera_only() {
 
 #[test]
 fn away_mix_ducks_music_and_keeps_the_beat() {
-    use gemini_sim::music::{away_mix, StemMixer, MUSIC_DUCK_LOWPASS_HZ, MUSIC_OPEN_HZ};
+    use gemini_sim::music::{away_mix, StemMixer};
 
     let content = Content::embedded();
     let duck_db = content.presentation.hud.away.music_duck_db;
-    let ducked = away_mix(1.0, duck_db);
+    let duck_hz = content.presentation.hud.away.music_duck_lowpass_hz;
+    let ducked = away_mix(1.0, duck_db, duck_hz);
     let full = 10f32.powf(duck_db / 20.0);
     assert!((ducked.gain - full).abs() < 1e-3, "{}", ducked.gain);
-    assert!((ducked.lowpass_hz - MUSIC_DUCK_LOWPASS_HZ).abs() < 1.0);
-    let open = away_mix(0.0, duck_db);
+    assert!((ducked.lowpass_hz - duck_hz).abs() < 1.0);
+    let open = away_mix(0.0, duck_db, duck_hz);
     assert!((open.gain - 1.0).abs() < 1e-4);
-    assert!((open.lowpass_hz - MUSIC_OPEN_HZ).abs() < 1.0);
-    let at_one = away_mix(1.0 / content.coop.host_away.resume_countdown_seconds, duck_db);
+    assert!(!open.lowpass_hz.is_finite(), "look 0 bypasses the filter");
+    let at_one = away_mix(1.0 / content.coop.host_away.resume_countdown_seconds, duck_db, duck_hz);
     assert!(at_one.gain > ducked.gain && at_one.gain < open.gain);
-    assert!(at_one.lowpass_hz > ducked.lowpass_hz && at_one.lowpass_hz < open.lowpass_hz);
+    assert!(at_one.lowpass_hz > ducked.lowpass_hz && at_one.lowpass_hz.is_finite());
 
     let track = content.track("combat_01").expect("combat_01");
     let loops = vec![8.0; track.layer.len().max(1)];
     let mut mixer = StemMixer::start(track, &loops, 0.8);
     for _ in 0..30 {
-        let _mix = away_mix(1.0, duck_db);
+        let _mix = away_mix(1.0, duck_db, duck_hz);
         mixer.advance(track, gemini_sim::SIM_DT, 0.8, 4, None);
     }
     assert!(
@@ -2234,10 +2467,10 @@ fn away_mix_ducks_music_and_keeps_the_beat() {
         mixer.voices[0].elapsed
     );
 
-    let low = sine_rms(120.0, MUSIC_DUCK_LOWPASS_HZ);
-    let high = sine_rms(4000.0, MUSIC_DUCK_LOWPASS_HZ);
+    let low = sine_rms(120.0, duck_hz);
+    let high = sine_rms(4000.0, duck_hz);
     assert!(low > high * 3.0, "lowpass keeps {low} and cuts {high}");
-    let high_open = sine_rms(4000.0, MUSIC_OPEN_HZ);
+    let high_open = sine_rms(4000.0, f32::INFINITY);
     assert!(high_open > 0.5, "{high_open}");
 
     let back = content.sfx("host_back").expect("host_back");

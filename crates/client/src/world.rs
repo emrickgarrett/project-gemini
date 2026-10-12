@@ -8,6 +8,7 @@ use bevy::camera::{ClearColorConfig, Hdr};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use bevy::render::view::{ColorGrading, Tonemapping};
 
 use gemini_meshes::{pose, AnimInput, MeshData, Rgba};
@@ -85,6 +86,8 @@ pub(crate) struct Bank {
     flash: Handle<Mesh>,
     /// Round emissive muzzle glow. Hit pings keep `flash`.
     muzzle: Handle<Mesh>,
+    muzzle_core: Handle<StandardMaterial>,
+    muzzle_halo: Handle<StandardMaterial>,
     ring: Handle<Mesh>,
     barrel_hot: Handle<StandardMaterial>,
 }
@@ -145,7 +148,20 @@ pub fn scene(
     bank.acid = upload(&mut meshes, &gemini_meshes::tracer(acid));
     bank.pickup = upload(&mut meshes, &gemini_meshes::pickup_beam(accent));
     bank.flash = upload(&mut meshes, &gemini_meshes::gun_core(white));
-    bank.muzzle = upload(&mut meshes, &gemini_meshes::muzzle_glow(content.hero.muzzle_flash_radius));
+    bank.muzzle = upload(&mut meshes, &gemini_meshes::muzzle_glow(1.0));
+    let flash = content.hero.muzzle_flash_color;
+    bank.muzzle_core = materials.add(StandardMaterial {
+        base_color: Color::srgb(1.0, 0.96, 0.9),
+        emissive: LinearRgba::rgb(8.0, 7.4, 6.2),
+        unlit: true,
+        ..default()
+    });
+    bank.muzzle_halo = materials.add(StandardMaterial {
+        base_color: Color::srgb(flash[0], flash[1], flash[2]),
+        emissive: LinearRgba::rgb(flash[0] * 6.0, flash[1] * 6.0, flash[2] * 6.0),
+        unlit: true,
+        ..default()
+    });
     let mut ring = MeshData::new();
     // A flat faceted ring: two discs would be solid. A thin torus-like prism reads as a ring.
     for i in 0..10 {
@@ -282,6 +298,7 @@ pub fn scene(
             // teal strip glow instead of sitting as flat unlit color.
             Hdr,
             Bloom::NATURAL,
+            Tonemapping::TonyMcMapface,
             ChildOf(world_cam),
         ))
         .id();
@@ -707,7 +724,7 @@ pub fn sync_viewmodel(
     game: Res<Game>,
     fx: Res<FrameFx>,
     bank: Res<Bank>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
     mut barrels: Query<(&BarrelGlow, &mut MeshMaterial3d<StandardMaterial>)>,
     cam: Query<Entity, With<ViewmodelCamera>>,
 ) {
@@ -724,23 +741,32 @@ pub fn sync_viewmodel(
         return;
     }
     let Ok(cam) = cam.single() else { return };
-    let offset = game.content.hero.viewmodel_offset;
-    let tip = gemini_meshes::muzzle_local();
-    let accent = game.content.palette.key("accent");
-    let life = game.content.hero.muzzle_flash_secs;
-    let flash_mat = materials.add(StandardMaterial {
-        base_color: Color::srgba(accent[0], accent[1], accent[2], 1.0),
-        emissive: LinearRgba::rgb(accent[0] * 8.0, accent[1] * 8.0, accent[2] * 8.0),
-        unlit: true,
-        alpha_mode: AlphaMode::Blend,
-        ..default()
-    });
+    let hero = &game.content.hero;
+    let offset = hero.viewmodel_offset;
+    let local = gemini_meshes::muzzle_local();
+    let tip = [offset[0] + local[0], offset[1] + local[1], offset[2] + local[2]];
+    let (width, height) = windows
+        .iter()
+        .next()
+        .map(|window| (window.width(), window.height()))
+        .unwrap_or((1280.0, 720.0));
+    let at = gemini_meshes::muzzle_on_barrel(tip, hero.viewmodel_fov, width, height, hero.muzzle_flash_tip_px);
+    let place = Transform::from_xyz(at[0], at[1], at[2]);
     commands.spawn((
         Mesh3d(bank.muzzle.clone()),
-        MeshMaterial3d(flash_mat),
-        Transform::from_xyz(offset[0] + tip[0], offset[1] + tip[1], offset[2] + tip[2]),
+        MeshMaterial3d(bank.muzzle_halo.clone()),
+        place.with_scale(Vec3::splat(hero.muzzle_flash_radius)),
         RenderLayers::layer(1),
-        Flash { life, fade: life },
+        Flash { life: hero.muzzle_flash_secs, fade: 0.0 },
+        PlayPiece,
+        ChildOf(cam),
+    ));
+    commands.spawn((
+        Mesh3d(bank.muzzle.clone()),
+        MeshMaterial3d(bank.muzzle_core.clone()),
+        place.with_scale(Vec3::splat(hero.muzzle_flash_radius * hero.muzzle_flash_core)),
+        RenderLayers::layer(1),
+        Flash { life: hero.muzzle_flash_secs, fade: 0.0 },
         PlayPiece,
         ChildOf(cam),
     ));

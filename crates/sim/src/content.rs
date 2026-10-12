@@ -131,7 +131,8 @@ impl Content {
         let palette: Palette = parse("palette.toml", src.palette)?;
         let presentation: Presentation = parse("presentation.toml", src.presentation)?;
         validate_away_hud(&presentation.hud.away)?;
-        require_palette_keys(&palette, &bugs, &presentation.hud.away).map_err(|err| format!("palette.toml: {err}"))?;
+        require_palette_keys(&palette, &bugs, &presentation.hud.away, &crate_reveal.layout)
+            .map_err(|err| format!("palette.toml: {err}"))?;
         Ok(Self {
             fingerprint,
             waves: parse("waves.toml", src.waves)?,
@@ -141,6 +142,7 @@ impl Content {
                 if controller.sim.max_sim_steps_per_frame == 0 {
                     return Err("controller.toml: max_sim_steps_per_frame must be at least 1".into());
                 }
+                validate_ledge_catch(&controller.ledge_catch)?;
                 controller
             },
             upgrades: parse::<UpgradeFile>("run_upgrades.toml", src.run_upgrades)?.upgrade,
@@ -419,6 +421,22 @@ fn validate_away_hud(away: &AwayHud) -> Result<(), String> {
     if !(away.count_shadow_alpha > 0.0 && away.count_shadow_alpha <= 1.0) {
         return Err("presentation.toml hud.away count_shadow_alpha must be in (0, 1]".into());
     }
+    if !(away.music_duck_lowpass_hz.is_finite() && away.music_duck_lowpass_hz > 0.0) {
+        return Err("presentation.toml hud.away music_duck_lowpass_hz must be a positive frequency".into());
+    }
+    if away.count_shadow_samples.is_empty() {
+        return Err("presentation.toml hud.away count_shadow_samples is empty".into());
+    }
+    for (i, sample) in away.count_shadow_samples.iter().enumerate() {
+        if !(sample.ox.is_finite() && sample.oy.is_finite()) {
+            return Err(format!("presentation.toml hud.away count_shadow_samples[{i}] offset is invalid"));
+        }
+        if !(sample.weight > 0.0 && sample.weight <= 1.0) {
+            return Err(format!(
+                "presentation.toml hud.away count_shadow_samples[{i}].weight must be in (0, 1]"
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -442,13 +460,7 @@ fn validate_reveal_layout(reveal: &CrateReveal) -> Result<(), String> {
     if !(card.title_pad >= 0.0) {
         return Err("crate_reveal.toml card.title_pad must be non-negative".into());
     }
-    if !(card.title_max_scale > 0.0) {
-        return Err("crate_reveal.toml card.title_max_scale must be positive".into());
-    }
-    if !(card.legendary_title_max_scale > card.title_max_scale) {
-        return Err("crate_reveal.toml card.legendary_title_max_scale must exceed title_max_scale".into());
-    }
-    Ok(())
+    validate_reveal_panel(&reveal.layout)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -558,6 +570,7 @@ pub struct Controller {
     pub movement: MoveCfg,
     pub jump: JumpCfg,
     pub boost: BoostCfg,
+    pub ledge_catch: LedgeCatch,
     pub camera: CameraCfg,
     pub aim: AimCfg,
     pub health: HealthCfg,
@@ -598,6 +611,18 @@ pub struct BoostCfg {
     pub thrust_up: f32,
     pub dash_impulse: f32,
     pub dash_cost: f32,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct LedgeCatch {
+    /// `|y - lip|` within this catches a jetpack ledge.
+    pub snap: f32,
+    /// `vel_y` at or below this can still catch while dropping onto the lip.
+    pub fall_speed: f32,
+    /// Meters above the lip included in that falling catch.
+    pub above: f32,
+    /// Meters below the lip included in that falling catch.
+    pub below: f32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -943,19 +968,19 @@ fn load_bosses(text: &str) -> Result<Vec<BossDef>, String> {
     if EnemyKind::from_name(&hive.reinforce_kind).is_none() {
         return Err(format!("hive_tyrant reinforce_kind \"{}\" is unknown", hive.reinforce_kind));
     }
-    if brood.hatch_fan_step <= 0.0 {
+    if !(brood.hatch_fan_step > 0.0) {
         return Err("brood_mother hatch_fan_step must be > 0".into());
     }
-    if brood.hatch_telegraph <= 0.0 {
+    if !(brood.hatch_telegraph > 0.0) {
         return Err("brood_mother hatch_telegraph must be > 0".into());
     }
-    if brood.spawn_radius <= 0.0 {
+    if !(brood.spawn_radius > 0.0) {
         return Err("brood_mother spawn_radius must be > 0".into());
     }
-    if hive.hatch_fan_step <= 0.0 {
+    if !(hive.hatch_fan_step > 0.0) {
         return Err("hive_tyrant hatch_fan_step must be > 0".into());
     }
-    if hive.spawn_radius <= 0.0 {
+    if !(hive.spawn_radius > 0.0) {
         return Err("hive_tyrant spawn_radius must be > 0".into());
     }
     let phase = |src: PhaseSrc| BossPhase {
@@ -976,11 +1001,11 @@ fn load_bosses(text: &str) -> Result<Vec<BossDef>, String> {
         reinforce_queue_on_cap: src.reinforce_queue_on_cap,
     };
     let phases = vec![phase(hive.phase1), phase(hive.phase2), phase(hive.phase3)];
-    if phases[0].tail_weakpoint_mult <= 0.0 {
+    if !(phases[0].tail_weakpoint_mult > 0.0) {
         return Err("hive_tyrant.phase1.tail_weakpoint_mult must be > 0".into());
     }
     for (i, row) in phases.iter().enumerate() {
-        if row.core_damage_mult <= 0.0 {
+        if !(row.core_damage_mult > 0.0) {
             return Err(format!("hive_tyrant phase {} core_damage_mult must be > 0", i + 1));
         }
     }
@@ -1127,10 +1152,18 @@ pub struct Hero {
     /// Camera-local viewmodel position. +X is screen right, -Y is screen down.
     pub viewmodel_offset: [f32; 3],
     pub viewmodel_fov: f32,
-    /// Seconds the muzzle glow stays up. The client counts elapsed time, so this is frame-rate independent.
+    /// Seconds the muzzle glow stays up. The client counts elapsed time.
     pub muzzle_flash_secs: f32,
-    /// Radius of the round muzzle glow in viewmodel space.
+    /// Outer radius of the muzzle glow in viewmodel space.
     pub muzzle_flash_radius: f32,
+    /// Fraction of `muzzle_flash_radius` that stays at full brightness.
+    pub muzzle_flash_core: f32,
+    /// Exponent of the soft radial falloff outside the core.
+    pub muzzle_flash_falloff: f32,
+    /// Screen-pixel shift from the bore back onto the barrel tip.
+    pub muzzle_flash_tip_px: f32,
+    /// Halo color. The core blends this toward white.
+    pub muzzle_flash_color: [f32; 3],
 }
 
 fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>), String> {
@@ -1201,29 +1234,43 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>), St
         viewmodel_fov: req_f32(row, "viewmodel_fov", starter)?,
         muzzle_flash_secs: req_f32(row, "muzzle_flash_secs", starter)?,
         muzzle_flash_radius: req_f32(row, "muzzle_flash_radius", starter)?,
+        muzzle_flash_core: req_f32(row, "muzzle_flash_core", starter)?,
+        muzzle_flash_falloff: req_f32(row, "muzzle_flash_falloff", starter)?,
+        muzzle_flash_tip_px: req_f32(row, "muzzle_flash_tip_px", starter)?,
+        muzzle_flash_color: req_vec3(row, "muzzle_flash_color", starter)?,
     };
-    if hero.ability_cooldown <= 0.0 || hero.overdrive_duration <= 0.0 {
+    if !(hero.ability_cooldown > 0.0) || !(hero.overdrive_duration > 0.0) {
         return Err("overdrive cooldown and duration must be > 0".into());
     }
-    if hero.max_hp <= 0.0 {
+    if !(hero.max_hp > 0.0) {
         return Err(format!("{starter} max_hp must be > 0"));
     }
-    if hero.move_speed_mult <= 0.0 {
+    if !(hero.move_speed_mult > 0.0) {
         return Err(format!("{starter} move_speed_mult must be > 0"));
+    }
+    if !(hero.muzzle_flash_secs > 0.0) {
+        return Err(format!("characters.toml {starter} muzzle_flash_secs must be > 0"));
+    }
+    if !(hero.muzzle_flash_radius > 0.0) {
+        return Err(format!("characters.toml {starter} muzzle_flash_radius must be > 0"));
+    }
+    if !(hero.muzzle_flash_core > 0.0 && hero.muzzle_flash_core <= 1.0) {
+        return Err(format!("characters.toml {starter} muzzle_flash_core must be in (0, 1]"));
+    }
+    if !(hero.muzzle_flash_falloff > 0.0) {
+        return Err(format!("characters.toml {starter} muzzle_flash_falloff must be > 0"));
+    }
+    if !(hero.muzzle_flash_tip_px > 0.0) {
+        return Err(format!("characters.toml {starter} muzzle_flash_tip_px must be > 0"));
+    }
+    for channel in hero.muzzle_flash_color {
+        if !(channel >= 0.0 && channel <= 1.0) {
+            return Err(format!("characters.toml {starter} muzzle_flash_color channels must be in [0, 1]"));
+        }
     }
     if hero.viewmodel_fov <= 1.0 || hero.viewmodel_fov >= 170.0 {
         return Err(format!(
             "characters.toml {starter} viewmodel_fov must be between 1 and 170"
-        ));
-    }
-    if hero.muzzle_flash_secs <= 0.0 {
-        return Err(format!(
-            "characters.toml {starter} muzzle_flash_secs must be > 0"
-        ));
-    }
-    if hero.muzzle_flash_radius <= 0.0 {
-        return Err(format!(
-            "characters.toml {starter} muzzle_flash_radius must be > 0"
         ));
     }
     parse_accent(&hero.accent)?;
@@ -1289,7 +1336,7 @@ fn character_weapon(weapons: &toml::map::Map<String, toml::Value>, id: &str, slo
         .and_then(|v| v.as_table())
         .ok_or_else(|| format!("characters.toml is missing [weapons.{id}]"))?;
     let rps = req_f32(row, "rps", id)?;
-    if rps <= 0.0 {
+    if !(rps > 0.0) {
         return Err(format!("characters.toml {id} rps must be > 0"));
     }
     let spread_deg = req_f32(row, "spread_deg", id)?;
@@ -1426,6 +1473,8 @@ pub struct PerchRules {
     pub flow_field_targets: String,
     pub all_perched_grace: f32,
     pub climb_speed_mult: f32,
+    /// Meters kept inside the play edge while a swarmer climbs.
+    pub climb_clearance: f32,
     pub budget_shift_to_spitters: f32,
     pub fuel_regen_on_perch: bool,
 }
@@ -1445,13 +1494,24 @@ impl Arena {
         Vec3::new(self.boss_area.center.x, 0.0, self.boss_area.center.z)
     }
 
-    pub fn on_perch(&self, pos: Vec3) -> bool {
-        self.ledges.iter().any(|ledge| {
-            let dx = pos.x - ledge.pos.x;
-            let dz = pos.z - ledge.pos.z;
-            let r = self.perch_rules.perch_radius;
-            dx * dx + dz * dz <= r * r && (pos.y - ledge.pos.y).abs() <= self.perch_rules.perch_height_slack
+    /// Horizontal disk shared by detection, landing, the fuel pause, and the climb trigger.
+    pub fn in_perch_disk(&self, x: f32, z: f32, ledge: &Ledge) -> bool {
+        let dx = x - ledge.pos.x;
+        let dz = z - ledge.pos.z;
+        let r = self.perch_rules.perch_radius;
+        dx * dx + dz * dz <= r * r
+    }
+
+    /// Ledge whose disk and vertical slack contain `pos`. Detection uses this.
+    pub fn perch_under(&self, pos: Vec3) -> Option<&Ledge> {
+        self.ledges.iter().find(|ledge| {
+            self.in_perch_disk(pos.x, pos.z, ledge)
+                && (pos.y - ledge.pos.y).abs() <= self.perch_rules.perch_height_slack
         })
+    }
+
+    pub fn on_perch(&self, pos: Vec3) -> bool {
+        self.perch_under(pos).is_some()
     }
 
     pub fn nearest_ledge(&self, from: Vec3) -> Option<&Ledge> {
@@ -1473,8 +1533,8 @@ impl Arena {
     }
 
     /// Surface the body should stand on. Jetpack ledges only catch you from just above.
-    pub fn support_y(&self, x: f32, y: f32, z: f32, vel_y: f32) -> f32 {
-        if let Some(top) = self.ledge_top(x, y, z, vel_y) {
+    pub fn support_y(&self, x: f32, y: f32, z: f32, vel_y: f32, catch: &LedgeCatch) -> f32 {
+        if let Some(top) = self.ledge_top(x, y, z, vel_y, catch) {
             return top;
         }
         let floor = self.floor_y(x, z);
@@ -1591,12 +1651,9 @@ impl Arena {
         pos.z = self.platform.center.z + dz / d * rim;
     }
 
-    fn ledge_top(&self, x: f32, y: f32, z: f32, vel_y: f32) -> Option<f32> {
+    fn ledge_top(&self, x: f32, y: f32, z: f32, vel_y: f32, catch: &LedgeCatch) -> Option<f32> {
         for ledge in &self.ledges {
-            let dx = x - ledge.pos.x;
-            let dz = z - ledge.pos.z;
-            let r = self.perch_rules.perch_radius;
-            if dx * dx + dz * dz > r * r {
+            if !self.in_perch_disk(x, z, ledge) {
                 continue;
             }
             let top = ledge.pos.y;
@@ -1606,7 +1663,8 @@ impl Arena {
                 }
                 continue;
             }
-            let near = (y - top).abs() <= 0.4 || (vel_y <= 0.15 && y <= top + 0.25 && y >= top - 1.3);
+            let near = (y - top).abs() <= catch.snap
+                || (vel_y <= catch.fall_speed && y <= top + catch.above && y >= top - catch.below);
             if near {
                 return Some(top);
             }
@@ -1695,7 +1753,7 @@ fn load_arena(text: &str) -> Result<Arena, String> {
         return Err(format!("shape \"{shape}\" is unknown"));
     }
     let radius = num(table.get("radius").unwrap(), "radius")?;
-    if radius <= 0.0 || size[0] + 1e-3 < radius * 2.0 || size[1] + 1e-3 < radius * 2.0 {
+    if !(radius > 0.0) || size[0] + 1e-3 < radius * 2.0 || size[1] + 1e-3 < radius * 2.0 {
         return Err("size must contain the circle".into());
     }
     let platform = load_platform(table.get("platform").unwrap())?;
@@ -1751,7 +1809,7 @@ fn load_platform(value: &toml::Value) -> Result<Platform, String> {
     let radius = num(table.get("radius").unwrap(), "platform.radius")?;
     let height = num(table.get("height").unwrap(), "platform.height")?;
     let railing_height = num(table.get("railing_height").unwrap(), "platform.railing_height")?;
-    if radius <= 0.0 || height < 0.0 || railing_height < 0.0 {
+    if !(radius > 0.0) || height < 0.0 || railing_height < 0.0 {
         return Err("platform radius, height, and railing_height must be >= 0".into());
     }
     let ramps_value = table.get("ramps").unwrap();
@@ -1765,7 +1823,7 @@ fn load_platform(value: &toml::Value) -> Result<Platform, String> {
         let from = nums2(row.get("from").unwrap(), &format!("platform.ramps[{i}].from"))?;
         let to = nums2(row.get("to").unwrap(), &format!("platform.ramps[{i}].to"))?;
         let width = num(row.get("width").unwrap(), &format!("platform.ramps[{i}].width"))?;
-        if width <= 0.0 {
+        if !(width > 0.0) {
             return Err(format!("platform.ramps[{i}].width must be > 0"));
         }
         loaded.push(Ramp {
@@ -1791,7 +1849,7 @@ fn load_boss_area(value: &toml::Value) -> Result<BossArea, String> {
     expect_keys(table, &["center", "radius"], "boss_area")?;
     let center = nums2(table.get("center").unwrap(), "boss_area.center")?;
     let radius = num(table.get("radius").unwrap(), "boss_area.radius")?;
-    if radius <= 0.0 {
+    if !(radius > 0.0) {
         return Err("boss_area.radius must be > 0".into());
     }
     Ok(BossArea {
@@ -1806,7 +1864,7 @@ fn load_vent(table: &toml::map::Map<String, toml::Value>) -> Result<Vent, String
     let pos = nums3(table.get("pos").unwrap(), &format!("{id}.pos"))?;
     let bearing_deg = num(table.get("bearing_deg").unwrap(), &format!("{id}.bearing_deg"))?;
     let telegraph = num(table.get("telegraph").unwrap(), &format!("{id}.telegraph"))?;
-    if telegraph <= 0.0 {
+    if !(telegraph > 0.0) {
         return Err(format!("{id} telegraph must be > 0"));
     }
     Ok(Vent {
@@ -1851,6 +1909,20 @@ fn load_pickup(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaPicku
     })
 }
 
+fn validate_ledge_catch(catch: &LedgeCatch) -> Result<(), String> {
+    for (key, value) in [
+        ("snap", catch.snap),
+        ("fall_speed", catch.fall_speed),
+        ("above", catch.above),
+        ("below", catch.below),
+    ] {
+        if !(value > 0.0) {
+            return Err(format!("controller.toml [ledge_catch] {key} must be > 0"));
+        }
+    }
+    Ok(())
+}
+
 fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
     let table = value.as_table().ok_or_else(|| "perch_rules is not a table".to_string())?;
     expect_keys(
@@ -1864,6 +1936,7 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
             "flow_field_targets",
             "all_perched_grace",
             "climb_speed_mult",
+            "climb_clearance",
             "budget_shift_to_spitters",
             "fuel_regen_on_perch",
         ],
@@ -1884,16 +1957,22 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
     let climb_target_radius = num(table.get("climb_target_radius").unwrap(), "climb_target_radius")?;
     let all_perched_grace = num(table.get("all_perched_grace").unwrap(), "all_perched_grace")?;
     let climb_speed_mult = num(table.get("climb_speed_mult").unwrap(), "climb_speed_mult")?;
+    let climb_clearance = num(table.get("climb_clearance").unwrap(), "climb_clearance")?;
     let budget_shift_to_spitters = num(table.get("budget_shift_to_spitters").unwrap(), "budget_shift_to_spitters")?;
     let fuel_regen_on_perch = table
         .get("fuel_regen_on_perch")
         .and_then(|v| v.as_bool())
         .ok_or_else(|| "fuel_regen_on_perch must be a bool".to_string())?;
-    if perch_radius <= 0.0
-        || perch_height_slack < 0.0
-        || climb_trigger_distance <= 0.0
+    if !(climb_clearance > 0.0) {
+        return Err("climb_clearance must be > 0".into());
+    }
+    if !(perch_height_slack > 0.0) {
+        return Err("perch_height_slack must be > 0".into());
+    }
+    if !(perch_radius > 0.0)
+        || !(climb_trigger_distance > 0.0)
         || climb_slide_rate < 0.0
-        || climb_target_radius <= 0.0
+        || !(climb_target_radius > 0.0)
         || all_perched_grace < 0.0
         || climb_speed_mult < 0.0
         || !(0.0..=1.0).contains(&budget_shift_to_spitters)
@@ -1909,6 +1988,7 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
         flow_field_targets,
         all_perched_grace,
         climb_speed_mult,
+        climb_clearance,
         budget_shift_to_spitters,
         fuel_regen_on_perch,
     })
@@ -2192,6 +2272,13 @@ pub struct HudPresentation {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+pub struct ShadowSample {
+    pub ox: f32,
+    pub oy: f32,
+    pub weight: f32,
+}
+
+#[derive(Clone, Debug, Deserialize)]
 pub struct AwayHud {
     pub slate: String,
     pub text: String,
@@ -2211,7 +2298,6 @@ pub struct AwayHud {
     pub title_px: f32,
     pub row_gap: f32,
     pub bar_height: f32,
-    pub bar_track: f32,
     pub count_px: f32,
     pub count_scale_from: f32,
     pub count_scale_to: f32,
@@ -2221,7 +2307,14 @@ pub struct AwayHud {
     pub away_dim: f32,
     /// Music gain while the host is away, in dB. Restored across the resume countdown.
     pub music_duck_db: f32,
+    /// Low-pass cutoff while the host is away. Look 0 bypasses the filter.
+    pub music_duck_lowpass_hz: f32,
+    /// Timer-bar track brightness, as a fraction of the slate. The empty bar is never darker than this mix.
+    pub bar_track: f32,
+    /// Minimum remaining light while the away grade is on.
     pub dim_floor: f32,
+    /// Soft-shadow taps. `ox`/`oy` scale `count_shadow_soft_px` and add to `count_shadow_px`.
+    pub count_shadow_samples: Vec<ShadowSample>,
     pub coop: AwayHudCopy,
     pub solo: AwayHudCopy,
 }
@@ -2408,6 +2501,9 @@ pub struct PaletteKeys {
     pub brood_sac: String,
     pub bud_glow: String,
     pub ui_panel_slate: String,
+    pub reveal_stage: String,
+    pub reveal_ink: String,
+    pub reveal_paper: String,
 }
 
 impl Palette {
@@ -2423,6 +2519,9 @@ impl Palette {
             "brood_sac" => self.keys.brood_sac.as_str(),
             "bud_glow" => self.keys.bud_glow.as_str(),
             "ui_panel_slate" => self.keys.ui_panel_slate.as_str(),
+            "reveal_stage" => self.keys.reveal_stage.as_str(),
+            "reveal_ink" => self.keys.reveal_ink.as_str(),
+            "reveal_paper" => self.keys.reveal_paper.as_str(),
             "hero_teal" | "teal" => self.hero.teal.as_str(),
             "hero_cobalt" | "cobalt" => self.hero.cobalt.as_str(),
             "hero_white" | "white" => self.hero.white.as_str(),
@@ -2443,18 +2542,27 @@ impl Palette {
     }
 }
 
-fn require_palette_keys(palette: &Palette, bugs: &crate::bugs::BugBook, away: &AwayHud) -> Result<(), String> {
+fn require_palette_keys(
+    palette: &Palette,
+    bugs: &crate::bugs::BugBook,
+    away: &AwayHud,
+    layout: &RevealLayout,
+) -> Result<(), String> {
     let check = |owner: &str, name: &str| -> Result<(), String> {
-        if name.is_empty() || palette.hex(name).is_some() {
+        if palette.hex(name).is_some() {
             return Ok(());
         }
         Err(format!("{owner} color \"{name}\" does not resolve"))
     };
     for (bug, row) in bugs.rows() {
-        check(bug, &row.visual.bud_color)?;
-        check(bug, &row.visual.grown_color)?;
+        if !row.visual.bud_color.is_empty() {
+            check(bug, &row.visual.bud_color)?;
+        }
+        if !row.visual.grown_color.is_empty() {
+            check(bug, &row.visual.grown_color)?;
+        }
         for part in &row.visual.parts {
-            check(bug, &part.color)?;
+            check(&format!("{bug} {}", part.name), &part.color)?;
         }
     }
     for rarity in ["common", "rare", "epic", "legendary"] {
@@ -2466,6 +2574,9 @@ fn require_palette_keys(palette: &Palette, bugs: &crate::bugs::BugBook, away: &A
     check("hud.away count", &away.count)?;
     check("hud.away count_outline", &away.count_outline)?;
     check("hud.away count_shadow", &away.count_shadow)?;
+    check("crate_reveal stage", &layout.stage)?;
+    check("crate_reveal ink_dark", &layout.ink_dark)?;
+    check("crate_reveal ink_light", &layout.ink_light)?;
     Ok(())
 }
 
@@ -2482,6 +2593,7 @@ pub struct CrateReveal {
     pub multi_pull: CrateMulti,
     pub hint: RevealHint,
     pub card: CardTitle,
+    pub layout: RevealLayout,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -2495,8 +2607,90 @@ pub struct RevealHint {
 #[derive(Clone, Debug, Deserialize)]
 pub struct CardTitle {
     pub title_pad: f32,
-    pub title_max_scale: f32,
-    pub legendary_title_max_scale: f32,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct RevealLayout {
+    pub panel_width: f32,
+    pub panel_height: f32,
+    pub title_px: f32,
+    pub hint_px: f32,
+    pub row_gap: f32,
+    pub ink_luma: f32,
+    pub title_pad_px: u32,
+    pub title_glyph_px: u32,
+    pub title_height_div: u32,
+    pub title_scale_min: u32,
+    pub title_scale_max: u32,
+    pub border_px: u32,
+    pub border_mix: f32,
+    pub gem_height: f32,
+    pub gem_glow: f32,
+    pub divider_px: u32,
+    pub stage: String,
+    pub ink_dark: String,
+    pub ink_light: String,
+    pub stage_base: [f32; 3],
+    pub stage_lift: [f32; 3],
+    pub stage_vignette: [f32; 3],
+}
+
+fn validate_reveal_panel(layout: &RevealLayout) -> Result<(), String> {
+    if !(layout.panel_width > 0.0) || !(layout.panel_height > 0.0) {
+        return Err("crate_reveal.toml layout panel_width and panel_height must be positive".into());
+    }
+    if !(layout.title_px > 0.0) || !(layout.hint_px > 0.0) {
+        return Err("crate_reveal.toml layout title_px and hint_px must be positive".into());
+    }
+    if !(layout.row_gap >= 0.0) {
+        return Err("crate_reveal.toml layout row_gap must be non-negative".into());
+    }
+    if !(layout.ink_luma > 0.0 && layout.ink_luma <= 1.0) {
+        return Err("crate_reveal.toml layout ink_luma must be in (0, 1]".into());
+    }
+    if layout.title_glyph_px == 0 || layout.title_height_div == 0 || layout.title_scale_min == 0 {
+        return Err("crate_reveal.toml layout title scale formula must be positive".into());
+    }
+    if layout.title_scale_max < layout.title_scale_min {
+        return Err("crate_reveal.toml layout title_scale_max must be >= title_scale_min".into());
+    }
+    if layout.border_px == 0 {
+        return Err("crate_reveal.toml layout border_px must be > 0".into());
+    }
+    let border = layout.border_px as f32;
+    if border * 2.0 >= layout.panel_width || border * 2.0 >= layout.panel_height {
+        return Err("crate_reveal.toml layout border_px must leave a face inside the panel".into());
+    }
+    if !(layout.border_mix > 0.0 && layout.border_mix <= 1.0) {
+        return Err("crate_reveal.toml layout border_mix must be in (0, 1]".into());
+    }
+    if !(layout.gem_height > 0.0 && layout.gem_height <= 1.0) {
+        return Err("crate_reveal.toml layout gem_height must be in (0, 1]".into());
+    }
+    if !(layout.gem_glow > 0.0) {
+        return Err("crate_reveal.toml layout gem_glow must be > 0".into());
+    }
+    if layout.divider_px == 0 {
+        return Err("crate_reveal.toml layout divider_px must be > 0".into());
+    }
+    let face_w = layout.panel_width - border * 2.0;
+    let legend = 9.0 * layout.title_glyph_px as f32;
+    let pad = layout.title_pad_px as f32 * 2.0;
+    if !(face_w > pad && (face_w - pad) / legend >= layout.title_scale_min as f32) {
+        return Err("crate_reveal.toml layout title scale must fit LEGENDARY inside the padded face".into());
+    }
+    for (name, rgb) in [
+        ("stage_base", layout.stage_base),
+        ("stage_lift", layout.stage_lift),
+        ("stage_vignette", layout.stage_vignette),
+    ] {
+        for channel in rgb {
+            if !(channel >= 0.0 && channel <= 255.0) {
+                return Err(format!("crate_reveal.toml layout {name} channels must be in [0, 255]"));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize)]
