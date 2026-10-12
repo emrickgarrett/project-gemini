@@ -2016,7 +2016,6 @@ fn ui_spacing_and_font_coverage_fail_closed() {
     assert!((content.ui.portrait.fov_limit - 150.0).abs() < 1e-4);
     assert!((content.ui.portrait.fov_step - 4.0).abs() < 1e-4);
     assert!((content.ui.portrait.near - 0.08).abs() < 1e-4);
-    assert!((content.ui.portrait.fit - 0.78).abs() < 1e-4);
     assert!(gemini_sim::content::font_covers(';'));
     assert!(!gemini_sim::content::font_covers('_'));
     assert!(!gemini_sim::content::font_covers('?'));
@@ -2941,6 +2940,46 @@ fn warnings_and_infinite_magazine_fail_closed() {
         assert!(err.contains(id), "{err}");
         assert!(err.contains("missing"), "{err}");
     }
+}
+
+#[test]
+fn hero_portraits_fail_closed() {
+    let content = Content::embedded();
+    let expect = [
+        ("vex", "pulse_rifle", 0.0, 0.78),
+        ("nyra", "gauntlet", 12.0, 0.78),
+        ("brakk", "slab_shield", -6.0, 0.78),
+        ("kip", "marker_pistol", 16.0, 0.78),
+    ];
+    for (id, mesh, yaw, fit) in expect {
+        let card = content.heroes.iter().find(|hero| hero.id == id).unwrap();
+        assert_eq!(card.portrait.mesh, mesh);
+        assert!((card.portrait.yaw_deg - yaw).abs() < 1e-4, "{id}");
+        assert!((card.portrait.fit - fit).abs() < 1e-4, "{id}");
+    }
+    assert!((content.ui.layout.locked_accent_mix - 0.35).abs() < 1e-4);
+    let base = gemini_sim::content::embedded_sources();
+    let load = |hero: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            hero,
+            ..sources_with(&base, base.coop)
+        })
+    };
+    let missing = base.hero.replacen("portrait = { mesh = \"gauntlet\", yaw_deg = 12.0, fit = 0.78 }\n", "", 1);
+    let err = load(&missing).expect_err("nyra portrait");
+    assert!(err.contains("nyra"), "{err}");
+    assert!(err.contains("portrait"), "{err}");
+    let unknown = base.hero.replacen("mesh = \"marker_pistol\"", "mesh = \"laser_knife\"", 1);
+    let err = load(&unknown).expect_err("unknown mesh");
+    assert!(err.contains("kip"), "{err}");
+    assert!(err.contains("laser_knife"), "{err}");
+    let mix = base.ui.replacen("locked_accent_mix = 0.35", "locked_accent_mix = 1", 1);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        ui: &mix,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("mix");
+    assert!(err.contains("locked_accent_mix"), "{err}");
 }
 
 fn sources_ranks<'a>(

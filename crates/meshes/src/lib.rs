@@ -5,6 +5,7 @@ mod away_still;
 mod geom;
 mod glyph;
 mod menu_still;
+mod portrait;
 mod pose;
 mod preview;
 mod reveal_still;
@@ -21,6 +22,11 @@ pub use preview::{
     still_open, still_top, ViewmodelFrame,
 };
 pub use visual::{bug, catalog, flat_shaded, EnemyVisual, Gate, Joint, Part, ShotCamera};
+
+/// Rec.709 luma shared by the away grade and locked hero cards.
+pub fn luma(r: f32, g: f32, b: f32) -> f32 {
+    0.2126 * r + 0.7152 * g + 0.0722 * b
+}
 
 #[derive(Clone, Debug)]
 pub struct MeshData {

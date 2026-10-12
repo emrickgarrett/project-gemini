@@ -90,8 +90,18 @@ pub struct ViewmodelFrame {
     pub glow_color: [f32; 4],
 }
 
+/// Camera-facing parts. Emissive parts keep the albedo; shaded parts take the key light.
+pub fn raster_parts(width: u32, height: u32, parts: &[(crate::MeshData, [f32; 4], bool)], fov: f32) -> Vec<u8> {
+    draw_parts(parts, [0.0, 0.0, 0.0], [0.0, 0.0, -1.0], fov, width.max(8), height.max(8))
+}
+
 /// First-person still. The camera sits at the origin looking down -Z, matching the overlay camera.
 pub fn raster_viewmodel(width: u32, height: u32, frame: &ViewmodelFrame) -> Vec<u8> {
+    raster_viewmodel_yaw(width, height, frame, 0.0)
+}
+
+/// Same still, with the posed viewmodel yawed about Y. Zero yaw is the unrotated raster.
+pub fn raster_viewmodel_yaw(width: u32, height: u32, frame: &ViewmodelFrame, yaw_deg: f32) -> Vec<u8> {
     let vm = crate::viewmodel();
     let palette = palette_of();
     let shift = frame.offset;
@@ -106,6 +116,11 @@ pub fn raster_viewmodel(width: u32, height: u32, frame: &ViewmodelFrame) -> Vec<
     parts.push((shifted(&vm.barrel, shift), barrel_color, frame.overdrive));
     parts.push((shifted(&vm.accent, shift), orange, true));
     parts.push((shifted(&vm.core, shift), palette("hero_teal"), true));
+    if yaw_deg != 0.0 {
+        for (mesh, _, _) in &mut parts {
+            *mesh = crate::portrait::yaw_mesh(mesh, yaw_deg);
+        }
+    }
     let w = width.max(8);
     let h = height.max(8);
     let mut rgb = draw_parts(&parts, [0.0, 0.0, 0.0], [0.0, 0.0, -1.0], frame.fov, w, h);

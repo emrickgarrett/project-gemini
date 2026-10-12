@@ -5,7 +5,7 @@ use gemini_sim::content::{format_fixed, Content};
 
 use crate::away_still::paint_arena;
 use crate::glyph::{blit, measure};
-use crate::preview::{raster_viewmodel, ViewmodelFrame};
+use crate::preview::{raster_parts, raster_viewmodel_yaw, ViewmodelFrame};
 use crate::reveal_still::paint_stage;
 
 #[derive(Clone, Debug)]
@@ -506,10 +506,10 @@ fn paint_portrait(rgb: &mut [u8], content: &Content, frame: Frame, hero: &gemini
     if card_w <= 4 || card_h <= 4 {
         return;
     }
-    let mut view = view_frame(content, hero);
-    view.fov = portrait_fov(content, &view);
     let raster = content.ui.portrait.raster;
-    let src = raster_viewmodel(raster, raster, &view);
+    // The portrait raster rounds palette channels. Truncation misses those pixels.
+    let accent_px = palette_round(content, &hero.accent_key);
+    let src = portrait_raster(content, hero, raster);
     let Some((x0, y0, x1, y1)) = opaque_bounds(content, &src, raster) else {
         return;
     };
@@ -540,7 +540,7 @@ fn paint_portrait(rgb: &mut [u8], content: &Content, frame: Frame, hero: &gemini
                 continue;
             }
             if !hero.owned {
-                px = gray(px);
+                px = locked_pixel(px, accent_px, content.ui.layout.locked_accent_mix);
             }
             put(rgb, frame.width, frame.height, dx + col, dy + row, px);
         }
@@ -591,20 +591,74 @@ fn opaque_bounds(content: &Content, src: &[u8], raster: u32) -> Option<(i32, i32
     if any { Some((x0, y0, x1, y1)) } else { None }
 }
 
+fn portrait_raster(content: &Content, hero: &gemini_sim::content::HeroCard, raster: u32) -> Vec<u8> {
+    if hero.portrait.mesh == "pulse_rifle" {
+        let mut view = view_frame(content, hero);
+        view.fov = portrait_fov(content, &view, hero.portrait.fit);
+        return raster_viewmodel_yaw(raster, raster, &view, hero.portrait.yaw_deg);
+    }
+    let built = crate::portrait::build(&hero.portrait.mesh).unwrap_or_else(|| panic!("unknown portrait mesh {}", hero.portrait.mesh));
+    let turned = crate::portrait::yaw(&built, hero.portrait.yaw_deg);
+    let positions: Vec<[f32; 3]> = turned.iter().flat_map(|part| part.mesh.positions.iter().copied()).collect();
+    let fov = mesh_fov(content, &positions, hero.portrait.fit);
+    let accent = {
+        let c = content.palette.key(&hero.accent_key);
+        [c[0], c[1], c[2], 1.0]
+    };
+    let body = content.palette.key("hero_cobalt");
+    let parts: Vec<(crate::MeshData, [f32; 4], bool)> = turned
+        .iter()
+        .map(|part| {
+            let color = if part.glow { accent } else { body };
+            (part.mesh.clone(), color, part.glow)
+        })
+        .collect();
+    raster_parts(raster, raster, &parts, fov)
+}
+
 /// Widens the idle FOV until the viewmodel vertices sit inside the frame.
-fn portrait_fov(content: &Content, frame: &ViewmodelFrame) -> f32 {
+fn portrait_fov(content: &Content, frame: &ViewmodelFrame, fit: f32) -> f32 {
     let framing = &content.ui.portrait;
     let vm = crate::viewmodel();
     let meshes = [&vm.teal, &vm.cobalt, &vm.white, &vm.accent, &vm.core, &vm.barrel];
     let mut fov = frame.fov.max(framing.fov_floor);
     let limit = framing.fov_limit;
     while fov < limit {
-        if vertices_fit(&meshes, frame.offset, fov, framing.near, framing.fit) {
+        if vertices_fit(&meshes, frame.offset, fov, framing.near, fit) {
             return fov;
         }
         fov += framing.fov_step;
     }
     limit
+}
+
+fn mesh_fov(content: &Content, positions: &[[f32; 3]], fit: f32) -> f32 {
+    let framing = &content.ui.portrait;
+    let mut fov = framing.fov_floor;
+    let limit = framing.fov_limit;
+    while fov < limit {
+        if positions_fit(positions, fov, framing.near, fit) {
+            return fov;
+        }
+        fov += framing.fov_step;
+    }
+    limit
+}
+
+fn positions_fit(positions: &[[f32; 3]], fov: f32, near: f32, fit: f32) -> bool {
+    let focal = 1.0 / (fov.to_radians() * 0.5).tan();
+    let mut any = false;
+    for p in positions {
+        let z = -p[2];
+        if z < near {
+            return false;
+        }
+        any = true;
+        if (p[0] / z * focal).abs() > fit || (p[1] / z * focal).abs() > fit {
+            return false;
+        }
+    }
+    any
 }
 
 fn vertices_fit(meshes: &[&crate::MeshData], offset: [f32; 3], fov: f32, near: f32, fit: f32) -> bool {
@@ -668,6 +722,11 @@ fn palette(content: &Content, key: &str) -> [u8; 3] {
     [(c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8]
 }
 
+fn palette_round(content: &Content, key: &str) -> [u8; 3] {
+    let c = content.palette.key(key);
+    [(c[0] * 255.0).round() as u8, (c[1] * 255.0).round() as u8, (c[2] * 255.0).round() as u8]
+}
+
 fn ink(content: &Content, key: &str) -> [u8; 3] {
     palette(content, key)
 }
@@ -682,8 +741,13 @@ fn accent(content: &Content, hero: Option<&str>) -> [u8; 3] {
 }
 
 fn gray(px: [u8; 3]) -> [u8; 3] {
-    let y = (0.30 * px[0] as f32 + 0.59 * px[1] as f32 + 0.11 * px[2] as f32).round() as u8;
+    let y = crate::luma(px[0] as f32, px[1] as f32, px[2] as f32).round().clamp(0.0, 255.0) as u8;
     [y, y, y]
+}
+
+fn locked_pixel(px: [u8; 3], accent: [u8; 3], mix: f32) -> [u8; 3] {
+    let body = gray(px);
+    if px == accent { lift(body, accent, mix) } else { body }
 }
 
 fn lift(base: [u8; 3], toward: [u8; 3], amount: f32) -> [u8; 3] {
@@ -847,6 +911,66 @@ mod tests {
                 }
             }
         }
+        let content = Content::embedded();
+        let panel = bytes(&content, &content.ui.colors.panel);
+        let (rgb, hits) = paint_menu(&content, &MenuShot::Heroes { focus: 0 }, 1280, 720);
+        for hit in hits.iter().filter(|hit| hit.id.starts_with("hero:") && hit.id != "hero:vex") {
+            let id = hit.id.trim_start_matches("hero:");
+            let hero = content.heroes.iter().find(|hero| hero.id == id).unwrap();
+            let accent = round_bytes(&content, &hero.accent_key);
+            let mixed = lift(gray(accent), accent, content.ui.layout.locked_accent_mix);
+            let mut glow = 0u32;
+            let mut colored = 0u32;
+            let inset = ((content.ui.layout.border_px * (720.0 / content.ui.layout.fit_height)).round() as i32).max(1);
+            let top = hit.y + inset;
+            let bottom = hit.y + hit.h / 2;
+            for y in top..bottom {
+                for x in (hit.x + inset)..(hit.x + hit.w - inset) {
+                    let px = sample(&rgb, 1280, x, y);
+                    if px == panel {
+                        continue;
+                    }
+                    if px == mixed {
+                        glow += 1;
+                    } else if px[0] != px[1] || px[1] != px[2] {
+                        colored += 1;
+                    }
+                }
+            }
+            assert!(glow > 8, "{id} keeps a mixed accent glow");
+            assert_eq!(colored, 0, "{id} locked portrait is grayscale aside from the accent mix");
+        }
+    }
+
+    #[test]
+    fn vex_yaw_zero_matches_the_unrotated_viewmodel_and_a_turn_changes_it() {
+        let content = Content::embedded();
+        let hero = content.heroes.iter().find(|hero| hero.id == "vex").unwrap();
+        assert_eq!(hero.portrait.yaw_deg, 0.0);
+        let raster = content.ui.portrait.raster;
+        let painted = portrait_raster(&content, hero, raster);
+        let mut view = view_frame(&content, hero);
+        view.fov = portrait_fov(&content, &view, hero.portrait.fit);
+        assert_eq!(painted, crate::preview::raster_viewmodel(raster, raster, &view));
+        assert_ne!(painted, raster_viewmodel_yaw(raster, raster, &view, 12.0));
+    }
+
+    #[test]
+    fn portrait_builders_follow_the_content_list() {
+        for id in gemini_sim::content::PORTRAIT_MESHES {
+            let built = crate::portrait::build(id);
+            if *id == "pulse_rifle" {
+                assert!(built.is_none(), "{id} stays on the viewmodel");
+            } else {
+                assert!(built.is_some_and(|parts| !parts.is_empty()), "{id}");
+            }
+        }
+        assert!(crate::portrait::build("laser_knife").is_none());
+    }
+
+    fn round_bytes(content: &Content, key: &str) -> [u8; 3] {
+        let c = content.palette.key(key);
+        [(c[0] * 255.0).round() as u8, (c[1] * 255.0).round() as u8, (c[2] * 255.0).round() as u8]
     }
 
     fn bytes(content: &Content, key: &str) -> [u8; 3] {
