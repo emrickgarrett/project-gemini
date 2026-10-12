@@ -114,7 +114,7 @@ pub fn paint_away(content: &Content, shot: &AwayShot, width: u32, height: u32) -
 }
 
 /// Arena floor plus swarmer, spitter, and brute. The bug raster's grey field is transparent.
-fn paint_arena(rgb: &mut [u8], width: u32, height: u32, content: &Content) {
+pub(crate) fn paint_arena(rgb: &mut [u8], width: u32, height: u32, content: &Content) {
     let paint = &content.arena.paint;
     let wash = &content.arena.edge_wash;
     let dark = bytes(content, &paint.floor_dark);

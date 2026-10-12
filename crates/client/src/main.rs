@@ -1,16 +1,17 @@
 //! Project Gemini, milestone M1. WebGPU build, with a separate WebGL2 build.
 
 mod audio;
+mod flow;
 mod hud;
 #[cfg(not(target_arch = "wasm32"))]
 mod net;
 mod reveal_ui;
 mod session;
+mod settings;
 mod world;
 
 use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
-use bevy::ui_widgets::{Activate, Button};
 
 #[derive(States, Clone, Eq, PartialEq, Hash, Debug, Default)]
 enum AppState {
@@ -55,167 +56,46 @@ fn install_match(app: &mut App) {
         .insert_resource(session::PendingDifficulty("normal".into()))
         .insert_resource(session::SimClock::default())
         .insert_resource(session::Account { rank: 1 })
-        .insert_resource(session::launch_from_env())
-        .add_systems(OnEnter(AppState::Menu), (menu, audio::menu_theme))
-        .add_systems(OnExit(AppState::Menu), (despawn_menu, audio::stop_all))
+        .insert_resource(session::launch_from_env());
+    flow::register(app);
+    app.add_systems(OnEnter(AppState::Menu), audio::menu_theme)
+        .add_systems(OnExit(AppState::Menu), audio::stop_all)
         .add_systems(OnEnter(AppState::Playing), (session::boot, world::scene, audio::boot).chain())
         .add_systems(OnExit(AppState::Playing), (despawn_play, session::shutdown, audio::stop_all))
         .add_systems(
             Update,
             (
-                session::gather_and_step,
-                audio::play,
-                audio::attach_duck,
-                audio::sync_gains,
-                audio::sync_crowd,
-                world::sync,
-                world::sync_viewmodel,
-                world::camera,
-                world::grade,
-                hud::draw,
+                (flow::pause_keys, flow::navigate, flow::hover, flow::apply, session::gather_and_step).chain(),
+                (
+                    audio::play,
+                    audio::hold_loops,
+                    audio::attach_duck,
+                    audio::sync_gains,
+                    audio::sync_crowd,
+                    world::sync,
+                    world::sync_viewmodel,
+                    world::camera,
+                    world::grade,
+                    hud::draw,
+                )
+                    .chain(),
+                (flow::rebuild, flow::end_of_match, flow::click_prompt).chain(),
             )
                 .chain()
                 .run_if(in_state(AppState::Playing)),
         )
-        .add_systems(Update, (menu_keys, session::autoplay, audio::attach_duck).run_if(in_state(AppState::Menu)))
+        .add_systems(
+            Update,
+            (session::autoplay, audio::menu_levels, audio::sync_gains, audio::attach_duck).run_if(in_state(AppState::Menu)),
+        )
         .add_systems(Update, reveal_ui::tick.run_if(in_state(AppState::Reveal)))
         .add_systems(OnExit(AppState::Reveal), reveal_ui::close);
-}
-
-#[derive(Component)]
-struct MenuRoot;
-
-#[derive(Component)]
-struct DiffButton(&'static str);
-
-fn menu(mut commands: Commands) {
-    let content = gemini_sim::content::Content::embedded();
-    let teal = srgb(&content, "hero_teal");
-    let white = srgb(&content, "hero_white");
-    let accent = srgb(&content, "hero_accent");
-    commands.spawn((
-        Node {
-            width: Val::Percent(100.0),
-            height: Val::Percent(100.0),
-            flex_direction: FlexDirection::Column,
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            row_gap: Val::Px(12.0),
-            ..default()
-        },
-        MenuRoot,
-        children![
-            (
-                Text::new("PROJECT GEMINI"),
-                TextFont::from_font_size(42.0),
-                TextColor(teal),
-            ),
-            (
-                Text::new("1 NORMAL    2 HARD    3 HEROIC    4 LEGENDARY"),
-                TextFont::from_font_size(16.0),
-                TextColor(white),
-            ),
-            (
-                Text::new("REVEAL"),
-                TextFont::from_font_size(14.0),
-                TextColor(white),
-            ),
-        ],
-    ));
-    for rarity in ["common", "rare", "epic", "legendary"] {
-        let label = rarity.to_uppercase();
-        commands
-            .spawn((
-                Button,
-                reveal_ui::RevealButton(rarity),
-                Node {
-                    width: Val::Px(240.0),
-                    height: Val::Px(36.0),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    border_radius: BorderRadius::all(Val::Px(8.0)),
-                    ..default()
-                },
-                BackgroundColor(teal),
-                MenuRoot,
-                children![(
-                    Text::new(label),
-                    TextFont::from_font_size(16.0),
-                    TextColor(Color::srgb(0.07, 0.06, 0.09)),
-                )],
-            ))
-            .observe(reveal_ui::start_button);
-    }
-    for (id, label) in [("normal", "NORMAL"), ("hard", "HARD"), ("heroic", "HEROIC"), ("legendary", "LEGENDARY")] {
-        commands
-            .spawn((
-                Button,
-                DiffButton(id),
-                Node {
-                    width: Val::Px(240.0),
-                    height: Val::Px(42.0),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    border_radius: BorderRadius::all(Val::Px(8.0)),
-                    ..default()
-                },
-                BackgroundColor(accent),
-                MenuRoot,
-                children![(Text::new(label), TextFont::from_font_size(18.0), TextColor(white))],
-            ))
-            .observe(pick_difficulty);
-    }
-}
-
-fn pick_difficulty(
-    activate: On<Activate>,
-    buttons: Query<&DiffButton>,
-    mut pending: ResMut<session::PendingDifficulty>,
-    mut next: ResMut<NextState<AppState>>,
-) {
-    if let Ok(diff) = buttons.get(activate.entity) {
-        pending.0 = diff.0.to_string();
-        next.set_if_different(AppState::Playing);
-    }
-}
-
-fn menu_keys(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut pending: ResMut<session::PendingDifficulty>,
-    mut next: ResMut<NextState<AppState>>,
-) {
-    let pick = if keys.just_pressed(KeyCode::Digit1) {
-        Some("normal")
-    } else if keys.just_pressed(KeyCode::Digit2) {
-        Some("hard")
-    } else if keys.just_pressed(KeyCode::Digit3) {
-        Some("heroic")
-    } else if keys.just_pressed(KeyCode::Digit4) {
-        Some("legendary")
-    } else {
-        None
-    };
-    if let Some(id) = pick {
-        pending.0 = id.to_string();
-        next.set_if_different(AppState::Playing);
-    }
-}
-
-fn despawn_menu(mut commands: Commands, roots: Query<Entity, With<MenuRoot>>) {
-    for entity in &roots {
-        commands.entity(entity).despawn();
-    }
 }
 
 fn despawn_play(mut commands: Commands, pieces: Query<Entity, With<world::PlayPiece>>) {
     for entity in &pieces {
         commands.entity(entity).despawn();
     }
-}
-
-fn srgb(content: &gemini_sim::content::Content, key: &str) -> Color {
-    let c = content.palette.key(key);
-    Color::srgb(c[0], c[1], c[2])
 }
 
 #[cfg(test)]
@@ -247,6 +127,7 @@ mod tests {
 
     #[test]
     fn menu_start_runs_the_match_once_and_the_sim_advances() {
+        let _guard = settings_lock();
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
@@ -269,9 +150,10 @@ mod tests {
         app.add_systems(OnEnter(AppState::Playing), count_match_enter);
 
         let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-        keys.press(KeyCode::Digit1);
         keys.press(KeyCode::KeyW);
         drop(keys);
+        app.world_mut().resource_mut::<session::PendingDifficulty>().0 = "normal".into();
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Playing);
         app.world_mut().resource_mut::<session::SimClock>().set_accumulated(30.0);
 
         let mut wave_starts = 0u32;
@@ -381,5 +263,108 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<session::SimClock>().accumulated(), 0.0);
         assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Menu));
+    }
+
+    #[test]
+    fn three_clicks_start_the_match_and_play_again_skips_the_pickers() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        app.update();
+        assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Menu));
+        choose(&mut app, "play");
+        assert!(matches!(*app.world().resource::<flow::Page>(), flow::Page::Heroes));
+        let hero = gemini_sim::content::Content::embedded().hero.id.clone();
+        choose(&mut app, &format!("hero:{hero}"));
+        assert!(matches!(*app.world().resource::<flow::Page>(), flow::Page::Difficulty));
+        choose(&mut app, "tier:normal");
+        assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Playing));
+
+        let tick = app.world().resource::<session::Game>().sim.tick;
+        app.world_mut().resource_mut::<session::PauseMenu>().open = true;
+        for _ in 0..8 {
+            app.update();
+        }
+        assert_eq!(app.world().resource::<session::Game>().sim.tick, tick, "solo pause must stop the sim");
+        app.world_mut().resource_mut::<session::PauseMenu>().open = false;
+        app.update();
+        assert!(app.world().resource::<session::Game>().sim.tick > tick, "closing pause resumes the sim");
+
+        app.world_mut().resource_mut::<session::Game>().sim.phase = gemini_sim::sim::Phase::Victory;
+        app.update();
+        app.update();
+        assert!(matches!(*app.world().resource::<flow::Page>(), flow::Page::Results));
+        assert!(app.world().get_resource::<flow::MatchSummary>().is_some());
+        choose(&mut app, "play_again");
+        assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Playing));
+    }
+
+    #[test]
+    fn a_bad_remembered_hero_opens_the_picker_again() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        app.update();
+        {
+            let mut prefs = app.world_mut().resource_mut::<settings::Prefs>();
+            prefs.character = Some("not-a-hero".into());
+            prefs.difficulty = Some("normal".into());
+        }
+        app.world_mut().insert_resource(flow::MatchSummary {
+            victory: true,
+            waves: 1,
+            kills: 1,
+            seconds: 10.0,
+            currency: 5.0,
+        });
+        app.world_mut().resource_mut::<flow::Page>().clone_from(&flow::Page::Results);
+        choose(&mut app, "play_again");
+        assert!(matches!(*app.world().resource::<flow::Page>(), flow::Page::Heroes));
+        assert!(app.world().resource::<settings::Prefs>().character.is_none());
+        assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Menu));
+    }
+
+    #[test]
+    fn solo_pause_is_local_and_coop_keeps_running() {
+        assert!(flow::freeze_solo(true, 1));
+        assert!(!flow::freeze_solo(true, 2), "co-op pause must not stop the shared match");
+        assert!(!flow::freeze_solo(false, 1));
+    }
+
+    fn menu_app() -> App {
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::state::app::StatesPlugin,
+            AssetPlugin {
+                file_path: "../../assets".to_string(),
+                ..default()
+            },
+        ));
+        app.init_asset::<Mesh>();
+        app.init_asset::<StandardMaterial>();
+        app.init_asset::<bevy::image::Image>();
+        app.init_asset::<bevy::audio::AudioSource>();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.init_resource::<ButtonInput<MouseButton>>();
+        app.init_resource::<bevy::input::mouse::AccumulatedMouseMotion>();
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(1.0 / 60.0)));
+        app.add_message::<bevy::window::WindowOccluded>();
+        install_match(&mut app);
+        app
+    }
+
+    fn choose(app: &mut App, id: &str) {
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some(id.to_string());
+        // The click lands in this update. A state change is applied on the next one.
+        app.update();
+        app.update();
+    }
+
+    fn settings_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let path = std::env::temp_dir().join(format!("gemini-ui-test-{}.toml", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        std::env::set_var("GEMINI_SETTINGS", &path);
+        guard
     }
 }

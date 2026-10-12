@@ -470,6 +470,85 @@ loop = false
 category = "ui"
 measured_rms_db = -19.3
 
+# Menu flow. Rows merged from the UI sound drop. `loop` is required by the loader;
+# the drop omitted it, and these cues are one-shots.
+[ui_hover]
+volume_db = -18.0
+pitch_rand_semitones = 0.3
+max_instances = 2
+loop = false
+category = "ui"
+
+[ui_confirm]
+volume_db = -10.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+
+[ui_back]
+volume_db = -10.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+
+[ui_error]
+volume_db = -10.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+
+[ui_slider_tick]
+volume_db = -20.0
+pitch_rand_semitones = 0.0
+max_instances = 3
+loop = false
+category = "ui"
+
+[ui_toggle]
+volume_db = -14.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+
+[pause_open]
+volume_db = -10.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+
+[pause_close]
+volume_db = -10.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+
+[match_start]
+volume_db = -6.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+
+[results_victory]
+volume_db = -6.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+
+[results_defeat]
+volume_db = -6.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+
 [upgrade_pick]
 volume_db = -1.4
 pitch_rand_semitones = 0

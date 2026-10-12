@@ -21,7 +21,8 @@ use gemini_sim::music::{
 use gemini_sim::ogg::vorbis_seconds;
 use gemini_sim::sim::MusicMoment;
 
-use crate::session::{Away, FrameFx, Game};
+use crate::session::{Away, FrameFx, Game, PauseMenu};
+use crate::settings::Prefs;
 
 #[derive(Component)]
 pub(crate) struct MusicStem {
@@ -156,6 +157,8 @@ pub struct Music {
     pub fade_dur: f32,
     /// Linear gain on top of the stem mix. 1 while live. Eases back from the away duck.
     pub duck_gain: f32,
+    /// Master times the music slider. Effects never touch this bus.
+    pub user_gain: f32,
     filter: MusicFilter,
 }
 
@@ -170,6 +173,7 @@ impl Default for Music {
             fade_left: 0.0,
             fade_dur: 0.0,
             duck_gain: 1.0,
+            user_gain: 1.0,
             filter: MusicFilter::default(),
         }
     }
@@ -201,11 +205,25 @@ pub fn play(
     mut crowd: ResMut<Crowd>,
     shots: Query<(Entity, &OneShot), Without<MusicStem>>,
     time: Res<Time>,
+    prefs: Res<Prefs>,
+    hold: Res<PauseMenu>,
 ) {
     let hud = &game.content.presentation.hud.away;
     let mix = away_mix(away.view.look, hud.music_duck_db, hud.music_duck_lowpass_hz);
-    music.duck_gain = mix.gain;
-    music.filter.0.set_hz(mix.lowpass_hz);
+    let solo = game.sim.connected_count() <= 1;
+    if hold.open && solo {
+        // Same duck and low-pass as the host-away banner.
+        music.duck_gain = db_to_gain(hud.solo_pause_duck_db);
+        music.filter.0.set_hz(hud.music_duck_lowpass_hz);
+    } else if hold.open {
+        // This client only. Game sounds stay full; music ducks without the low-pass.
+        music.duck_gain = mix.gain.min(db_to_gain(hud.coop_pause_duck_db));
+        music.filter.0.set_hz(mix.lowpass_hz);
+    } else {
+        music.duck_gain = mix.gain;
+        music.filter.0.set_hz(mix.lowpass_hz);
+    }
+    music.user_gain = bus_gain(&prefs, true);
     let listener = listener_of(&game);
     if !fx.moments.is_empty() {
         apply_moments(&mut commands, &assets, &game.content, &mut music, &fx.moments, &game.sim);
@@ -225,7 +243,7 @@ pub fn play(
         let Some(def) = game.content.sfx(&voice.id) else { continue };
         if voice.crowd {
             let fullness = if def.loudness > 0.0 { voice.gain / def.loudness } else { 1.0 };
-            crowd_vol = def.volume * fullness;
+            crowd_vol = def.volume * fullness * bus_gain(&prefs, false);
             continue;
         }
         let mut speed = 1.0;
@@ -236,7 +254,7 @@ pub fn play(
             shot_i += 1;
         }
         let atten = attenuate(&game.content, voice.pos, listener);
-        let volume = def.volume * atten;
+        let volume = def.volume * atten * bus_gain(&prefs, false);
         let looping = def.looped;
         let settings = if looping {
             PlaybackSettings::LOOP
@@ -286,14 +304,52 @@ pub fn sync_crowd(crowd: Res<Crowd>, mut sinks: Query<&mut AudioSink, With<Crowd
     }
 }
 
-pub fn footstep(commands: &mut Commands, assets: &AssetServer, game: &Game, id: &str, pos: SimVec) {
+pub fn footstep(commands: &mut Commands, assets: &AssetServer, game: &Game, id: &str, pos: SimVec, prefs: &Prefs) {
     let Some(def) = game.content.sfx(id) else { return };
-    let listener = listener_of(&game);
-    let volume = def.volume * attenuate(&game.content, pos, listener);
+    let listener = listener_of(game);
+    let volume = def.volume * attenuate(&game.content, pos, listener) * bus_gain(prefs, false);
     commands.spawn((
         AudioPlayer::new(assets.load::<AudioSource>(def.path.clone())),
         PlaybackSettings::DESPAWN.with_volume(Volume::Linear(volume)),
     ));
+}
+
+/// Master scales every bus. Music scales stems. Effects scales every other mix category.
+pub fn bus_gain(prefs: &Prefs, music: bool) -> f32 {
+    let bus = if music { prefs.music } else { prefs.effects };
+    (prefs.master * bus).clamp(0.0, 1.0)
+}
+
+pub fn ui_cue(commands: &mut Commands, assets: &AssetServer, content: &Content, prefs: &Prefs, id: &str) {
+    let Some(def) = content.sfx(id) else { return };
+    commands.spawn((
+        AudioPlayer::new(assets.load::<AudioSource>(def.path.clone())),
+        PlaybackSettings::DESPAWN.with_volume(Volume::Linear(def.volume * bus_gain(prefs, false))),
+        OneShot { id: id.to_string(), owner: 0 },
+    ));
+}
+
+pub fn menu_levels(prefs: Res<Prefs>, mut music: Option<ResMut<Music>>) {
+    let Some(music) = music.as_mut() else { return };
+    music.user_gain = bus_gain(&prefs, true);
+    music.duck_gain = 1.0;
+    music.filter.0.set_hz(f32::INFINITY);
+}
+
+/// Solo pause suspends looping game sounds. Closing the menu resumes them in place.
+pub fn hold_loops(hold: Res<PauseMenu>, game: Res<Game>, mut sinks: Query<(&OneShot, &mut AudioSink)>) {
+    let pause_loops = hold.open && game.sim.connected_count() <= 1;
+    for (shot, sink) in &mut sinks {
+        let looping = game.content.sfx(&shot.id).is_some_and(|def| def.looped);
+        if !looping {
+            continue;
+        }
+        if pause_loops {
+            sink.pause();
+        } else if sink.is_paused() {
+            sink.play();
+        }
+    }
 }
 
 pub fn menu_theme(mut commands: Commands, assets: Res<AssetServer>) {
@@ -425,7 +481,7 @@ fn start_track(commands: &mut Commands, assets: &AssetServer, content: &Content,
             let entity = commands
                 .spawn((
                     StemFile(assets.load::<AudioSource>(path)),
-                    PlaybackSettings::LOOP.with_volume(Volume::Linear(0.85 * music.duck_gain)),
+                    PlaybackSettings::LOOP.with_volume(Volume::Linear(0.85 * music.duck_gain * music.user_gain)),
                     MusicStem { index: 0 },
                 ))
                 .id();
@@ -438,7 +494,7 @@ fn start_track(commands: &mut Commands, assets: &AssetServer, content: &Content,
             let entity = commands
                 .spawn((
                     StemFile(assets.load::<AudioSource>(path.clone())),
-                    PlaybackSettings::LOOP.with_volume(Volume::Linear(gain * music.duck_gain)),
+                    PlaybackSettings::LOOP.with_volume(Volume::Linear(gain * music.duck_gain * music.user_gain)),
                     MusicStem { index: i },
                 ))
                 .id();
@@ -552,8 +608,9 @@ pub fn attach_duck(
     }
 }
 
-pub fn sync_gains(music: Res<Music>, mut stems: Query<(&MusicStem, &mut AudioSink)>) {
-    let duck = music.duck_gain.clamp(0.0, 1.0);
+pub fn sync_gains(music: Option<Res<Music>>, mut stems: Query<(&MusicStem, &mut AudioSink)>) {
+    let Some(music) = music else { return };
+    let duck = (music.duck_gain * music.user_gain).clamp(0.0, 1.0);
     if music.mixer.is_none() {
         for (_stem, mut sink) in &mut stems {
             sink.set_volume(Volume::Linear(0.85 * duck));

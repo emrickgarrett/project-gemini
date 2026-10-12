@@ -1,5 +1,5 @@
-# FOV range is the note on controller.toml [camera] ("player-adjustable 75 to 110").
-fov_min = 75.0
+# Player-adjustable range. Settings uses the same bounds (ui.toml [settings]).
+fov_min = 70.0
 fov_max = 110.0
 mouse_sensitivity = 0.0022
 gamepad_look_deg_per_sec = 130.0
@@ -34,6 +34,9 @@ count_scale_to = 0.8
 away_desaturation = 0.6
 away_dim = 0.3
 music_duck_db = -12.0
+# Solo pause reuses the away duck and low-pass. Co-op pause ducks music only, on that client.
+solo_pause_duck_db = -12.0
+coop_pause_duck_db = -6.0
 music_duck_lowpass_hz = 800.0
 # Dim minimum. The grade never multiplies a pixel darker than this.
 dim_floor = 0.05

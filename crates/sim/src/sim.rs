@@ -331,6 +331,9 @@ pub struct Sim {
     pub director: Director,
     pub next_id: u32,
     pub boss_kills: u32,
+    /// Enemy deaths credited to a player. The results screen reads this.
+    #[serde(default)]
+    pub kills: u32,
     pub endless_mode: bool,
     pub pending_vents: Vec<PendingVent>,
     /// Seconds every living player has stayed on a jetpack perch.
@@ -408,6 +411,7 @@ impl Sim {
             },
             next_id: 1,
             boss_kills: 0,
+            kills: 0,
             endless_mode: false,
             pending_vents: Vec::new(),
             all_perched_for: 0.0,
@@ -2418,6 +2422,7 @@ impl Sim {
         let killer = self.enemies[index].last_hit_by;
         let seat = self.players.iter().position(|player| player.id == killer);
         if let Some(seat) = seat {
+            self.kills = self.kills.saturating_add(1);
             let player = &self.players[seat];
             let mods = upgrade::collect(content, &player.upgrades);
             let overdrive = player.overdrive_left > 0.0;

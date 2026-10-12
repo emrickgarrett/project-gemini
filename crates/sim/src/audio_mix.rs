@@ -188,6 +188,7 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
                 looped,
                 pitch_semitones: semis,
                 sync_at,
+                category_ui: category == "ui",
             },
         );
     }

@@ -2,7 +2,6 @@
 
 use bevy::audio::Volume;
 use bevy::prelude::*;
-use bevy::ui_widgets::Activate;
 
 use gemini_sim::content::Content;
 use gemini_sim::reveal::{look, RevealRun};
@@ -12,14 +11,19 @@ use crate::AppState;
 #[derive(Resource)]
 pub struct RevealPlayback(pub RevealRun);
 
+/// Where Enter returns after the card. The crates screen stays on its route.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum RevealFrom {
+    #[default]
+    Menu,
+    Crates,
+}
+
 #[derive(Component)]
 pub(crate) struct RevealRoot;
 
 #[derive(Component)]
 pub(crate) struct RevealVoice;
-
-#[derive(Component)]
-pub(crate) struct RevealButton(pub(crate) &'static str);
 
 pub fn tick(
     mut commands: Commands,
@@ -30,13 +34,15 @@ pub fn tick(
     mut playback: ResMut<RevealPlayback>,
     mut next: ResMut<NextState<AppState>>,
     old: Query<Entity, With<RevealRoot>>,
+    prefs: Option<Res<crate::settings::Prefs>>,
 ) {
     let content = Content::embedded();
     let run = &mut playback.0;
     let skip = keys.just_pressed(KeyCode::Space) || mouse.just_pressed(MouseButton::Left);
     let cues = if skip { run.skip() } else { run.advance(time.delta_secs()) };
+    let bus = prefs.as_ref().map(|prefs| crate::audio::bus_gain(prefs, false)).unwrap_or(1.0);
     for id in cues {
-        play_cue(&mut commands, &assets, &content, &id);
+        play_cue(&mut commands, &assets, &content, &id, bus);
     }
     if run.time >= run.plan.card_at && keys.just_pressed(KeyCode::Enter) {
         next.set(AppState::Menu);
@@ -118,19 +124,7 @@ pub fn close(mut commands: Commands, roots: Query<Entity, Or<(With<RevealRoot>, 
         commands.entity(entity).despawn();
     }
     commands.remove_resource::<RevealPlayback>();
-}
-
-pub fn start_button(
-    activate: On<Activate>,
-    buttons: Query<&RevealButton>,
-    mut commands: Commands,
-    mut next: ResMut<NextState<AppState>>,
-) {
-    let Ok(button) = buttons.get(activate.entity) else { return };
-    let content = Content::embedded();
-    let run = RevealRun::start(&content, button.0, None).expect("reveal rarity");
-    commands.insert_resource(RevealPlayback(run));
-    next.set(AppState::Reveal);
+    commands.remove_resource::<RevealFrom>();
 }
 
 pub fn from_env(spec: &str) -> Option<RevealRun> {
@@ -139,12 +133,12 @@ pub fn from_env(spec: &str) -> Option<RevealRun> {
     RevealRun::start(&content, rarity.trim(), fakeout).ok()
 }
 
-fn play_cue(commands: &mut Commands, assets: &AssetServer, content: &Content, id: &str) {
+fn play_cue(commands: &mut Commands, assets: &AssetServer, content: &Content, id: &str, bus: f32) {
     let Some(path) = content.cue_path(id) else { return };
     let Some(volume) = content.cue_volume(id) else { return };
     commands.spawn((
         AudioPlayer::new(assets.load::<AudioSource>(path.to_string())),
-        PlaybackSettings::DESPAWN.with_volume(Volume::Linear(volume)),
+        PlaybackSettings::DESPAWN.with_volume(Volume::Linear(volume * bus)),
         RevealVoice,
     ));
 }

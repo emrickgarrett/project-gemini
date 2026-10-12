@@ -3,10 +3,14 @@
 
 mod away_still;
 mod geom;
+mod glyph;
+mod menu_still;
 mod pose;
 mod preview;
 mod reveal_still;
 mod visual;
+
+pub use menu_still::{paint_menu, Hit, MenuShot, PaintPrefs};
 
 pub use away_still::{paint_away, AwayShot};
 pub use reveal_still::{paint_reveal, reveal_still_is_flat, still_color_stats};

@@ -466,6 +466,7 @@ mod tests {
             crate_reveal: &reveal,
             coop: base.coop,
             cosmetics: base.cosmetics,
+            ui: base.ui,
         })
         .expect("content with fakeouts off")
     }
