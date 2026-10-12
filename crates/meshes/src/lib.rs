@@ -7,7 +7,10 @@ mod preview;
 mod visual;
 
 pub use pose::{pose, AnimInput, Pose, Xform};
-pub use preview::{missing_glow_keys, painted_pixels, raster, raster_bug, raster_crown, still, still_open};
+pub use preview::{
+    missing_glow_keys, painted_pixels, raster, raster_bug, raster_crown, raster_viewmodel, still, still_open,
+    ViewmodelFrame,
+};
 pub use visual::{bug, catalog, flat_shaded, EnemyVisual, Gate, Joint, Part, ShotCamera};
 
 #[derive(Clone, Debug)]
@@ -48,43 +51,204 @@ pub fn blob_shadow() -> MeshData {
     m
 }
 
-pub fn arms_and_gun(cobalt: Rgba, white: Rgba, accent: Rgba, _energy: Rgba) -> MeshData {
+/// First-person gloves and pulse rifle, split so each hero can tint `accent`.
+#[derive(Clone, Debug)]
+pub struct Viewmodel {
+    pub teal: MeshData,
+    pub cobalt: MeshData,
+    pub white: MeshData,
+    pub accent: MeshData,
+    pub core: MeshData,
+    /// Outer barrel tube. Idle stays cobalt; Overdrive tints this orange.
+    pub barrel: MeshData,
+}
+
+impl Viewmodel {
+    pub fn tri_count(&self) -> usize {
+        self.teal.tri_count()
+            + self.cobalt.tri_count()
+            + self.white.tri_count()
+            + self.accent.tri_count()
+            + self.core.tri_count()
+            + self.barrel.tri_count()
+    }
+}
+
+/// Barrel tip in viewmodel mesh space, before the screen offset from characters.toml.
+pub fn muzzle_local() -> [f32; 3] {
+    [0.02, -0.005, -1.30]
+}
+
+pub fn viewmodel() -> Viewmodel {
+    let mut vm = Viewmodel {
+        teal: MeshData::new(),
+        cobalt: MeshData::new(),
+        white: MeshData::new(),
+        accent: MeshData::new(),
+        core: MeshData::new(),
+        barrel: MeshData::new(),
+    };
+    let ink = [1.0, 1.0, 1.0, 1.0];
+    glove(&mut vm, [0.2, -0.04, -0.08], 1.0, ink);
+    glove(&mut vm, [-0.06, -0.05, -0.5], -1.0, ink);
+    rifle(&mut vm, ink);
+    vm
+}
+
+pub fn arms_and_gun(cobalt: Rgba, white: Rgba, accent: Rgba, energy: Rgba) -> MeshData {
+    let vm = viewmodel();
+    let teal = [0.12, 0.71, 0.66, 1.0];
     let mut m = MeshData::new();
-    geom::gem(&mut m, [0.22, -0.16, -0.02], [0.07, 0.18, 0.07], 10, 8, cobalt.0);
-    geom::gem(&mut m, [0.24, -0.28, -0.22], [0.06, 0.14, 0.06], 10, 8, cobalt.0);
-    geom::gem(&mut m, [0.26, -0.34, -0.4], [0.09, 0.07, 0.08], 8, 6, white.0);
-    for i in 0..8 {
-        let z = -0.15 - i as f32 * 0.08;
-        geom::plate(
-            &mut m,
-            [0.18, -0.2, z],
-            0.1,
-            0.16,
-            0.05,
-            3,
-            2,
-            if i % 3 == 0 { accent.0 } else { cobalt.0 },
+    geom::append(&mut m, &recolor(&vm.teal, teal));
+    geom::append(&mut m, &recolor(&vm.cobalt, cobalt.0));
+    geom::append(&mut m, &recolor(&vm.white, white.0));
+    geom::append(&mut m, &recolor(&vm.accent, accent.0));
+    geom::append(&mut m, &recolor(&vm.core, energy.0));
+    geom::append(&mut m, &recolor(&vm.barrel, cobalt.0));
+    m
+}
+
+fn recolor(src: &MeshData, color: [f32; 4]) -> MeshData {
+    let mut mesh = src.clone();
+    for slot in &mut mesh.colors {
+        *slot = color;
+    }
+    mesh
+}
+
+fn glove(vm: &mut Viewmodel, anchor: [f32; 3], side: f32, ink: [f32; 4]) {
+    geom::gem(
+        &mut vm.cobalt,
+        [anchor[0], anchor[1] + 0.01, anchor[2] + 0.07],
+        [0.075, 0.06, 0.09],
+        8,
+        6,
+        ink,
+    );
+    geom::gem(
+        &mut vm.teal,
+        [anchor[0] - side * 0.01, anchor[1] - 0.015, anchor[2] - 0.05],
+        [0.06, 0.045, 0.075],
+        8,
+        6,
+        ink,
+    );
+    geom::plate(
+        &mut vm.white,
+        [anchor[0], anchor[1] + 0.04, anchor[2] - 0.03],
+        0.11,
+        0.1,
+        0.028,
+        8,
+        5,
+        ink,
+    );
+    spoke(
+        &mut vm.accent,
+        0.03,
+        0.09,
+        0.09,
+        8,
+        ink,
+        [anchor[0], anchor[1], anchor[2] + 0.01],
+        std::f32::consts::FRAC_PI_2,
+        0.0,
+    );
+    for i in 0..4 {
+        let spread = (i as f32 - 1.5) * 0.03;
+        spoke(
+            &mut vm.teal,
+            0.12,
+            0.02,
+            0.012,
+            8,
+            ink,
+            [anchor[0] + spread, anchor[1] - 0.02, anchor[2] - 0.11],
+            1.2,
+            side * 0.18,
         );
     }
-    let mut barrel = MeshData::new();
-    geom::limb(&mut barrel, 0.42, 0.035, 0.02, 8, white.0);
-    geom::rotate_x(&mut barrel, -std::f32::consts::FRAC_PI_2);
-    geom::translate(&mut barrel, [0.18, -0.18, -0.55]);
-    geom::append(&mut m, &barrel);
-    for i in 0..6 {
-        let mut ring = MeshData::new();
-        geom::limb(&mut ring, 0.04, 0.07, 0.07, 8, accent.0);
-        geom::rotate_x(&mut ring, -std::f32::consts::FRAC_PI_2);
-        geom::translate(&mut ring, [0.18, -0.16, -0.48 - i as f32 * 0.06]);
-        geom::append(&mut m, &ring);
+    spoke(
+        &mut vm.teal,
+        0.09,
+        0.022,
+        0.014,
+        8,
+        ink,
+        [anchor[0] - side * 0.07, anchor[1] - 0.02, anchor[2] - 0.02],
+        0.85,
+        -side * 0.9,
+    );
+}
+
+fn rifle(vm: &mut Viewmodel, ink: [f32; 4]) {
+    geom::gem(&mut vm.cobalt, [0.02, -0.02, -0.3], [0.075, 0.08, 0.2], 12, 8, ink);
+    geom::plate(&mut vm.cobalt, [0.02, 0.045, -0.3], 0.38, 0.13, 0.035, 10, 6, ink);
+    geom::plate(&mut vm.cobalt, [0.09, -0.01, -0.3], 0.34, 0.1, 0.03, 8, 5, ink);
+    geom::plate(&mut vm.white, [0.02, 0.08, -0.32], 0.52, 0.055, 0.02, 14, 4, ink);
+    spoke(
+        &mut vm.barrel,
+        0.46,
+        0.042,
+        0.03,
+        10,
+        ink,
+        [0.02, -0.005, -0.5],
+        std::f32::consts::FRAC_PI_2,
+        0.0,
+    );
+    spoke(
+        &mut vm.cobalt,
+        0.14,
+        0.045,
+        0.03,
+        8,
+        ink,
+        [0.02, -0.05, -0.16],
+        2.35,
+        0.15,
+    );
+    spoke(
+        &mut vm.accent,
+        0.045,
+        0.055,
+        0.055,
+        10,
+        ink,
+        [0.02, -0.005, -0.94],
+        std::f32::consts::FRAC_PI_2,
+        0.0,
+    );
+    geom::gem(&mut vm.accent, [0.1, -0.01, -0.26], [0.03, 0.025, 0.07], 8, 6, ink);
+    geom::gem(&mut vm.core, [0.075, 0.01, -0.22], [0.035, 0.04, 0.06], 8, 6, ink);
+    geom::box_mesh(&mut vm.core, [0.02, -0.005, -1.12], [0.018, 0.018, 0.32], ink);
+    for i in 0..5 {
+        let z = -0.16 - i as f32 * 0.08;
+        geom::plate(&mut vm.cobalt, [0.02, 0.03, z], 0.1, 0.15, 0.045, 8, 6, ink);
+        geom::plate(&mut vm.cobalt, [0.08, -0.035, z], 0.08, 0.09, 0.03, 6, 5, ink);
     }
-    // Faceted receiver plates keep the viewmodel near the 3000-tri budget.
-    for i in 0..26 {
-        let z = -0.05 - (i % 7) as f32 * 0.07;
-        let y = -0.1 - (i / 7) as f32 * 0.055;
-        geom::gem(&mut m, [0.18, y, z], [0.045, 0.03, 0.045], 8, 5, cobalt.0);
+    for i in 0..4 {
+        geom::plate(&mut vm.white, [0.02, 0.095, -0.18 - i as f32 * 0.12], 0.1, 0.07, 0.022, 8, 5, ink);
     }
-    m
+}
+
+fn spoke(
+    mesh: &mut MeshData,
+    length: f32,
+    r0: f32,
+    r1: f32,
+    sides: u32,
+    color: [f32; 4],
+    at: [f32; 3],
+    pitch: f32,
+    yaw: f32,
+) {
+    let mut part = MeshData::new();
+    geom::limb(&mut part, length, r0, r1, sides, color);
+    geom::rotate_x(&mut part, pitch);
+    geom::rotate_y(&mut part, yaw);
+    geom::translate(&mut part, at);
+    geom::append(mesh, &part);
 }
 
 pub fn gun_core(energy: Rgba) -> MeshData {
@@ -172,6 +336,12 @@ mod tests {
         assert!(hive.tri_count() <= 8000 && hive.tri_count() > 600, "hive {}", hive.tri_count());
         assert!((1800..=3600).contains(&arms.tri_count()), "arms {}", arms.tri_count());
         assert!(flat_shaded(&arms));
+        let vm = viewmodel();
+        assert_eq!(vm.tri_count(), arms.tri_count());
+        assert!(vm.accent.tri_count() > 40, "accent {}", vm.accent.tri_count());
+        assert!(vm.core.tri_count() > 20, "core {}", vm.core.tri_count());
+        assert!(vm.teal.tri_count() > 80 && vm.cobalt.tri_count() > 80);
+        assert!(vm.barrel.tri_count() >= 40, "barrel {}", vm.barrel.tri_count());
     }
 
     #[test]

@@ -418,7 +418,7 @@ fn mixer_caps_voices_and_keeps_the_charge_cue() {
     let mut events = Vec::new();
     for i in 0..40 {
         events.push(SoundEvent {
-            id: "shot".into(),
+            id: "vex_fire".into(),
             pos: Vec3::new(i as f32, 0.0, 0.0),
             owner: 0,
         });
@@ -533,9 +533,9 @@ fn bugs_table_owns_hitboxes_and_mix() {
     assert!((content.bug(gemini_sim::content::EnemyKind::Brute).hitbox.armor_mult_when_closed - 0.5).abs() < 1e-4);
     assert_eq!(content.bug(gemini_sim::content::EnemyKind::Brute).audio.shell_open, "brute_shell_open");
     assert_eq!(content.bugs.feedback.weakpoint_hit, "weakpoint_hit");
-    let shot = content.sfx("shot").unwrap();
+    let shot = content.sfx("vex_fire").unwrap();
     assert!(shot.volume > 0.0);
-    assert!(content.pitch_range("shot").is_some());
+    assert!(content.pitch_range("vex_fire").is_some());
     assert!(content.bug(gemini_sim::content::EnemyKind::Swarmer).visual.height < 0.7);
 }
 
@@ -863,13 +863,14 @@ fn every_emitted_sound_resolves_to_a_mix_file() {
     let content = Content::embedded();
     let mut ids = vec![
         "wave".to_string(),
-        "shot".into(),
-        "ability".into(),
+        format!("{}_fire", content.hero.id),
+        format!("{}_ability", content.hero.id),
+        format!("{}_ability_end", content.hero.id),
         "hit".into(),
         "hurt".into(),
         "downed".into(),
         "pickup".into(),
-        "reload".into(),
+        format!("{}_reload", content.hero.id),
         "jump".into(),
         "dash".into(),
         "swarmer_crowd".into(),
@@ -962,4 +963,148 @@ fn leg_layout_comes_from_bugs() {
     .expect_err("missing layout");
     assert!(err.contains("layout"), "{err}");
     assert!(err.contains("swarmer"), "{err}");
+}
+
+#[test]
+fn vex_overdrive_comes_from_characters() {
+    let content = Content::embedded();
+    assert_eq!(content.hero.id, "vex");
+    assert_eq!(content.hero.primary, "pulse_rifle");
+    assert_eq!(content.hero.sidearm, "sidearm");
+    assert_eq!(content.hero.accent, "#F97316");
+    assert!((content.hero.max_hp - 100.0).abs() < 1e-4);
+    assert!((content.hero.move_speed_mult - 1.0).abs() < 1e-4);
+    assert!((content.hero.ability_cooldown - 20.0).abs() < 1e-4);
+    assert!((content.hero.overdrive_duration - 6.0).abs() < 1e-4);
+    assert!((content.hero.overdrive_fire_rate - 0.35).abs() < 1e-4);
+    assert!(content.hero.infinite_magazine);
+    assert!((content.hero.kill_cd_refund - 1.0).abs() < 1e-4);
+    let off = content.hero.viewmodel_offset;
+    assert!(off[0] > 0.0 && off[1] < 0.0, "viewmodel should sit lower right, got {off:?}");
+    assert!((off[0] - 0.36).abs() < 1e-4 && (off[1] + 0.22).abs() < 1e-4 && (off[2] + 0.48).abs() < 1e-4);
+    assert!((content.hero.viewmodel_fov - 40.0).abs() < 1e-4);
+    assert!(content.weapon("coil_rifle").is_none());
+    let gun = content.weapon("pulse_rifle").unwrap();
+    assert!((gun.fire_interval - 1.0 / 9.0).abs() < 1e-4);
+    assert_eq!(gun.magazine, 36);
+    assert_eq!(gun.reserve, 180);
+    assert!((gun.projectile_speed - 88.0).abs() < 1e-4);
+    assert!((gun.projectile_radius - 0.08).abs() < 1e-4);
+    assert!((gun.spread - 1.2_f32.to_radians()).abs() < 1e-4);
+    assert!((content.weapons.sprint_to_fire_delay - 0.15).abs() < 1e-4);
+
+    let base = gemini_sim::content::embedded_sources();
+    let hero = include_str!("../../../content/characters.toml").replacen("duration = 6.0, ", "", 1);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        waves: base.waves,
+        difficulty: base.difficulty,
+        controller: base.controller,
+        run_upgrades: base.run_upgrades,
+        endless: base.endless,
+        currency: base.currency,
+        banners: base.banners,
+        duplicate_ranks: base.duplicate_ranks,
+        bosses: base.bosses,
+        weapons: base.weapons,
+        hero: &hero,
+        arena: base.arena,
+        presentation: base.presentation,
+        combat: base.combat,
+        palette: base.palette,
+        music: base.music,
+        audio: base.audio,
+        bugs: base.bugs,
+        crate_reveal: base.crate_reveal,
+    })
+    .expect_err("missing overdrive duration");
+    assert!(err.contains("duration"), "{err}");
+
+    let load_hero = |hero: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            waves: base.waves,
+            difficulty: base.difficulty,
+            controller: base.controller,
+            run_upgrades: base.run_upgrades,
+            endless: base.endless,
+            currency: base.currency,
+            banners: base.banners,
+            duplicate_ranks: base.duplicate_ranks,
+            bosses: base.bosses,
+            weapons: base.weapons,
+            hero,
+            arena: base.arena,
+            presentation: base.presentation,
+            combat: base.combat,
+            palette: base.palette,
+            music: base.music,
+            audio: base.audio,
+            bugs: base.bugs,
+            crate_reveal: base.crate_reveal,
+        })
+    };
+    let text = include_str!("../../../content/characters.toml");
+    for key in ["viewmodel_offset", "viewmodel_fov"] {
+        let stripped = text.lines().filter(|line| !line.contains(key)).collect::<Vec<_>>().join("\n");
+        let err = load_hero(&stripped).expect_err(key);
+        assert!(err.contains(key), "{err}");
+    }
+    let zero = text.replace("viewmodel_fov = 40", "viewmodel_fov = 0");
+    let err = load_hero(&zero).expect_err("zero viewmodel fov");
+    assert!(err.contains("viewmodel_fov"), "{err}");
+
+    let mut sim = Sim::new(&content, "normal", 2);
+    assert!((sim.players[0].max_hp - content.hero.max_hp).abs() < 1e-3);
+    let ammo = sim.players[0].primary.ammo;
+    let mut input = PlayerInput::default();
+    input.fire = true;
+    sim.step(&content, input);
+    assert!(sim.sounds.iter().any(|s| s.id == "vex_fire"));
+    assert_eq!(sim.players[0].primary.ammo, ammo - 1);
+    let plain = content.weapon("pulse_rifle").unwrap().fire_interval;
+    assert!((sim.players[0].primary.cooldown - plain).abs() < 1e-3);
+
+    input.fire = false;
+    input.reload = true;
+    sim.step(&content, input);
+    assert!(sim.sounds.iter().any(|s| s.id == "vex_reload"));
+
+    sim.players[0].primary.cooldown = 0.0;
+    sim.players[0].primary.reload = 0.0;
+    sim.enemies.clear();
+    let mut nearby = bug(gemini_sim::content::EnemyKind::Swarmer);
+    nearby.hp = 40.0;
+    nearby.max_hp = 40.0;
+    nearby.pos = sim.players[0].pos + Vec3::new(2.0, 0.0, 0.0);
+    nearby.contact = 0.0;
+    sim.enemies.push(nearby);
+    let ammo = sim.players[0].primary.ammo;
+    input.reload = false;
+    input.ability = true;
+    input.fire = true;
+    sim.step(&content, input);
+    assert!(sim.sounds.iter().any(|s| s.id == "vex_ability"));
+    assert!((sim.players[0].overdrive_left - content.hero.overdrive_duration).abs() < 1e-4);
+    assert!((sim.players[0].ability_cd - content.hero.ability_cooldown).abs() < 1e-4);
+    assert_eq!(sim.players[0].primary.ammo, ammo, "overdrive does not spend ammo");
+    let boosted = plain / (1.0 + content.hero.overdrive_fire_rate);
+    assert!((sim.players[0].primary.cooldown - boosted).abs() < 1e-3);
+    assert!((sim.enemies[0].hp - 40.0).abs() < 1e-3, "overdrive is not a nova");
+
+    sim.players[0].ability_cd = 10.0;
+    sim.players[0].overdrive_left = 1.0;
+    sim.enemies[0].hp = 0.0;
+    sim.enemies[0].alive = true;
+    input.ability = false;
+    input.fire = false;
+    sim.step(&content, input);
+    let expected = 10.0 - gemini_sim::SIM_DT - content.hero.kill_cd_refund;
+    assert!((sim.players[0].ability_cd - expected).abs() < 1e-3, "{}", sim.players[0].ability_cd);
+
+    sim.players[0].overdrive_left = gemini_sim::SIM_DT;
+    input = PlayerInput::default();
+    sim.step(&content, input);
+    assert!(sim.sounds.iter().any(|s| s.id == "vex_ability_end"));
+    assert_eq!(sim.players[0].overdrive_left, 0.0);
+    sim.step(&content, PlayerInput::default());
+    assert!(!sim.sounds.iter().any(|s| s.id == "vex_ability_end"));
 }
