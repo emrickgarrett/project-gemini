@@ -1,5 +1,6 @@
 //! Project Gemini, milestone M1. WebGPU build, with a separate WebGL2 build.
 
+mod act_now;
 mod audio;
 mod flow;
 mod hud;
@@ -79,7 +80,7 @@ fn install_match(app: &mut App) {
                     hud::draw,
                 )
                     .chain(),
-                (flow::rebuild, flow::end_of_match, flow::click_prompt, audio::flush_ui_cues).chain(),
+                (flow::rebuild, flow::end_of_match, flow::click_prompt, act_now::dispatch, audio::flush_ui_cues).chain(),
             )
                 .chain()
                 .run_if(in_state(AppState::Playing)),

@@ -34,6 +34,7 @@ pub struct Content {
     pub roster: Vec<String>,
     /// Every hero row, including locked ones. Ownership comes from `[unlock]`.
     pub heroes: Vec<HeroCard>,
+    pub warnings: Warnings,
     pub cosmetics: Cosmetics,
     pub ui: Ui,
 }
@@ -125,7 +126,7 @@ impl Content {
         crate::bugs::require_leg_layout(&bugs).map_err(|err| format!("bugs.toml: {err}"))?;
         let bosses = load_bosses(src.bosses).map_err(|err| format!("bosses.toml: {err}"))?;
         require_spawn_clearance(&bosses, &bugs).map_err(|err| format!("bosses.toml: {err}"))?;
-        let (mut hero, guns, roster, heroes) = load_characters(src.hero)?;
+        let (mut hero, guns, roster, heroes, warnings) = load_characters(src.hero)?;
         let mut weapons = parse::<WeaponFile>("weapons.toml", src.weapons)?;
         weapons.weapon = guns;
         let audio = crate::audio_mix::load_mix(src.audio).map_err(|err| format!("audio_mix.toml: {err}"))?;
@@ -188,6 +189,7 @@ impl Content {
             hero,
             roster,
             heroes,
+            warnings,
             arena,
             presentation,
             combat: parse("combat.toml", src.combat)?,
@@ -216,6 +218,14 @@ impl Content {
             return false;
         };
         self.ui.settings.unlock_all || (card.owned && card.id == self.hero.id)
+    }
+
+    /// Ability row for `hero_id`. Cooldown and infinite magazine come from that hero's card.
+    pub fn ability_of(&self, hero_id: &str) -> Option<PlayedAbility> {
+        self.heroes.iter().find(|hero| hero.id == hero_id).map(|card| PlayedAbility {
+            cooldown: card.ability_cooldown,
+            infinite_magazine: card.infinite_magazine,
+        })
     }
 
     pub fn tier(&self, id: &str) -> &Tier {
@@ -1229,9 +1239,29 @@ pub struct HeroCard {
     /// Palette key. The viewmodel hex is resolved from this key at load.
     pub accent_key: String,
     pub owned: bool,
+    /// This hero's ability cooldown, in seconds.
+    pub ability_cooldown: f32,
+    /// True while the ability is running means the magazine does not empty.
+    pub infinite_magazine: bool,
 }
 
-fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>, Vec<HeroCard>), String> {
+/// One hero's ability, as the act-now cues read it. No hero or ability id.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlayedAbility {
+    pub cooldown: f32,
+    pub infinite_magazine: bool,
+}
+
+/// Local warning thresholds from `characters.toml` `[warnings]`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Warnings {
+    pub low_hp_fraction: f32,
+    pub low_hp_rearm_fraction: f32,
+    pub low_hp_repeat_s: f32,
+    pub ammo_low_fraction: f32,
+}
+
+fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>, Vec<HeroCard>, Warnings), String> {
     let root: toml::Value = toml::from_str(text).map_err(|err| err.to_string())?;
     let table = root.as_table().ok_or_else(|| "characters.toml is not a table".to_string())?;
     let heroes = table
@@ -1285,6 +1315,15 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>, Vec
             .get("ability")
             .and_then(|v| v.as_table())
             .ok_or_else(|| format!("characters.toml {id} is missing ability"))?;
+        let ability_cooldown = req_f32(ability, "cooldown", &format!("{id} ability"))?;
+        if !(ability_cooldown > 0.0) {
+            return Err(format!("characters.toml {id} ability cooldown must be > 0"));
+        }
+        let infinite_magazine = match ability.get("infinite_magazine") {
+            None => return Err(format!("characters.toml {id} ability is missing infinite_magazine")),
+            Some(toml::Value::Boolean(value)) => *value,
+            Some(_) => return Err(format!("characters.toml {id} ability infinite_magazine must be a bool")),
+        };
         let card = HeroCard {
             id: id.to_string(),
             name: req_str(row, "name", id)?.to_string(),
@@ -1294,6 +1333,8 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>, Vec
             move_speed_mult: req_f32(row, "move_speed_mult", id)?,
             accent_key: req_str(row, "accent_key", id)?.to_string(),
             owned: owned.iter().any(|have| have == id),
+            ability_cooldown,
+            infinite_magazine,
         };
         if !(card.max_hp > 0.0) {
             return Err(format!("characters.toml {id} max_hp must be > 0"));
@@ -1343,14 +1384,19 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>, Vec
         max_hp: req_f32(row, "max_hp", starter)?,
         move_speed_mult: req_f32(row, "move_speed_mult", starter)?,
         ability_id: ability_id.to_string(),
-        ability_cooldown: req_f32(ability, "cooldown", "overdrive")?,
+        ability_cooldown: cards
+            .iter()
+            .find(|card| card.id == starter)
+            .map(|card| card.ability_cooldown)
+            .expect("starter card"),
         cooldown_floor: req_f32(ability, "cooldown_floor", "overdrive")?,
         overdrive_duration: req_f32(ability, "duration", "overdrive")?,
         overdrive_fire_rate: req_f32(ability, "fire_rate", "overdrive")?,
-        infinite_magazine: ability
-            .get("infinite_magazine")
-            .and_then(|v| v.as_bool())
-            .ok_or_else(|| "overdrive is missing infinite_magazine".to_string())?,
+        infinite_magazine: cards
+            .iter()
+            .find(|card| card.id == starter)
+            .map(|card| card.infinite_magazine)
+            .expect("starter card"),
         kill_cd_refund: req_f32(ability, "kill_cd_refund", "overdrive")?,
         viewmodel_offset: req_vec3(row, "viewmodel_offset", starter)?,
         viewmodel_fov: req_f32(row, "viewmodel_fov", starter)?,
@@ -1398,7 +1444,52 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>, Vec
             "characters.toml {starter} viewmodel_fov must be between 1 and 170"
         ));
     }
-    Ok((hero, vec![primary, sidearm], roster, cards))
+    let warnings = load_warnings(table)?;
+    Ok((hero, vec![primary, sidearm], roster, cards, warnings))
+}
+
+fn load_warnings(root: &toml::map::Map<String, toml::Value>) -> Result<Warnings, String> {
+    let table = root
+        .get("warnings")
+        .and_then(|value| value.as_table())
+        .ok_or_else(|| "characters.toml is missing [warnings]".to_string())?;
+    expect_keys(
+        table,
+        &[
+            "low_hp_fraction",
+            "low_hp_rearm_fraction",
+            "low_hp_repeat_s",
+            "ammo_low_fraction",
+        ],
+        "characters.toml warnings",
+    )?;
+    let low_hp_fraction = unit_fraction(req_f32(table, "low_hp_fraction", "warnings")?, "characters.toml warnings low_hp_fraction")?;
+    let low_hp_rearm_fraction = unit_fraction(
+        req_f32(table, "low_hp_rearm_fraction", "warnings")?,
+        "characters.toml warnings low_hp_rearm_fraction",
+    )?;
+    if !(low_hp_rearm_fraction > low_hp_fraction) {
+        return Err("characters.toml warnings low_hp_rearm_fraction must be above low_hp_fraction".into());
+    }
+    let low_hp_repeat_s = req_f32(table, "low_hp_repeat_s", "warnings")?;
+    if !(low_hp_repeat_s.is_finite() && low_hp_repeat_s > 0.0) {
+        return Err("characters.toml warnings low_hp_repeat_s must be > 0".into());
+    }
+    let ammo_low_fraction = unit_fraction(req_f32(table, "ammo_low_fraction", "warnings")?, "characters.toml warnings ammo_low_fraction")?;
+    Ok(Warnings {
+        low_hp_fraction,
+        low_hp_rearm_fraction,
+        low_hp_repeat_s,
+        ammo_low_fraction,
+    })
+}
+
+fn unit_fraction(value: f32, what: &str) -> Result<f32, String> {
+    if value.is_finite() && value > 0.0 && value < 1.0 {
+        Ok(value)
+    } else {
+        Err(format!("{what} must be in (0, 1)"))
+    }
 }
 
 fn load_cosmetics(text: &str) -> Result<Cosmetics, String> {
@@ -3088,6 +3179,8 @@ pub struct SfxDef {
     pub stealable: bool,
     /// Telegraphs and other cues that must play out. Loading rejects a warning that is stealable.
     pub is_warning: bool,
+    /// True when the cue is not positioned in the world.
+    pub flat: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
