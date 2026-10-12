@@ -2824,6 +2824,7 @@ dependencies = [
  "gemini-meshes",
  "gemini-proto",
  "gemini-sim",
+ "toml 0.8.23",
  "wasm-bindgen",
  "web-sys",
 ]

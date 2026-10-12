@@ -83,7 +83,7 @@ pub fn paint_reveal(content: &Content, plan: &RevealPlan, t: f32, width: u32, he
     rgb
 }
 
-fn paint_stage(rgb: &mut [u8], width: u32, height: u32, content: &Content, layout: &gemini_sim::content::RevealLayout) {
+pub(crate) fn paint_stage(rgb: &mut [u8], width: u32, height: u32, content: &Content, layout: &gemini_sim::content::RevealLayout) {
     let cx = (width as f32 - 1.0) * 0.5;
     let cy = (height as f32 - 1.0) * 0.42;
     let max_d = (cx * cx + (height as f32) * (height as f32)).sqrt().max(1.0);
@@ -571,25 +571,7 @@ fn blit_at(rgb: &mut [u8], width: u32, height: u32, origin_x: u32, origin_y: u32
 }
 
 fn glyph(ch: char) -> [u8; 7] {
-    match ch {
-        'A' => [0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001],
-        'C' => [0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110],
-        'D' => [0b11110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b11110],
-        'E' => [0b11111, 0b10000, 0b10000, 0b11110, 0b10000, 0b10000, 0b11111],
-        'G' => [0b01110, 0b10001, 0b10000, 0b10111, 0b10001, 0b10001, 0b01110],
-        'I' => [0b01110, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110],
-        'L' => [0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111],
-        'M' => [0b10001, 0b11011, 0b10101, 0b10101, 0b10001, 0b10001, 0b10001],
-        'N' => [0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001],
-        'O' => [0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110],
-        'P' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10000, 0b10000, 0b10000],
-        'K' => [0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001],
-        'R' => [0b11110, 0b10001, 0b10001, 0b11110, 0b10100, 0b10010, 0b10001],
-        'S' => [0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110],
-        'T' => [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
-        'Y' => [0b10001, 0b10001, 0b01010, 0b00100, 0b00100, 0b00100, 0b00100],
-        _ => [0; 7],
-    }
+    crate::glyph::bits(ch)
 }
 
 #[cfg(test)]

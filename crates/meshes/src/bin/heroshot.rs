@@ -10,6 +10,7 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use gemini_meshes::{raster_viewmodel, ViewmodelFrame};
+use gemini_sim::content::{hex_srgb, Content};
 
 const W: u32 = 1280;
 const H: u32 = 720;
@@ -108,61 +109,29 @@ fn orange_pixels(rgb: &[u8]) -> u32 {
 }
 
 fn vex_viewmodel() -> ViewmodelFrame {
-    let text = include_str!("../../../../content/characters.toml");
-    let root: toml::Value = toml::from_str(text).expect("characters.toml");
-    let starter = root
-        .get("unlock")
-        .and_then(|v| v.get("starter"))
-        .and_then(|v| v.as_str())
-        .expect("starter");
-    let heroes = root.get("hero").and_then(|v| v.as_array()).expect("[[hero]]");
-    let row = heroes
+    let content = Content::embedded();
+    let hero = &content.hero;
+    let card = content
+        .heroes
         .iter()
-        .find(|hero| hero.get("id").and_then(|v| v.as_str()) == Some(starter))
-        .unwrap_or_else(|| panic!("starter {starter}"));
-    let hex = row.get("accent").and_then(|v| v.as_str()).expect("accent");
-    let accent = parse_hex(hex);
-    let offset = row
-        .get("viewmodel_offset")
-        .and_then(|v| v.as_array())
-        .filter(|v| v.len() == 3)
-        .map(|v| [num(&v[0]), num(&v[1]), num(&v[2])])
-        .expect("vex is missing viewmodel_offset");
-    let fov = row
-        .get("viewmodel_fov")
-        .map(num)
-        .expect("vex is missing viewmodel_fov");
-    let color = row
-        .get("muzzle_flash_color")
-        .and_then(|v| v.as_array())
-        .filter(|v| v.len() == 3)
-        .map(|v| [num(&v[0]), num(&v[1]), num(&v[2]), 1.0])
-        .expect("vex is missing muzzle_flash_color");
+        .find(|card| card.id == hero.id)
+        .unwrap_or_else(|| panic!("starter {} has no card", hero.id));
+    let accent = content.palette.key(&card.accent_key);
+    let loaded = hex_srgb(&hero.accent);
+    if accent != loaded {
+        panic!("starter accent_key {} did not match the accent the loader stored", card.accent_key);
+    }
     ViewmodelFrame {
         accent,
-        offset,
-        fov,
+        offset: hero.viewmodel_offset,
+        fov: hero.viewmodel_fov,
         overdrive: false,
-        glow_radius: num(row.get("muzzle_flash_radius").expect("muzzle_flash_radius")),
-        glow_core: num(row.get("muzzle_flash_core").expect("muzzle_flash_core")),
-        glow_falloff: num(row.get("muzzle_flash_falloff").expect("muzzle_flash_falloff")),
-        glow_tip_px: num(row.get("muzzle_flash_tip_px").expect("muzzle_flash_tip_px")),
-        glow_color: color,
+        glow_radius: hero.muzzle_flash_radius,
+        glow_core: hero.muzzle_flash_core,
+        glow_falloff: hero.muzzle_flash_falloff,
+        glow_tip_px: hero.muzzle_flash_tip_px,
+        glow_color: [hero.muzzle_flash_color[0], hero.muzzle_flash_color[1], hero.muzzle_flash_color[2], 1.0],
     }
-}
-
-fn parse_hex(hex: &str) -> [f32; 4] {
-    let hex = hex.trim().trim_start_matches('#');
-    let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).expect("accent hex") as f32 / 255.0;
-    [byte(0), byte(2), byte(4), 1.0]
-}
-
-fn num(value: &toml::Value) -> f32 {
-    value
-        .as_float()
-        .map(|n| n as f32)
-        .or_else(|| value.as_integer().map(|n| n as f32))
-        .expect("number")
 }
 
 fn write_png(path: &str, rgb: &[u8]) {

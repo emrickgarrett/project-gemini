@@ -18,6 +18,7 @@ use gemini_sim::host_away::{on_host_visibility_changed, AwayPhase, HostAwayClock
 use gemini_sim::math::Vec3 as SimVec3;
 use gemini_sim::sim::{countdown_aim, HitPing, MusicMoment, Phase, PlayerInput, Sim, SoundStop, SIM_DT};
 
+use crate::settings::Prefs;
 use crate::AppState;
 
 #[derive(Resource)]
@@ -101,6 +102,14 @@ pub struct FrameFx {
 #[derive(Resource)]
 pub struct PendingDifficulty(pub String);
 
+/// Pause menu on this client. Solo matches stop stepping while it is open.
+/// Co-op keeps the shared sim running and does not send a pause.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct PauseMenu {
+    pub open: bool,
+    pub settings: bool,
+}
+
 /// Leftover time since the last sim step. A frame faster than `SIM_DT` must keep
 /// this, or a 60 Hz display never reaches a tick and the match looks frozen.
 #[derive(Resource, Default)]
@@ -134,6 +143,7 @@ pub fn boot(
     mut clock: ResMut<SimClock>,
     launch: Res<Launch>,
     account: Res<Account>,
+    prefs: Res<Prefs>,
 ) {
     clock.reset();
     let content = Content::embedded();
@@ -145,14 +155,13 @@ pub fn boot(
         let clock = HostAwayClock::new(solo);
         clock.sample(&content.coop.host_away)
     };
-    let fov = content.controller.camera.fov_default;
     commands.insert_resource(Game {
         content,
         sim,
         yaw: 0.0,
         pitch: 0.0,
-        fov,
-        bob: true,
+        fov: prefs.fov,
+        bob: prefs.view_bob,
         dip: 0.0,
         difficulty: pending.0.clone(),
         token,
@@ -207,15 +216,12 @@ pub fn gather_and_step(
     motion: Res<AccumulatedMouseMotion>,
     gamepads: Query<&Gamepad>,
     mut cursor: Query<&mut CursorOptions>,
-    mut next: ResMut<NextState<AppState>>,
+    hold: Res<PauseMenu>,
+    prefs: Res<Prefs>,
 ) {
-    if keys.just_pressed(KeyCode::Escape) {
-        if let Ok(mut cursor) = cursor.single_mut() {
-            cursor.grab_mode = CursorGrabMode::None;
-            cursor.visible = true;
-        }
-    }
-    if mouse_buttons.just_pressed(MouseButton::Left) {
+    // The pause menu owns the cursor. A click on a menu button must not grab it again.
+    // Wasm waits for the click-to-play control so the browser can grant the lock.
+    if !hold.open && !cfg!(target_arch = "wasm32") && mouse_buttons.just_pressed(MouseButton::Left) {
         if let Ok(mut cursor) = cursor.single_mut() {
             cursor.grab_mode = CursorGrabMode::Locked;
             cursor.visible = false;
@@ -226,7 +232,7 @@ pub fn gather_and_step(
         save_bug_stills();
     }
 
-    let sens = game.content.presentation.mouse_sensitivity;
+    let sens = game.content.presentation.mouse_sensitivity * prefs.sensitivity;
     let pitch_limit = game.content.presentation.pitch_limit_deg.to_radians();
     let fov_min = game.content.presentation.fov_min;
     let fov_max = game.content.presentation.fov_max;
@@ -243,9 +249,10 @@ pub fn gather_and_step(
             })
             .unwrap_or(false);
 
-    if !using_pad {
+    if !using_pad && !hold.open {
+        let y_sign = if prefs.invert_y { -1.0 } else { 1.0 };
         game.yaw -= motion.delta.x * sens;
-        game.pitch -= motion.delta.y * sens;
+        game.pitch -= motion.delta.y * sens * y_sign;
         game.pitch = game.pitch.clamp(-pitch_limit, pitch_limit);
     }
     if keys.just_pressed(KeyCode::BracketRight) {
@@ -264,7 +271,7 @@ pub fn gather_and_step(
     let mut look_dy = 0.0;
     let mut jump = keys.just_pressed(KeyCode::Space);
     let mut sprint = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
-    let crouch = keys.pressed(KeyCode::ControlLeft);
+    let mut crouch = keys.pressed(KeyCode::ControlLeft);
     let mut boost_held = keys.pressed(KeyCode::KeyF);
     let mut boost_pressed = keys.just_pressed(KeyCode::KeyF);
     let mut fire = mouse_buttons.pressed(MouseButton::Left);
@@ -297,9 +304,21 @@ pub fn gather_and_step(
             choice = Some(2);
         }
     }
-    if matches!(game.sim.phase, Phase::Victory | Phase::Defeat) && keys.just_pressed(KeyCode::Enter) {
-        next.set(AppState::Menu);
-        return;
+    if hold.open {
+        crouch = false;
+        move_x = 0.0;
+        move_z = 0.0;
+        look_dx = 0.0;
+        look_dy = 0.0;
+        jump = false;
+        sprint = false;
+        boost_held = false;
+        boost_pressed = false;
+        fire = false;
+        reload = false;
+        ability = false;
+        interact = false;
+        choice = None;
     }
 
     let mut input = PlayerInput {
@@ -366,6 +385,16 @@ pub fn gather_and_step(
         }
     }
     away.view = away.clock.sample(&rules);
+
+    // Solo pause stops the sim and does not bank time for a catch-up. Co-op keeps stepping
+    // with an empty local input and never marks the match paused.
+    if hold.open && game.sim.connected_count() <= 1 {
+        fx.sounds.clear();
+        fx.stops.clear();
+        fx.pings.clear();
+        fx.moments.clear();
+        return;
+    }
 
     let dt = time.delta_secs();
     clock.acc += dt;

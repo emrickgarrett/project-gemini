@@ -21,3 +21,7 @@ path = "src/bin/bugshots.rs"
 [[bin]]
 name = "heroshot"
 path = "src/bin/heroshot.rs"
+
+[[bin]]
+name = "menushot"
+path = "src/bin/menushot.rs"

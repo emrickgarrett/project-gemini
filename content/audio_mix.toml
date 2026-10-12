@@ -116,6 +116,7 @@ pitch_rand_semitones = 0.3
 max_instances = 1
 loop = true
 category = "boss"
+stealable = false
 measured_rms_db = -11.1
 
 [brood_pod_charge]
@@ -124,6 +125,8 @@ pitch_rand_semitones = 0
 max_instances = 3
 loop = false
 category = "boss"
+stealable = false
+is_warning = true
 measured_rms_db = -12.1
 
 [brood_pod_fizzle]
@@ -148,6 +151,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "boss_big"
+stealable = false
+is_warning = true
 measured_rms_db = -10.4
 
 [brute_death]
@@ -284,6 +289,8 @@ pitch_rand_semitones = 0.3
 max_instances = 2
 loop = false
 category = "player"
+stealable = false
+is_warning = true
 measured_rms_db = -16.6
 
 [jetpack_hover_loop]
@@ -292,6 +299,7 @@ pitch_rand_semitones = 0
 max_instances = 1
 loop = true
 category = "player"
+stealable = false
 measured_rms_db = -15.9
 
 [pickup]
@@ -308,6 +316,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "player_alert"
+stealable = false
+is_warning = true
 measured_rms_db = -5.1
 
 [player_hurt]
@@ -356,6 +366,8 @@ pitch_rand_semitones = 0
 max_instances = 4
 loop = false
 category = "enemy"
+stealable = false
+is_warning = true
 measured_rms_db = -11.8
 
 [spitter_death]
@@ -420,6 +432,7 @@ pitch_rand_semitones = 0
 max_instances = 1
 loop = true
 category = "swarm_bed"
+stealable = false
 measured_rms_db = -17.8
 
 [swarmer_death]
@@ -444,6 +457,8 @@ pitch_rand_semitones = 0
 max_instances = 2
 loop = false
 category = "boss_big"
+stealable = false
+is_warning = true
 measured_rms_db = -11.1
 
 [tyrant_scythe_swipe]
@@ -460,6 +475,8 @@ pitch_rand_semitones = 0
 max_instances = 3
 loop = false
 category = "boss"
+stealable = false
+is_warning = true
 measured_rms_db = -10.5
 
 [ui_click]
@@ -469,6 +486,85 @@ max_instances = 2
 loop = false
 category = "ui"
 measured_rms_db = -19.3
+
+# Menu flow. Rows merged from the UI sound drop. `loop` is required by the loader;
+# the drop omitted it, and these cues are one-shots.
+[ui_hover]
+volume_db = -18.0
+pitch_rand_semitones = 0.3
+max_instances = 2
+loop = false
+category = "ui"
+
+[ui_confirm]
+volume_db = -10.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+
+[ui_back]
+volume_db = -10.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+
+[ui_error]
+volume_db = -10.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+
+[ui_slider_tick]
+volume_db = -20.0
+pitch_rand_semitones = 0.0
+max_instances = 3
+loop = false
+category = "ui"
+
+[ui_toggle]
+volume_db = -14.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+
+[pause_open]
+volume_db = -10.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+
+[pause_close]
+volume_db = -10.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+
+[match_start]
+volume_db = -6.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+
+[results_victory]
+volume_db = -6.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+
+[results_defeat]
+volume_db = -6.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
 
 [upgrade_pick]
 volume_db = -1.4
@@ -564,6 +660,7 @@ pitch_rand_semitones = 0
 max_instances = 1
 loop = true
 category = "player"
+stealable = false
 measured_rms_db = -10.0
 
 [nyra_ability_end]
@@ -740,6 +837,8 @@ pitch_rand_semitones = 0.0
 max_instances = 1
 loop = false
 category = "ui"
+stealable = false
+is_warning = true
 
 [host_back]
 # 3 ticks at 0/1/2 s line up with the 3-2-1 countdown; the "go" tone lands at 3.0 s when play resumes.
@@ -748,6 +847,8 @@ pitch_rand_semitones = 0.0
 max_instances = 1
 loop = false
 category = "ui"
+stealable = false
+is_warning = true
 sync_at = 3.0
 
 # Arena 01. Telegraphs stay fixed-pitch so the 1.5 s warn lines up with the vent and climb windows.
@@ -757,6 +858,8 @@ pitch_rand_semitones = 0
 max_instances = 6
 loop = false
 category = "enemy"
+stealable = false
+is_warning = true
 measured_rms_db = -12.0
 
 [vent_burst]
@@ -781,4 +884,6 @@ pitch_rand_semitones = 0
 max_instances = 4
 loop = false
 category = "enemy"
+stealable = false
+is_warning = true
 measured_rms_db = -12.0

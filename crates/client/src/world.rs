@@ -359,6 +359,7 @@ pub fn sync(
     mut materials: ResMut<Assets<StandardMaterial>>,
     time: Res<Time>,
     assets: Res<AssetServer>,
+    prefs: Res<crate::settings::Prefs>,
 ) {
     let player = game.local().cloned();
     let eye = player.as_ref().map(|p| p.pos).unwrap_or(SimVec::ZERO);
@@ -437,7 +438,7 @@ pub fn sync(
         if moving {
             let name = game.content.bug(enemy.kind).audio.footstep.clone();
             for _ in &posed.planted {
-                audio::footstep(&mut commands, assets.as_ref(), game.as_ref(), &name, enemy.pos);
+                audio::footstep(&mut commands, assets.as_ref(), game.as_ref(), &name, enemy.pos, prefs.as_ref());
             }
         }
         let dist = {

@@ -169,6 +169,24 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
             .get("category")
             .and_then(|v| v.as_str())
             .ok_or_else(|| format!("{key} is missing category"))?;
+        let mut stealable = match row.get("stealable") {
+            Some(value) => value
+                .as_bool()
+                .ok_or_else(|| format!("{key} stealable is not a bool"))?,
+            None => true,
+        };
+        let is_warning = match row.get("is_warning") {
+            Some(value) => value
+                .as_bool()
+                .ok_or_else(|| format!("{key} is_warning is not a bool"))?,
+            None => false,
+        };
+        if looped {
+            stealable = false;
+        }
+        if is_warning && stealable {
+            return Err(format!("{key} is a warning and must set stealable = false"));
+        }
         let volume = db_to_linear(db);
         let sync_at = if row.contains_key("sync_at") {
             Some(row_number(row, key, "sync_at")?)
@@ -188,6 +206,9 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
                 looped,
                 pitch_semitones: semis,
                 sync_at,
+                category_ui: category == "ui",
+                stealable,
+                is_warning,
             },
         );
     }
@@ -241,6 +262,54 @@ fn row_number(row: &toml::Table, id: &str, key: &str) -> Result<f32, String> {
         .or_else(|| value.as_integer().map(|n| n as f64))
         .map(|n| n as f32)
         .ok_or_else(|| format!("{id} {key} is not a number"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::load_mix;
+
+    #[test]
+    fn warnings_and_loops_cannot_be_stolen() {
+        let audio = load_mix(include_str!("../../../content/audio_mix.toml")).expect("audio mix");
+        assert_eq!(audio.voice_cap, 32);
+        let mut warnings = 0;
+        for row in &audio.sfx {
+            if row.looped || row.is_warning {
+                assert!(!row.stealable, "{}", row.id);
+            }
+            if row.is_warning {
+                warnings += 1;
+            }
+        }
+        assert!(warnings >= 11, "warning rows");
+        let revive = audio.sfx.iter().find(|row| row.id == "revive_complete").expect("revive_complete");
+        assert!(revive.stealable);
+        assert!(!revive.is_warning);
+        assert!(!revive.looped);
+    }
+
+    #[test]
+    fn a_warning_without_stealable_false_fails_to_load() {
+        let text = r#"
+voice_cap = 8
+crowd_radius = 1.0
+crowd_full_count = 1
+min_distance = 1.0
+critical = []
+
+[alias]
+
+[beep]
+volume_db = 0
+pitch_rand_semitones = 0
+max_instances = 1
+loop = false
+category = "ui"
+is_warning = true
+"#;
+        let err = load_mix(text).expect_err("warning defaults to stealable");
+        assert!(err.contains("stealable"), "{err}");
+    }
 }
 
 fn score_of(audio: &AudioTable, def: &SfxDef, pos: Vec3, listener: Vec3) -> f32 {

@@ -25,7 +25,7 @@ fall_speed = 0.15           # vel_y at or below this can still catch
 above = 0.25                # meters above the lip
 below = 1.3                 # meters below the lip
 [camera]
-fov_default = 90            # player-adjustable 75 to 110
+fov_default = 90            # player-adjustable 70 to 110
 fov_sprint_add = 6
 view_bob_amplitude = 0.02   # with a toggle to turn it off
 landing_dip = 0.08

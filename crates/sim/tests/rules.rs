@@ -645,6 +645,7 @@ fn sim_step_cap_comes_from_controller() {
             crate_reveal: base.crate_reveal,
             coop: base.coop,
             cosmetics: base.cosmetics,
+        ui: base.ui,
         })
     };
     let missing = base
@@ -697,6 +698,7 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         crate_reveal: base.crate_reveal,
         coop: base.coop,
         cosmetics: base.cosmetics,
+        ui: base.ui,
     })
     .expect_err("missing hatch_fan_step");
     assert!(err.contains("hatch_fan_step"), "{err}");
@@ -724,6 +726,7 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         crate_reveal: base.crate_reveal,
         coop: base.coop,
         cosmetics: base.cosmetics,
+        ui: base.ui,
     })
     .expect_err("spawn_radius inside the body");
     assert!(err.contains("spawn_radius"), "{err}");
@@ -753,6 +756,7 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         crate_reveal: base.crate_reveal,
         coop: base.coop,
         cosmetics: base.cosmetics,
+        ui: base.ui,
     })
     .expect_err("zero hatch telegraph");
     assert!(err.contains("hatch_telegraph"), "{err}");
@@ -783,6 +787,7 @@ fn hatch_fan_and_spawn_radius_come_from_bosses() {
         crate_reveal: base.crate_reveal,
         coop: base.coop,
         cosmetics: base.cosmetics,
+        ui: base.ui,
     })
     .expect_err("missing hatch telegraph");
     assert!(err.contains("hatch_telegraph"), "{err}");
@@ -926,6 +931,7 @@ fn missing_weakpoint_anchor_fails_content_load() {
             crate_reveal: base.crate_reveal,
             coop: base.coop,
         cosmetics: base.cosmetics,
+        ui: base.ui,
         })
     };
 
@@ -984,6 +990,7 @@ fn a_typo_in_a_rarity_color_fails_load() {
         crate_reveal: base.crate_reveal,
         coop: base.coop,
         cosmetics: base.cosmetics,
+        ui: base.ui,
     })
     .expect_err("a typo'd rarity color must fail load");
     assert!(err.contains("rarity_commmon"), "{err}");
@@ -1061,6 +1068,7 @@ fn sources_reveal<'a>(base: &'a gemini_sim::content::Sources<'a>, crate_reveal: 
         crate_reveal,
         coop: base.coop,
         cosmetics: base.cosmetics,
+        ui: base.ui,
     }
 }
 
@@ -1179,6 +1187,7 @@ fn every_emitted_sound_resolves_to_a_mix_file() {
             crate_reveal: base.crate_reveal,
             coop: base.coop,
             cosmetics: base.cosmetics,
+        ui: base.ui,
         })
     };
     let without_gain = base.audio.replacen(
@@ -1250,6 +1259,7 @@ fn leg_layout_comes_from_bugs() {
         crate_reveal: base.crate_reveal,
         coop: base.coop,
         cosmetics: base.cosmetics,
+        ui: base.ui,
     })
     .expect_err("missing layout");
     assert!(err.contains("layout"), "{err}");
@@ -1262,7 +1272,11 @@ fn vex_overdrive_comes_from_characters() {
     assert_eq!(content.hero.id, "vex");
     assert_eq!(content.hero.primary, "pulse_rifle");
     assert_eq!(content.hero.sidearm, "sidearm");
-    assert_eq!(content.hero.accent, "#F97316");
+    assert_eq!(content.hero.accent, content.palette.hex("hero_vex").unwrap());
+    assert!(!content.ui.settings.unlock_all, "unlock_all is off unless the content flag says otherwise");
+    assert!(content.hero_selectable("vex"));
+    assert!(!content.hero_selectable("nyra"));
+    assert!(content.heroes.iter().any(|hero| hero.id == "nyra" && !hero.owned));
     assert!((content.hero.max_hp - 100.0).abs() < 1e-4);
     assert!((content.hero.move_speed_mult - 1.0).abs() < 1e-4);
     assert!((content.hero.ability_cooldown - 20.0).abs() < 1e-4);
@@ -1311,6 +1325,7 @@ fn vex_overdrive_comes_from_characters() {
         crate_reveal: base.crate_reveal,
         coop: base.coop,
         cosmetics: base.cosmetics,
+        ui: base.ui,
     })
     .expect_err("missing overdrive duration");
     assert!(err.contains("duration"), "{err}");
@@ -1338,6 +1353,7 @@ fn vex_overdrive_comes_from_characters() {
             crate_reveal: base.crate_reveal,
             coop: base.coop,
         cosmetics: base.cosmetics,
+        ui: base.ui,
         })
     };
     let text = include_str!("../../../content/characters.toml");
@@ -1506,6 +1522,7 @@ fn arena_01_vents_perches_and_pickups() {
             crate_reveal: base.crate_reveal,
             coop: base.coop,
         cosmetics: base.cosmetics,
+        ui: base.ui,
         })
     };
     for key in [
@@ -2034,6 +2051,7 @@ fn sources_with<'a>(base: &'a gemini_sim::content::Sources<'a>, coop: &'a str) -
         crate_reveal: base.crate_reveal,
         coop,
         cosmetics: base.cosmetics,
+        ui: base.ui,
     }
 }
 
@@ -2777,5 +2795,6 @@ fn sources_ranks<'a>(
         crate_reveal: base.crate_reveal,
         coop: base.coop,
         cosmetics: base.cosmetics,
+        ui: base.ui,
     }
 }

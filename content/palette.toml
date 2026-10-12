@@ -4,7 +4,6 @@
 teal = "#1FB5A8"
 cobalt = "#1E40AF"
 white = "#F2F2F2"
-accent = "#F97316"
 
 [shots]
 player = "#2DE1D0"
@@ -50,3 +49,7 @@ ui_panel_slate = "#334155"
 reveal_stage = "#120E17"
 reveal_ink = "#1C1820"
 reveal_paper = "#F2F2F2"
+hero_vex = "#F97316"
+hero_nyra = "#7DD3FC"
+hero_brakk = "#DC2626"
+hero_kip = "#FDE047"

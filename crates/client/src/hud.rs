@@ -392,28 +392,6 @@ pub fn draw(
 
     paint_away(&mut commands, root, &game, &away);
 
-    let end = match game.sim.phase {
-        Phase::Victory => Some("VICTORY\nENTER"),
-        Phase::Defeat => Some("DEFEAT\nENTER"),
-        _ => None,
-    };
-    if let Some(text) = end {
-        commands.spawn((
-            Text::new(text),
-            TextFont::from_font_size(42.0),
-            TextColor(teal),
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Percent(50.0),
-                top: Val::Percent(40.0),
-                margin: UiRect::new(Val::Px(-90.0), Val::Auto, Val::Auto, Val::Auto),
-                ..default()
-            },
-            ChildOf(root),
-            HudNode,
-        ));
-    }
-
     if let Ok((cam, xf)) = camera.single() {
         for ping in &fx.pings {
             let world = Vec3::new(ping.pos.x, ping.pos.y + 0.4, ping.pos.z);

@@ -32,7 +32,10 @@ pub struct Content {
     pub coop: CoopRules,
     /// `[[hero]]` ids in file order. Only the starter is playable.
     pub roster: Vec<String>,
+    /// Every hero row, including locked ones. Ownership comes from `[unlock]`.
+    pub heroes: Vec<HeroCard>,
     pub cosmetics: Cosmetics,
+    pub ui: Ui,
 }
 
 pub struct Sources<'a> {
@@ -57,6 +60,7 @@ pub struct Sources<'a> {
     pub crate_reveal: &'a str,
     pub coop: &'a str,
     pub cosmetics: &'a str,
+    pub ui: &'a str,
 }
 
 pub fn embedded_sources() -> Sources<'static> {
@@ -82,6 +86,7 @@ pub fn embedded_sources() -> Sources<'static> {
         crate_reveal: include_str!("../../../content/crate_reveal.toml"),
         coop: include_str!("../../../content/coop.toml"),
         cosmetics: include_str!("../../../content/cosmetics.toml"),
+        ui: include_str!("../../../content/ui.toml"),
     }
 }
 
@@ -113,13 +118,14 @@ impl Content {
             src.crate_reveal,
             src.coop,
             src.cosmetics,
+            src.ui,
         ]);
         let mut bugs: crate::bugs::BugBook = parse("bugs.toml", src.bugs)?;
         crate::bugs::bind_weak_anchors(&mut bugs).map_err(|err| format!("bugs.toml: {err}"))?;
         crate::bugs::require_leg_layout(&bugs).map_err(|err| format!("bugs.toml: {err}"))?;
         let bosses = load_bosses(src.bosses).map_err(|err| format!("bosses.toml: {err}"))?;
         require_spawn_clearance(&bosses, &bugs).map_err(|err| format!("bosses.toml: {err}"))?;
-        let (hero, guns, roster) = load_characters(src.hero)?;
+        let (mut hero, guns, roster, heroes) = load_characters(src.hero)?;
         let mut weapons = parse::<WeaponFile>("weapons.toml", src.weapons)?;
         weapons.weapon = guns;
         let audio = crate::audio_mix::load_mix(src.audio).map_err(|err| format!("audio_mix.toml: {err}"))?;
@@ -128,26 +134,40 @@ impl Content {
         let crate_reveal: CrateReveal = parse("crate_reveal.toml", src.crate_reveal)?;
         validate_reveal_cues(&crate_reveal, &audio)?;
         validate_reveal_layout(&crate_reveal)?;
-        let palette: Palette = parse("palette.toml", src.palette)?;
+        let mut palette: Palette = parse("palette.toml", src.palette)?;
         let presentation: Presentation = parse("presentation.toml", src.presentation)?;
         validate_away_hud(&presentation.hud.away)?;
-        require_palette_keys(&palette, &bugs, &presentation.hud.away, &crate_reveal.layout)
+        let ui = load_ui(src.ui)?;
+        let controller: Controller = parse("controller.toml", src.controller)?;
+        if controller.sim.max_sim_steps_per_frame == 0 {
+            return Err("controller.toml: max_sim_steps_per_frame must be at least 1".into());
+        }
+        validate_ledge_catch(&controller.ledge_catch)?;
+        let difficulty = parse::<DifficultyFile>("difficulty.toml", src.difficulty)?.tier;
+        require_palette_keys(&palette, &bugs, &presentation.hud.away, &crate_reveal.layout, &ui, &heroes)
             .map_err(|err| format!("palette.toml: {err}"))?;
+        let accent_key = heroes
+            .iter()
+            .find(|card| card.id == hero.id)
+            .map(|card| card.accent_key.clone())
+            .ok_or_else(|| format!("characters.toml starter {} has no card", hero.id))?;
+        let accent = palette
+            .hex(&accent_key)
+            .ok_or_else(|| format!("characters.toml {} accent_key \"{accent_key}\" does not resolve", hero.id))?
+            .to_string();
+        parse_accent(&accent)?;
+        hero.accent = accent.clone();
+        // The palette key on the hero card is the only accent source.
+        palette.hero.accent = accent;
+        validate_ui(&ui, &presentation, &controller, &audio, &difficulty, &crate_reveal.layout, &heroes)?;
         let arena = load_arena(src.arena).map_err(|err| format!("arena_01.toml: {err}"))?;
         require_arena_colors(&palette, &arena).map_err(|err| format!("arena_01.toml: {err}"))?;
         validate_stage_offset(&palette, &crate_reveal.layout)?;
         Ok(Self {
             fingerprint,
             waves: parse("waves.toml", src.waves)?,
-            difficulty: parse::<DifficultyFile>("difficulty.toml", src.difficulty)?.tier,
-            controller: {
-                let controller: Controller = parse("controller.toml", src.controller)?;
-                if controller.sim.max_sim_steps_per_frame == 0 {
-                    return Err("controller.toml: max_sim_steps_per_frame must be at least 1".into());
-                }
-                validate_ledge_catch(&controller.ledge_catch)?;
-                controller
-            },
+            difficulty,
+            controller,
             upgrades: parse::<UpgradeFile>("run_upgrades.toml", src.run_upgrades)?.upgrade,
             endless: parse("endless.toml", src.endless)?,
             currency: parse("currency.toml", src.currency)?,
@@ -157,6 +177,7 @@ impl Content {
             weapons,
             hero,
             roster,
+            heroes,
             arena,
             presentation,
             combat: parse("combat.toml", src.combat)?,
@@ -175,7 +196,16 @@ impl Content {
             crate_reveal,
             coop,
             cosmetics: load_cosmetics(src.cosmetics).map_err(|err| format!("cosmetics.toml: {err}"))?,
+            ui,
         })
+    }
+
+    /// Playtest selection. `unlock_all` does not grant ownership, currency, or crates.
+    pub fn hero_selectable(&self, id: &str) -> bool {
+        let Some(card) = self.heroes.iter().find(|hero| hero.id == id) else {
+            return false;
+        };
+        self.ui.settings.unlock_all || (card.owned && card.id == self.hero.id)
     }
 
     pub fn tier(&self, id: &str) -> &Tier {
@@ -414,6 +444,12 @@ fn validate_away_hud(away: &AwayHud) -> Result<(), String> {
     }
     if !(away.music_duck_db <= 0.0 && away.music_duck_db >= -60.0) {
         return Err("presentation.toml hud.away music_duck_db must be in [-60, 0]".into());
+    }
+    if !(away.solo_pause_duck_db <= 0.0 && away.solo_pause_duck_db >= -60.0) {
+        return Err("presentation.toml hud.away solo_pause_duck_db must be in [-60, 0]".into());
+    }
+    if !(away.coop_pause_duck_db <= 0.0 && away.coop_pause_duck_db >= -60.0) {
+        return Err("presentation.toml hud.away coop_pause_duck_db must be in [-60, 0]".into());
     }
     if !(away.count_shadow_px > 0.0) {
         return Err("presentation.toml hud.away count_shadow_px must be positive".into());
@@ -1171,7 +1207,21 @@ pub struct Hero {
     pub muzzle_flash_color: [f32; 3],
 }
 
-fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>), String> {
+/// Lobby card. Combat still runs the starter hero. Locked rows stay on the select screen.
+#[derive(Clone, Debug)]
+pub struct HeroCard {
+    pub id: String,
+    pub name: String,
+    pub role: String,
+    pub ability: String,
+    pub max_hp: f32,
+    pub move_speed_mult: f32,
+    /// Palette key. The viewmodel hex is resolved from this key at load.
+    pub accent_key: String,
+    pub owned: bool,
+}
+
+fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>, Vec<HeroCard>), String> {
     let root: toml::Value = toml::from_str(text).map_err(|err| err.to_string())?;
     let table = root.as_table().ok_or_else(|| "characters.toml is not a table".to_string())?;
     let heroes = table
@@ -1186,13 +1236,33 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>), St
         .get("starter")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "characters.toml [unlock] is missing starter".to_string())?;
+    let owned_rows = unlock
+        .get("owned")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "characters.toml [unlock] is missing owned".to_string())?;
+    let mut owned = Vec::new();
+    for row in owned_rows {
+        let id = row
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| "characters.toml [unlock] owned entry is empty".to_string())?;
+        if owned.iter().any(|have| have == id) {
+            return Err(format!("characters.toml [unlock] duplicate owned id {id}"));
+        }
+        owned.push(id.to_string());
+    }
+    if !owned.iter().any(|id| id == starter) {
+        return Err(format!("characters.toml starter \"{starter}\" is not in owned"));
+    }
     let weapons = table
         .get("weapons")
         .and_then(|v| v.as_table())
         .ok_or_else(|| "characters.toml is missing [weapons]".to_string())?;
     let mut roster = Vec::new();
+    let mut cards = Vec::new();
     for hero in heroes {
-        let id = hero
+        let row = hero.as_table().ok_or_else(|| "characters.toml hero row is not a table".to_string())?;
+        let id = row
             .get("id")
             .and_then(|v| v.as_str())
             .filter(|id| !id.is_empty())
@@ -1201,6 +1271,35 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>), St
             return Err(format!("characters.toml duplicate hero id {id}"));
         }
         roster.push(id.to_string());
+        let ability = row
+            .get("ability")
+            .and_then(|v| v.as_table())
+            .ok_or_else(|| format!("characters.toml {id} is missing ability"))?;
+        let card = HeroCard {
+            id: id.to_string(),
+            name: req_str(row, "name", id)?.to_string(),
+            role: req_str(row, "role", id)?.to_string(),
+            ability: req_str(ability, "desc", &format!("{id} ability"))?.to_string(),
+            max_hp: req_f32(row, "max_hp", id)?,
+            move_speed_mult: req_f32(row, "move_speed_mult", id)?,
+            accent_key: req_str(row, "accent_key", id)?.to_string(),
+            owned: owned.iter().any(|have| have == id),
+        };
+        if !(card.max_hp > 0.0) {
+            return Err(format!("characters.toml {id} max_hp must be > 0"));
+        }
+        if !(card.move_speed_mult > 0.0) {
+            return Err(format!("characters.toml {id} move_speed_mult must be > 0"));
+        }
+        if card.ability.is_empty() || card.role.is_empty() || card.name.is_empty() {
+            return Err(format!("characters.toml {id} name, role, and ability desc must be set"));
+        }
+        cards.push(card);
+    }
+    for id in &owned {
+        if !roster.iter().any(|have| have == id) {
+            return Err(format!("characters.toml owned \"{id}\" is not a [[hero]]"));
+        }
     }
     let row = heroes
         .iter()
@@ -1223,7 +1322,7 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>), St
         name: req_str(row, "name", starter)?.to_string(),
         primary: weapon_id.to_string(),
         sidearm: "sidearm".into(),
-        accent: req_str(row, "accent", starter)?.to_string(),
+        accent: String::new(),
         max_hp: req_f32(row, "max_hp", starter)?,
         move_speed_mult: req_f32(row, "move_speed_mult", starter)?,
         ability_id: ability_id.to_string(),
@@ -1282,8 +1381,7 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>), St
             "characters.toml {starter} viewmodel_fov must be between 1 and 170"
         ));
     }
-    parse_accent(&hero.accent)?;
-    Ok((hero, vec![primary, sidearm], roster))
+    Ok((hero, vec![primary, sidearm], roster, cards))
 }
 
 fn load_cosmetics(text: &str) -> Result<Cosmetics, String> {
@@ -2443,6 +2541,10 @@ pub struct AwayHud {
     pub away_dim: f32,
     /// Music gain while the host is away, in dB. Restored across the resume countdown.
     pub music_duck_db: f32,
+    /// Solo pause menu. Same duck as the away banner, including the low-pass below.
+    pub solo_pause_duck_db: f32,
+    /// Co-op pause menu. Music only, on the pausing client. Game sounds stay full.
+    pub coop_pause_duck_db: f32,
     /// Low-pass cutoff while the host is away. Look 0 bypasses the filter.
     pub music_duck_lowpass_hz: f32,
     /// Timer-bar track brightness, as a fraction of the slate. The empty bar is never darker than this mix.
@@ -2579,6 +2681,8 @@ pub struct HeroColors {
     pub teal: String,
     pub cobalt: String,
     pub white: String,
+    /// Filled at load from the starter hero's `accent_key`. Not a palette.toml entry.
+    #[serde(default)]
     pub accent: String,
 }
 
@@ -2640,6 +2744,10 @@ pub struct PaletteKeys {
     pub reveal_stage: String,
     pub reveal_ink: String,
     pub reveal_paper: String,
+    pub hero_vex: String,
+    pub hero_nyra: String,
+    pub hero_brakk: String,
+    pub hero_kip: String,
 }
 
 impl Palette {
@@ -2658,6 +2766,10 @@ impl Palette {
             "reveal_stage" => self.keys.reveal_stage.as_str(),
             "reveal_ink" => self.keys.reveal_ink.as_str(),
             "reveal_paper" => self.keys.reveal_paper.as_str(),
+            "hero_vex" => self.keys.hero_vex.as_str(),
+            "hero_nyra" => self.keys.hero_nyra.as_str(),
+            "hero_brakk" => self.keys.hero_brakk.as_str(),
+            "hero_kip" => self.keys.hero_kip.as_str(),
             "hero_teal" | "teal" => self.hero.teal.as_str(),
             "hero_cobalt" | "cobalt" => self.hero.cobalt.as_str(),
             "hero_white" | "white" => self.hero.white.as_str(),
@@ -2683,6 +2795,8 @@ fn require_palette_keys(
     bugs: &crate::bugs::BugBook,
     away: &AwayHud,
     layout: &RevealLayout,
+    ui: &Ui,
+    heroes: &[HeroCard],
 ) -> Result<(), String> {
     let check = |owner: &str, name: &str| -> Result<(), String> {
         if palette.hex(name).is_some() {
@@ -2713,6 +2827,12 @@ fn require_palette_keys(
     check("crate_reveal stage", &layout.stage)?;
     check("crate_reveal ink_dark", &layout.ink_dark)?;
     check("crate_reveal ink_light", &layout.ink_light)?;
+    for (owner, name) in ui.color_keys() {
+        check(owner, name)?;
+    }
+    for hero in heroes {
+        check(&format!("characters.toml {}", hero.id), &hero.accent_key)?;
+    }
     Ok(())
 }
 
@@ -2959,6 +3079,13 @@ pub struct SfxDef {
     pub pitch_semitones: f32,
     /// When set, the cue's musical downbeat. `host_back` must match the resume countdown.
     pub sync_at: Option<f32>,
+    /// True when the mix row's category is `ui`. Menu cues must be this category.
+    pub category_ui: bool,
+    /// A full voice list may stop this one-shot to make room for a UI cue.
+    /// Looping rows are forced off when the mix loads.
+    pub stealable: bool,
+    /// Telegraphs and other cues that must play out. Loading rejects a warning that is stealable.
+    pub is_warning: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -3054,4 +3181,380 @@ pub fn hit_radius_of(content: &Content, kind: EnemyKind) -> f32 {
 
 pub fn body_lift_of(content: &Content, kind: EnemyKind) -> f32 {
     content.bug(kind).hitbox.body.offset[1]
+}
+
+/// Fixed-decimal display. Does not change the stored value.
+pub fn format_fixed(value: f32, decimals: u32) -> String {
+    let decimals = decimals.min(6) as usize;
+    format!("{value:.decimals$}")
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Ui {
+    pub colors: UiColors,
+    pub copy: UiCopy,
+    pub layout: UiLayout,
+    pub settings: UiSettings,
+    pub sounds: UiSounds,
+}
+
+impl Ui {
+    pub fn color_keys(&self) -> [(&str, &str); 9] {
+        [
+            ("ui.colors.panel", self.colors.panel.as_str()),
+            ("ui.colors.text", self.colors.text.as_str()),
+            ("ui.colors.dim", self.colors.dim.as_str()),
+            ("ui.colors.stage", self.colors.stage.as_str()),
+            ("ui.colors.focus_before_hero", self.colors.focus_before_hero.as_str()),
+            ("ui.colors.victory", self.colors.victory.as_str()),
+            ("ui.colors.defeat", self.colors.defeat.as_str()),
+            ("ui.colors.locked", self.colors.locked.as_str()),
+            ("ui.colors.locked_text", self.colors.locked_text.as_str()),
+        ]
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct UiColors {
+    pub panel: String,
+    pub text: String,
+    pub dim: String,
+    pub stage: String,
+    pub focus_before_hero: String,
+    pub victory: String,
+    pub defeat: String,
+    pub locked: String,
+    /// Palette key for name, role, ability, and the HP/SPD line on a locked card.
+    pub locked_text: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct UiCopy {
+    pub title: String,
+    pub play: String,
+    pub crates: String,
+    pub settings: String,
+    pub quit: String,
+    pub back: String,
+    pub resume: String,
+    pub quit_to_menu: String,
+    pub play_again: String,
+    pub main_menu: String,
+    pub click_to_play: String,
+    pub host: String,
+    pub join: String,
+    pub coming_soon: String,
+    pub heroes: String,
+    pub difficulty: String,
+    pub locked: String,
+    pub hp: String,
+    pub speed: String,
+    pub dmg: String,
+    pub power: String,
+    pub waves: String,
+    pub kills: String,
+    pub time: String,
+    pub currency: String,
+    pub victory: String,
+    pub defeat: String,
+    pub sensitivity: String,
+    pub fov: String,
+    pub view_bob: String,
+    pub invert_y: String,
+    pub master: String,
+    pub music: String,
+    pub effects: String,
+    pub on: String,
+    pub off: String,
+    pub reset_notice: String,
+    pub crates_title: String,
+    pub crates_empty: String,
+    pub crates_pull: String,
+    pub crates_open: String,
+    pub pull_failed: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct UiLayout {
+    pub title_scale: u32,
+    pub button_scale: u32,
+    pub hint_scale: u32,
+    pub border_px: f32,
+    pub button_width: f32,
+    pub button_height: f32,
+    pub row_gap: f32,
+    pub title_gap: f32,
+    pub margin_x: f32,
+    pub margin_y: f32,
+    pub card_width: f32,
+    pub card_height: f32,
+    pub card_gap: f32,
+    /// Portrait height as a fraction of the card. Centered in the top half.
+    pub portrait_fraction: f32,
+    pub card_pad: f32,
+    pub pause_keep: f32,
+    pub pause_panel_width: f32,
+    pub pause_panel_height: f32,
+    pub slider_width: f32,
+    pub slider_height: f32,
+    pub settings_row_height: f32,
+    pub stat_decimals: u32,
+    pub mult_decimals: u32,
+    pub currency_decimals: u32,
+    pub nav_repeat_secs: f32,
+    pub stick_deadzone: f32,
+    /// How far a focused border mixes toward the paper color. 0 is the base color.
+    pub focus_lift: f32,
+    pub fit_width: f32,
+    pub fit_height: f32,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct UiSettings {
+    pub sensitivity: f32,
+    pub sensitivity_min: f32,
+    pub sensitivity_max: f32,
+    pub sensitivity_step: f32,
+    pub fov: f32,
+    pub fov_min: f32,
+    pub fov_max: f32,
+    pub fov_step: f32,
+    pub invert_y: bool,
+    pub view_bob: bool,
+    pub master: f32,
+    pub music: f32,
+    pub effects: f32,
+    pub volume_min: f32,
+    pub volume_max: f32,
+    pub volume_step: f32,
+    pub default_difficulty: String,
+    pub settings_file: String,
+    pub settings_key: String,
+    /// Playtest hero selection. Off by default. Does not grant ownership.
+    pub unlock_all: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct UiSounds {
+    pub hover: String,
+    pub confirm: String,
+    pub back: String,
+    pub error: String,
+    pub slider: String,
+    pub toggle: String,
+    pub pause_open: String,
+    pub pause_close: String,
+    pub match_start: String,
+    pub victory: String,
+    pub defeat: String,
+}
+
+impl UiSounds {
+    pub fn ids(&self) -> [(&str, &str); 11] {
+        [
+            ("hover", self.hover.as_str()),
+            ("confirm", self.confirm.as_str()),
+            ("back", self.back.as_str()),
+            ("error", self.error.as_str()),
+            ("slider", self.slider.as_str()),
+            ("toggle", self.toggle.as_str()),
+            ("pause_open", self.pause_open.as_str()),
+            ("pause_close", self.pause_close.as_str()),
+            ("match_start", self.match_start.as_str()),
+            ("victory", self.victory.as_str()),
+            ("defeat", self.defeat.as_str()),
+        ]
+    }
+}
+
+fn load_ui(text: &str) -> Result<Ui, String> {
+    parse("ui.toml", text)
+}
+
+fn validate_ui(
+    ui: &Ui,
+    presentation: &Presentation,
+    controller: &Controller,
+    audio: &AudioTable,
+    difficulty: &[Tier],
+    glyphs: &RevealLayout,
+    heroes: &[HeroCard],
+) -> Result<(), String> {
+    let layout = &ui.layout;
+    let settings = &ui.settings;
+    if layout.title_scale == 0 || layout.button_scale == 0 || layout.hint_scale == 0 {
+        return Err("ui.toml scales must be at least 1".into());
+    }
+    if !(layout.border_px > 0.0) {
+        return Err("ui.toml layout.border_px must be > 0".into());
+    }
+    for (name, value) in [
+        ("button_width", layout.button_width),
+        ("button_height", layout.button_height),
+        ("card_width", layout.card_width),
+        ("card_height", layout.card_height),
+        ("pause_panel_width", layout.pause_panel_width),
+        ("pause_panel_height", layout.pause_panel_height),
+        ("slider_width", layout.slider_width),
+        ("slider_height", layout.slider_height),
+        ("settings_row_height", layout.settings_row_height),
+        ("fit_width", layout.fit_width),
+        ("fit_height", layout.fit_height),
+    ] {
+        if !(value.is_finite() && value > 0.0) {
+            return Err(format!("ui.toml layout.{name} must be > 0"));
+        }
+    }
+    if (layout.fit_width - 1280.0).abs() > 0.1 || (layout.fit_height - 720.0).abs() > 0.1 {
+        return Err("ui.toml fit frame must be 1280x720".into());
+    }
+    if !(layout.pause_keep > 0.0 && layout.pause_keep <= 1.0) {
+        return Err("ui.toml layout.pause_keep must be in (0, 1]".into());
+    }
+    if !(layout.focus_lift > 0.0 && layout.focus_lift < 1.0) {
+        return Err("ui.toml layout.focus_lift must be in (0, 1)".into());
+    }
+    if !(layout.nav_repeat_secs > 0.0) {
+        return Err("ui.toml layout.nav_repeat_secs must be > 0".into());
+    }
+    if !(layout.stick_deadzone > 0.0 && layout.stick_deadzone < 1.0) {
+        return Err("ui.toml layout.stick_deadzone must be in (0, 1)".into());
+    }
+    if layout.stat_decimals > 4 || layout.mult_decimals > 4 || layout.currency_decimals > 4 {
+        return Err("ui.toml decimals must be in 0..=4".into());
+    }
+    if !(layout.portrait_fraction > 0.0 && layout.portrait_fraction <= 0.5) {
+        return Err("ui.toml layout.portrait_fraction must be in (0, 0.5]".into());
+    }
+    check_range("sensitivity", settings.sensitivity, settings.sensitivity_min, settings.sensitivity_max, settings.sensitivity_step)?;
+    check_range("fov", settings.fov, settings.fov_min, settings.fov_max, settings.fov_step)?;
+    check_range("master", settings.master, settings.volume_min, settings.volume_max, settings.volume_step)?;
+    check_range("music", settings.music, settings.volume_min, settings.volume_max, settings.volume_step)?;
+    check_range("effects", settings.effects, settings.volume_min, settings.volume_max, settings.volume_step)?;
+    if (settings.fov_min - presentation.fov_min).abs() > 0.01 || (settings.fov_max - presentation.fov_max).abs() > 0.01 {
+        return Err("ui.toml fov range must match presentation.toml fov_min and fov_max".into());
+    }
+    if (settings.fov - controller.camera.fov_default).abs() > 0.01 {
+        return Err("ui.toml settings.fov must match controller.toml fov_default".into());
+    }
+    if settings.default_difficulty.is_empty() || !difficulty.iter().any(|tier| tier.id == settings.default_difficulty) {
+        return Err(format!(
+            "ui.toml default_difficulty \"{}\" is not a difficulty.toml tier",
+            settings.default_difficulty
+        ));
+    }
+    if settings.settings_file.is_empty() || settings.settings_key.is_empty() {
+        return Err("ui.toml settings file and key must be set".into());
+    }
+    let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+    let check_files = assets.is_dir();
+    for (slot, id) in ui.sounds.ids() {
+        let row = audio
+            .sfx
+            .iter()
+            .find(|row| row.id == id)
+            .ok_or_else(|| format!("ui.toml sounds.{slot} \"{id}\" is missing from audio_mix.toml"))?;
+        if !row.category_ui {
+            return Err(format!("audio_mix.toml {id} category must be ui"));
+        }
+        if check_files && !assets.join(&row.path).is_file() {
+            return Err(format!("ui sound {id} file {} is missing", row.path));
+        }
+    }
+    let glyph = glyphs.title_glyph_px.max(1);
+    let button_inner = layout.button_width - layout.border_px * 2.0;
+    let title_inner = layout.fit_width - layout.margin_x * 2.0;
+    let card_inner = layout.card_width - layout.border_px * 2.0 - layout.card_pad * 2.0;
+    let buttons = [
+        &ui.copy.play,
+        &ui.copy.crates,
+        &ui.copy.settings,
+        &ui.copy.quit,
+        &ui.copy.back,
+        &ui.copy.resume,
+        &ui.copy.quit_to_menu,
+        &ui.copy.play_again,
+        &ui.copy.main_menu,
+        &ui.copy.click_to_play,
+        &ui.copy.host,
+        &ui.copy.join,
+        &ui.copy.crates_pull,
+        &ui.copy.crates_open,
+        &ui.copy.on,
+        &ui.copy.off,
+    ];
+    for label in buttons {
+        require_fit(label, layout.button_scale, glyph, button_inner, "button")?;
+    }
+    for label in [
+        &ui.copy.title,
+        &ui.copy.heroes,
+        &ui.copy.difficulty,
+        &ui.copy.crates_title,
+        &ui.copy.victory,
+        &ui.copy.defeat,
+        &ui.copy.settings,
+        &ui.copy.coming_soon,
+        &ui.copy.reset_notice,
+        &ui.copy.click_to_play,
+    ] {
+        require_fit(label, layout.title_scale, glyph, title_inner, "title")?;
+    }
+    for tier in difficulty {
+        require_fit(&tier.id.to_uppercase(), layout.button_scale, glyph, button_inner, "difficulty")?;
+        let line = format!(
+            "{} X{}  {} X{}",
+            ui.copy.hp,
+            format_fixed(tier.enemy_hp, layout.mult_decimals),
+            ui.copy.dmg,
+            format_fixed(tier.enemy_dmg, layout.mult_decimals)
+        );
+        require_fit(&line, layout.hint_scale, glyph, button_inner, "difficulty stats")?;
+    }
+    for hero in heroes {
+        require_fit(&hero.name.to_uppercase(), layout.button_scale, glyph, card_inner, "hero name")?;
+        require_fit(&hero.role.to_uppercase(), layout.hint_scale, glyph, card_inner, "hero role")?;
+        for word in hero.ability.split_whitespace() {
+            require_fit(&word.to_uppercase(), layout.hint_scale, glyph, card_inner, "hero ability")?;
+        }
+        let stats = format!(
+            "{} {}  {} {}",
+            ui.copy.hp,
+            format_fixed(hero.max_hp, 0),
+            ui.copy.speed,
+            format_fixed(hero.move_speed_mult, layout.stat_decimals)
+        );
+        require_fit(&stats, layout.hint_scale, glyph, card_inner, "hero stats")?;
+    }
+    let rows = layout.margin_y * 2.0
+        + layout.title_scale as f32 * glyphs.glyph_rows as f32
+        + layout.title_gap
+        + layout.card_height
+        + layout.row_gap
+        + layout.button_height;
+    if rows > layout.fit_height {
+        return Err(format!("ui.toml hero screen is {rows}px tall and the fit frame is {}", layout.fit_height));
+    }
+    Ok(())
+}
+
+fn check_range(name: &str, value: f32, min: f32, max: f32, step: f32) -> Result<(), String> {
+    if !(min.is_finite() && max.is_finite() && step.is_finite() && step > 0.0 && min < max) {
+        return Err(format!("ui.toml {name} range is invalid"));
+    }
+    if !(value.is_finite() && value >= min && value <= max) {
+        return Err(format!("ui.toml settings.{name} {value} is outside [{min}, {max}]"));
+    }
+    Ok(())
+}
+
+fn require_fit(label: &str, scale: u32, glyph: u32, inner: f32, what: &str) -> Result<(), String> {
+    if label.is_empty() {
+        return Err(format!("ui.toml {what} label is empty"));
+    }
+    let width = label.chars().count() as f32 * glyph as f32 * scale as f32;
+    if width > inner {
+        return Err(format!("ui.toml {what} \"{label}\" is {width}px and the slot is {inner}px"));
+    }
+    Ok(())
 }
