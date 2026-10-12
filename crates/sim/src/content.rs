@@ -159,7 +159,17 @@ impl Content {
         hero.accent = accent.clone();
         // The palette key on the hero card is the only accent source.
         palette.hero.accent = accent;
-        validate_ui(&ui, &presentation, &controller, &audio, &difficulty, &crate_reveal.layout, &heroes)?;
+        validate_ui(
+            &ui,
+            src.ui,
+            &presentation,
+            &controller,
+            &audio,
+            &difficulty,
+            &crate_reveal.layout,
+            src.crate_reveal,
+            &heroes,
+        )?;
         let arena = load_arena(src.arena).map_err(|err| format!("arena_01.toml: {err}"))?;
         require_arena_colors(&palette, &arena).map_err(|err| format!("arena_01.toml: {err}"))?;
         validate_stage_offset(&palette, &crate_reveal.layout)?;
@@ -1607,7 +1617,8 @@ pub struct ArenaPaint {
 }
 
 /// Sky wash above the arena horizon in the host-away still.
-/// `color` is a palette key. Each channel is `source * num / den`.
+/// `sky` is a palette key. The floor stays put below `horizon`.
+/// Above it, the wash blends `mix + (1 - t) * span` from the floor dark toward that sky.
 #[derive(Clone, Debug)]
 pub struct ArenaEdgeWash {
     /// Palette key for the sky above the horizon.
@@ -3420,11 +3431,13 @@ fn load_ui(text: &str) -> Result<Ui, String> {
 
 fn validate_ui(
     ui: &Ui,
+    ui_text: &str,
     presentation: &Presentation,
     controller: &Controller,
     audio: &AudioTable,
     difficulty: &[Tier],
     glyphs: &RevealLayout,
+    reveal_text: &str,
     heroes: &[HeroCard],
 ) -> Result<(), String> {
     let layout = &ui.layout;
@@ -3616,52 +3629,84 @@ fn validate_ui(
     if rows > layout.fit_height {
         return Err(format!("ui.toml hero screen is {rows}px tall and the fit frame is {}", layout.fit_height));
     }
-    let copy = &ui.copy;
-    for (field, text) in [
-        ("title", copy.title.as_str()),
-        ("play", copy.play.as_str()),
-        ("crates", copy.crates.as_str()),
-        ("settings", copy.settings.as_str()),
-        ("quit", copy.quit.as_str()),
-        ("back", copy.back.as_str()),
-        ("resume", copy.resume.as_str()),
-        ("quit_to_menu", copy.quit_to_menu.as_str()),
-        ("play_again", copy.play_again.as_str()),
-        ("main_menu", copy.main_menu.as_str()),
-        ("click_to_play", copy.click_to_play.as_str()),
-        ("host", copy.host.as_str()),
-        ("join", copy.join.as_str()),
-        ("coming_soon", copy.coming_soon.as_str()),
-        ("heroes", copy.heroes.as_str()),
-        ("difficulty", copy.difficulty.as_str()),
-        ("locked", copy.locked.as_str()),
-        ("hp", copy.hp.as_str()),
-        ("speed", copy.speed.as_str()),
-        ("dmg", copy.dmg.as_str()),
-        ("power", copy.power.as_str()),
-        ("waves", copy.waves.as_str()),
-        ("kills", copy.kills.as_str()),
-        ("time", copy.time.as_str()),
-        ("currency", copy.currency.as_str()),
-        ("victory", copy.victory.as_str()),
-        ("defeat", copy.defeat.as_str()),
-        ("sensitivity", copy.sensitivity.as_str()),
-        ("fov", copy.fov.as_str()),
-        ("view_bob", copy.view_bob.as_str()),
-        ("invert_y", copy.invert_y.as_str()),
-        ("master", copy.master.as_str()),
-        ("music", copy.music.as_str()),
-        ("effects", copy.effects.as_str()),
-        ("on", copy.on.as_str()),
-        ("off", copy.off.as_str()),
-        ("reset_notice", copy.reset_notice.as_str()),
-        ("crates_title", copy.crates_title.as_str()),
-        ("crates_empty", copy.crates_empty.as_str()),
-        ("crates_pull", copy.crates_pull.as_str()),
-        ("crates_open", copy.crates_open.as_str()),
-        ("pull_failed", copy.pull_failed.as_str()),
-    ] {
+    require_drawn_menu_font(ui_text, ui, difficulty, heroes, reveal_text)?;
+    Ok(())
+}
+
+/// Glyphs for every string `paint_menu` draws. Copy comes from the `[copy]` table,
+/// not a field list. Tier ids and rarity names are the labels those screens paint.
+fn require_drawn_menu_font(
+    ui_text: &str,
+    ui: &Ui,
+    difficulty: &[Tier],
+    heroes: &[HeroCard],
+    reveal_text: &str,
+) -> Result<(), String> {
+    let root: toml::Value = toml::from_str(ui_text).map_err(|err| err.to_string())?;
+    let copy = root
+        .get("copy")
+        .and_then(|value| value.as_table())
+        .ok_or_else(|| "ui.toml is missing [copy]".to_string())?;
+    for (field, value) in copy {
+        let text = value
+            .as_str()
+            .ok_or_else(|| format!("ui.toml copy.{field} must be a string"))?;
         require_font(text, &format!("ui.toml copy.{field}"))?;
+    }
+    for tier in difficulty {
+        require_font(&tier.id, &format!("difficulty.toml {}", tier.id))?;
+        let line = format!(
+            "{} X{}  {} X{}",
+            ui.copy.hp,
+            format_fixed(tier.enemy_hp, ui.layout.mult_decimals),
+            ui.copy.dmg,
+            format_fixed(tier.enemy_dmg, ui.layout.mult_decimals)
+        );
+        require_font(&line, &format!("difficulty.toml {} stats", tier.id))?;
+    }
+    for hero in heroes {
+        require_font(&hero.name, &format!("characters.toml {} name", hero.id))?;
+        require_font(&hero.role, &format!("characters.toml {} role", hero.id))?;
+        require_font(&hero.ability, &format!("characters.toml {} ability", hero.id))?;
+        let stats = format!(
+            "{} {}  {} {}",
+            ui.copy.hp,
+            format_fixed(hero.max_hp, 0),
+            ui.copy.speed,
+            format_fixed(hero.move_speed_mult, ui.layout.stat_decimals)
+        );
+        require_font(&stats, &format!("characters.toml {} stats", hero.id))?;
+    }
+    let settings = &ui.settings;
+    for (what, text) in [
+        ("sensitivity", format_fixed(settings.sensitivity, 2)),
+        ("fov", format_fixed(settings.fov, 0)),
+        ("master", format_fixed(settings.master, 2)),
+        ("music", format_fixed(settings.music, 2)),
+        ("effects", format_fixed(settings.effects, 2)),
+    ] {
+        require_font(&text, &format!("ui.toml settings.{what}"))?;
+    }
+    require_font(&format!("{} 0:00", ui.copy.time), "ui.toml copy.time")?;
+    require_font(
+        &format!("{} {}", ui.copy.currency, format_fixed(0.0, ui.layout.currency_decimals)),
+        "ui.toml copy.currency",
+    )?;
+    let reveal: toml::Value = toml::from_str(reveal_text).map_err(|err| err.to_string())?;
+    let table = reveal
+        .as_table()
+        .ok_or_else(|| "crate_reveal.toml is not a table".to_string())?;
+    let mut rarities = 0u32;
+    for (name, value) in table {
+        let Some(row) = value.as_table() else { continue };
+        if !(row.contains_key("tease") && row.contains_key("sting")) {
+            continue;
+        }
+        rarities += 1;
+        require_font(name, &format!("crate_reveal.toml {name}"))?;
+    }
+    if rarities == 0 {
+        return Err("crate_reveal.toml has no rarity tiers".into());
     }
     Ok(())
 }

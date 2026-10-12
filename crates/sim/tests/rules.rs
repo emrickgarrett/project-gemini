@@ -2086,6 +2086,27 @@ fn ui_spacing_and_font_coverage_fail_closed() {
     .expect_err("underscore in a hero name");
     assert!(err.contains("nyra"), "{err}");
     assert!(err.contains("'_'"), "{err}");
+
+    let tiers = base.difficulty.replacen("id=\"normal\"", "id=\"normal?\"", 1);
+    let ui = base.ui.replacen("default_difficulty = \"normal\"", "default_difficulty = \"normal?\"", 1);
+    assert_ne!(tiers, base.difficulty);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        difficulty: &tiers,
+        ui: &ui,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("tier id");
+    assert!(err.contains("normal?"), "{err}");
+    assert!(err.contains("'?'"), "{err}");
+
+    let rarity = format!("{}\n[mythic_tier]\ntease = \"x\"\nsting = \"y\"\n", base.crate_reveal);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        crate_reveal: &rarity,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("rarity name");
+    assert!(err.contains("mythic_tier"), "{err}");
+    assert!(err.contains("'_'"), "{err}");
 }
 
 #[test]
