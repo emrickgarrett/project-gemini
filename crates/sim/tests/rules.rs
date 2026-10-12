@@ -2993,6 +2993,14 @@ fn hero_portraits_fail_closed() {
     })
     .expect_err("mix");
     assert!(err.contains("locked_accent_mix"), "{err}");
+    let blank_white = base.palette.replacen("white = \"#F2F2F2\"\n", "", 1);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        palette: &blank_white,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("missing hero_white");
+    assert!(err.contains("hero_white"), "{err}");
+    assert!(err.contains("does not resolve"), "{err}");
 }
 
 fn sources_ranks<'a>(

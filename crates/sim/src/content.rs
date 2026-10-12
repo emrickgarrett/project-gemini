@@ -2819,6 +2819,8 @@ pub struct Palette {
 pub struct HeroColors {
     pub teal: String,
     pub cobalt: String,
+    /// Empty when the line is left out, so `require_palette_keys` can name `hero_white`.
+    #[serde(default)]
     pub white: String,
     /// Filled at load from the starter hero's `accent_key`. Not a palette.toml entry.
     #[serde(default)]
@@ -2942,11 +2944,14 @@ fn require_palette_keys(
     heroes: &[HeroCard],
 ) -> Result<(), String> {
     let check = |owner: &str, name: &str| -> Result<(), String> {
-        if palette.hex(name).is_some() {
+        let hex = palette.hex(name).unwrap_or("");
+        if hex.trim().trim_start_matches('#').len() >= 6 {
             return Ok(());
         }
         Err(format!("{owner} color \"{name}\" does not resolve"))
     };
+    // Locked portraits paint the lit body with this key. Fail here, not in the painter.
+    check("portrait", "hero_white")?;
     for (bug, row) in bugs.rows() {
         if !row.visual.bud_color.is_empty() {
             check(bug, &row.visual.bud_color)?;
