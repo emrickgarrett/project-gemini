@@ -946,7 +946,11 @@ fn cast_hit_centers_stay_on_the_moved_anchors() {
 
     let spitter = content.bug(EnemyKind::Spitter);
     let sac = spitter.hitbox.weak().expect("spitter sac");
-    assert!(near(sac.offset, [0.0, 0.74, -0.22]), "spitter sac {:?}", sac.offset);
+    assert!(
+        near(sac.offset, [0.01385055, 0.67324573, -0.24146803]),
+        "spitter sac {:?}",
+        sac.offset
+    );
     assert!((sac.radius - 0.36).abs() < 1.0e-4, "spitter sac radius {}", sac.radius);
 
     let brute = content.bug(EnemyKind::Brute);
@@ -967,6 +971,33 @@ fn cast_hit_centers_stay_on_the_moved_anchors() {
     let sink = pod.sink.expect("pod sink");
     assert!((sink - 0.88).abs() < 1.0e-4, "pod sink {sink}");
     assert!((brood.hitbox.pod_radius().unwrap() - 0.65).abs() < 1.0e-4);
+    assert!(
+        near(brood.hitbox.pods[1].offset, [0.07553730, 2.29495382, 0.61697435]),
+        "pod1 {:?}",
+        brood.hitbox.pods[1].offset
+    );
+    assert!(
+        near(brood.hitbox.pods[4].offset, [-0.08838622, 2.43034029, -0.95747310]),
+        "pod4 {:?}",
+        brood.hitbox.pods[4].offset
+    );
+
+    let hive = content.bug(EnemyKind::HiveTyrant);
+    let core = hive.hitbox.core.as_ref().expect("hive core");
+    assert!(
+        near(core.offset, [-0.00914036, 3.35820866, 0.86390787]),
+        "hive core {:?}",
+        core.offset
+    );
+    assert!((core.radius - 0.70).abs() < 1.0e-4, "hive core radius {}", core.radius);
+    let cannon = hive.hitbox.cannon.as_ref().expect("hive cannon");
+    assert_eq!(cannon.anchor, gemini_sim::bugs::PROCEDURAL_TAIL_ANCHOR);
+    assert!(
+        near(cannon.offset, [0.0, 6.1933675, -0.72942567]),
+        "cannon {:?}",
+        cannon.offset
+    );
+    assert!((cannon.radius - 0.83).abs() < 1.0e-4, "cannon radius {}", cannon.radius);
 }
 
 #[test]

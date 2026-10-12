@@ -632,33 +632,61 @@ fn paint_feedback_parts(
     lean: f32,
 ) {
     let (ls, lc) = lean.sin_cos();
+    let look = &gemini_sim::content::Content::embedded().cast;
     for (part, xf) in visual.parts.iter().zip(posed.xforms.iter()) {
         if !(part.emissive || part.grows || part.pod_slot.is_some()) || !xf.visible {
             continue;
         }
         let albedo = palette(part.palette.as_str());
         let rgb = [albedo[0], albedo[1], albedo[2]];
+        let origin = [xf.pos[0], xf.pos[1], xf.pos[2]];
+        let center = lean_shift(origin, ls, lc, shift, bob);
+        let mut radius = 0.0_f32;
+        for p in &part.mesh.positions {
+            let scaled = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
+            radius = radius.max((scaled[0] * scaled[0] + scaled[1] * scaled[1] + scaled[2] * scaled[2]).sqrt());
+        }
         for tri in part.mesh.indices.chunks(3) {
             if tri.len() < 3 {
                 continue;
             }
             let mut projected = [[0.0; 3]; 3];
+            let mut world = [[0.0; 3]; 3];
             let mut ok = true;
             for (slot, index) in tri.iter().enumerate() {
                 let p = part.mesh.positions[*index as usize];
                 let p = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
                 let p = crate::pose::rotate_vec(xf.rot, p);
                 let p = [p[0] + xf.pos[0], p[1] + xf.pos[1], p[2] + xf.pos[2]];
-                let y2 = lc * p[1] - ls * p[2];
-                let z2 = ls * p[1] + lc * p[2];
-                let world = [p[0] + shift[0], y2 + shift[1] + bob, z2 + shift[2]];
-                let Some(screen) = project(world, cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
+                let placed = lean_shift(p, ls, lc, shift, bob);
+                let Some(screen) = project(placed, cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
                     ok = false;
                     break;
                 };
                 projected[slot] = screen;
+                world[slot] = placed;
             }
-            if ok {
+            if !ok {
+                continue;
+            }
+            if part.emissive && radius > 0.0 {
+                fill_glow_tri(
+                    color,
+                    depth,
+                    cam.w,
+                    cam.h,
+                    projected[0],
+                    projected[1],
+                    projected[2],
+                    world,
+                    center,
+                    radius,
+                    cam.forward,
+                    rgb,
+                    look.glow_falloff,
+                    look.glow_show_through,
+                );
+            } else {
                 fill_tri(color, depth, cam.w, cam.h, projected[0], projected[1], projected[2], rgb);
             }
         }
@@ -939,6 +967,80 @@ fn project(
         (1.0 - (y * 0.5 + 0.5)) * h as f32,
         z,
     ])
+}
+
+fn lean_shift(p: [f32; 3], ls: f32, lc: f32, shift: [f32; 3], bob: f32) -> [f32; 3] {
+    let y2 = lc * p[1] - ls * p[2];
+    let z2 = ls * p[1] + lc * p[2];
+    [p[0] + shift[0], y2 + shift[1] + bob, z2 + shift[2]]
+}
+
+/// Solid core, soft edge. `falloff` and `show_through` are the cast.toml keys.
+fn glow_cover(perp: f32, falloff: f32, show_through: f32) -> f32 {
+    let edge = perp.clamp(0.0, 1.0).powf(falloff);
+    (1.0 - show_through * edge).clamp(0.0, 1.0)
+}
+
+fn fill_glow_tri(
+    color: &mut [u8],
+    depth: &mut [f32],
+    w: u32,
+    h: u32,
+    a: [f32; 3],
+    b: [f32; 3],
+    c: [f32; 3],
+    world: [[f32; 3]; 3],
+    center: [f32; 3],
+    radius: f32,
+    forward: [f32; 3],
+    rgb: [f32; 3],
+    falloff: f32,
+    show_through: f32,
+) {
+    let min_x = a[0].min(b[0]).min(c[0]).floor().max(0.0) as i32;
+    let max_x = a[0].max(b[0]).max(c[0]).ceil().min(w as f32 - 1.0) as i32;
+    let min_y = a[1].min(b[1]).min(c[1]).floor().max(0.0) as i32;
+    let max_y = a[1].max(b[1]).max(c[1]).ceil().min(h as f32 - 1.0) as i32;
+    let area = edge(a, b, c);
+    if area.abs() < 1e-4 {
+        return;
+    }
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let p = [x as f32 + 0.5, y as f32 + 0.5, 0.0];
+            let w0 = edge(b, c, p) / area;
+            let w1 = edge(c, a, p) / area;
+            let w2 = edge(a, b, p) / area;
+            if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                continue;
+            }
+            let z = a[2] * w0 + b[2] * w1 + c[2] * w2;
+            let idx = (y as u32 * w + x as u32) as usize;
+            if z >= depth[idx] {
+                continue;
+            }
+            let at = [
+                world[0][0] * w0 + world[1][0] * w1 + world[2][0] * w2,
+                world[0][1] * w0 + world[1][1] * w1 + world[2][1] * w2,
+                world[0][2] * w0 + world[1][2] * w1 + world[2][2] * w2,
+            ];
+            let offset = sub(at, center);
+            let along = dot(offset, forward);
+            let perp_v = [offset[0] - forward[0] * along, offset[1] - forward[1] * along, offset[2] - forward[2] * along];
+            let perp = (perp_v[0] * perp_v[0] + perp_v[1] * perp_v[1] + perp_v[2] * perp_v[2]).sqrt() / radius;
+            let cover = glow_cover(perp, falloff, show_through);
+            let o = idx * 3;
+            let under = [
+                color[o] as f32 / 255.0,
+                color[o + 1] as f32 / 255.0,
+                color[o + 2] as f32 / 255.0,
+            ];
+            depth[idx] = z;
+            color[o] = byte(rgb[0] * cover + under[0] * (1.0 - cover));
+            color[o + 1] = byte(rgb[1] * cover + under[1] * (1.0 - cover));
+            color[o + 2] = byte(rgb[2] * cover + under[2] * (1.0 - cover));
+        }
+    }
 }
 
 fn fill_tri(

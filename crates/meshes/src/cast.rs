@@ -565,10 +565,11 @@ pub fn bake_textures(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> (u3
     (w, h, albedo, emit)
 }
 
-/// The cleaned mask is applied as stored. Green is the glow. Red is the accent.
-/// An empty mask lifts the gray base from `base_gray` to `base_light`. There is no noise threshold.
+/// The cleaned mask is a tint-region weight, not a color. Red weights the accent.
+/// Green weights the glow. An empty mask is flat mid-gray (`base_light`) times
+/// the base palette key. The albedo is not sampled.
 pub fn tint_texel(
-    base: [f32; 3],
+    _base: [f32; 3],
     mask: [f32; 3],
     base_c: [f32; 4],
     accent: [f32; 4],
@@ -577,23 +578,19 @@ pub fn tint_texel(
     shade: f32,
     fresnel: f32,
     base_light: f32,
-    base_gray: f32,
+    _base_gray: f32,
     rim_strength: f32,
 ) -> [f32; 3] {
-    if mask[1] > 0.0 {
-        return [glow[0], glow[1], glow[2]];
-    }
-    if mask[0] > 0.0 {
-        return [accent[0], accent[1], accent[2]];
-    }
-    let lift = base_light / base_gray.max(1.0e-4);
+    let accent_w = mask[0].clamp(0.0, 1.0);
+    let glow_w = mask[1].clamp(0.0, 1.0);
+    let body_w = (1.0 - accent_w - glow_w).clamp(0.0, 1.0);
     let mut color = [
-        base[0] * lift * base_c[0] * shade,
-        base[1] * lift * base_c[1] * shade,
-        base[2] * lift * base_c[2] * shade,
+        base_light * base_c[0] * shade * body_w + accent[0] * accent_w + glow[0] * glow_w,
+        base_light * base_c[1] * shade * body_w + accent[1] * accent_w + glow[1] * glow_w,
+        base_light * base_c[2] * shade * body_w + accent[2] * accent_w + glow[2] * glow_w,
     ];
     if rim[3] > 0.0 || rim[0] + rim[1] + rim[2] > 0.0 {
-        let k = fresnel * rim_strength;
+        let k = fresnel * rim_strength * body_w;
         color[0] += rim[0] * k;
         color[1] += rim[1] * k;
         color[2] += rim[2] * k;
@@ -1086,6 +1083,34 @@ mod tests {
     }
 
     #[test]
+    fn loaded_mask_bytes_match_the_committed_png() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/masks");
+        for id in [
+            "vex_body",
+            "vex_gun",
+            "nyra_body",
+            "nyra_gun",
+            "brakk_body",
+            "brakk_gun",
+            "brakk_shield",
+            "kip_body",
+            "kip_gun",
+            "swarmer",
+            "spitter",
+            "brute",
+            "brood_mother",
+            "hive_tyrant",
+        ] {
+            let loaded = mask_png(id).expect(id);
+            let disk = std::fs::read(root.join(format!("{id}_mask.png"))).unwrap_or_else(|err| panic!("{id} mask on disk: {err}"));
+            assert_eq!(loaded, disk.as_slice(), "{id} bytes");
+            let decoded = decode_mask(&disk, id).expect(id);
+            let mesh = cast(id);
+            assert_eq!(mesh.mask.rgba, decoded.rgba, "{id} renderer uses the committed mask");
+        }
+    }
+
+    #[test]
     fn shield_handle_and_gun_grip_survive_the_fit() {
         let content = Content::embedded();
         let shield = content.models.iter().find(|model| model.id == "brakk_shield").unwrap();
@@ -1122,12 +1147,34 @@ mod tests {
             let posed = rest_pose(visual);
             let mut glow = Vec::new();
             for (slot, shape) in row.hitbox.anchored() {
-                gaps.push((
-                    id.to_string(),
-                    slot.to_string(),
-                    shape.offset,
-                    surface_gap(&mesh.positions, &mesh.indices, shape.offset),
-                ));
+                let gap = if shape.anchor == gemini_sim::bugs::PROCEDURAL_TAIL_ANCHOR {
+                    let seated = gemini_sim::bugs::visual_anchor(&row.visual, &shape.anchor).unwrap_or_else(|| {
+                        panic!("{id} {slot} anchor {} did not resolve", shape.anchor)
+                    });
+                    let chain = dist(shape.offset, seated);
+                    let mesh_gap = tail_surface_gap(visual, &posed, shape.offset);
+                    let tail = row.visual.parts.iter().find(|part| part.name == "tail").expect("tail");
+                    let gem = row
+                        .visual
+                        .parts
+                        .iter()
+                        .find(|part| part.at.as_deref() == Some("tail_end"))
+                        .expect("tail end");
+                    let place_r = gem.size.first().copied().unwrap_or(0.0) * 0.5;
+                    let seat = place_r + tail.tip_gap;
+                    if mesh_gap > seat + gemini_sim::bugs::HIT_SURFACE_GAP_M {
+                        gaps.push((
+                            id.to_string(),
+                            slot.to_string(),
+                            shape.offset,
+                            mesh_gap,
+                        ));
+                    }
+                    chain
+                } else {
+                    surface_gap(&mesh.positions, &mesh.indices, shape.offset)
+                };
+                gaps.push((id.to_string(), slot.to_string(), shape.offset, gap));
                 glow.push(glow_sits_on_hit(id, visual, &posed, slot, shape));
             }
             if let Some(radius) = row.hitbox.pod_radius() {
@@ -1177,7 +1224,7 @@ mod tests {
         let mut missed = Vec::new();
         for (id, slot, center, gap) in &gaps {
             eprintln!("{id} {slot} center {center:?} surface gap {gap:.3}");
-            if *gap > 0.05 {
+            if *gap > gemini_sim::bugs::HIT_SURFACE_GAP_M {
                 missed.push(format!(
                     "{id} {slot} center {center:?} is {gap:.3} off the cast surface"
                 ));
@@ -1251,7 +1298,11 @@ mod tests {
         slot: &str,
         shape: &gemini_sim::bugs::ShapeDef,
     ) -> String {
-        let name = shape.anchor.as_str();
+        let name = if shape.name.is_empty() {
+            shape.anchor.as_str()
+        } else {
+            shape.name.as_str()
+        };
         let index = visual
             .parts
             .iter()
@@ -1337,65 +1388,93 @@ mod tests {
     }
 
     fn surface_gap(positions: &[[f32; 3]], indices: &[u32], point: [f32; 3]) -> f32 {
+        closest_on_mesh(positions, indices, point).1
+    }
+
+    fn tail_surface_gap(visual: &crate::EnemyVisual, posed: &crate::pose::Pose, point: [f32; 3]) -> f32 {
         let mut best = f32::MAX;
+        for (part, xf) in visual.parts.iter().zip(posed.xforms.iter()) {
+            if !part.name.starts_with("tail") {
+                continue;
+            }
+            let positions: Vec<[f32; 3]> = part
+                .mesh
+                .positions
+                .iter()
+                .map(|p| {
+                    let p = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
+                    let p = crate::pose::rotate_vec(xf.rot, p);
+                    [p[0] + xf.pos[0], p[1] + xf.pos[1], p[2] + xf.pos[2]]
+                })
+                .collect();
+            best = best.min(surface_gap(&positions, &part.mesh.indices, point));
+        }
+        best
+    }
+
+    fn closest_on_mesh(positions: &[[f32; 3]], indices: &[u32], point: [f32; 3]) -> ([f32; 3], f32) {
+        let mut best = [0.0; 3];
+        let mut best_d = f32::MAX;
         for tri in indices.chunks(3) {
             if tri.len() < 3 {
                 continue;
             }
-            let d = dist_point_triangle(
+            let q = closest_on_triangle(
                 point,
                 positions[tri[0] as usize],
                 positions[tri[1] as usize],
                 positions[tri[2] as usize],
             );
-            if d < best {
-                best = d;
+            let d = dist(point, q);
+            if d < best_d {
+                best = q;
+                best_d = d;
             }
         }
-        best
+        (best, best_d)
     }
 
-    fn dist_point_triangle(p: [f32; 3], a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> f32 {
+    fn closest_on_triangle(p: [f32; 3], a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
         let ab = sub(b, a);
         let ac = sub(c, a);
         let ap = sub(p, a);
         let d1 = dot3(ab, ap);
         let d2 = dot3(ac, ap);
         if d1 <= 0.0 && d2 <= 0.0 {
-            return dist(p, a);
+            return a;
         }
         let bp = sub(p, b);
         let d3 = dot3(ab, bp);
         let d4 = dot3(ac, bp);
         if d3 >= 0.0 && d4 <= d3 {
-            return dist(p, b);
+            return b;
         }
         let vc = d1 * d4 - d3 * d2;
         if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
             let v = d1 / (d1 - d3);
-            return dist(p, [a[0] + ab[0] * v, a[1] + ab[1] * v, a[2] + ab[2] * v]);
+            return [a[0] + ab[0] * v, a[1] + ab[1] * v, a[2] + ab[2] * v];
         }
         let cp = sub(p, c);
         let d5 = dot3(ab, cp);
         let d6 = dot3(ac, cp);
         if d6 >= 0.0 && d5 <= d6 {
-            return dist(p, c);
+            return c;
         }
         let vb = d5 * d2 - d1 * d6;
         if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
             let w = d2 / (d2 - d6);
-            return dist(p, [a[0] + ac[0] * w, a[1] + ac[1] * w, a[2] + ac[2] * w]);
+            return [a[0] + ac[0] * w, a[1] + ac[1] * w, a[2] + ac[2] * w];
         }
         let va = d3 * d6 - d5 * d4;
         if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
             let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
             let bc = sub(c, b);
-            return dist(p, [b[0] + bc[0] * w, b[1] + bc[1] * w, b[2] + bc[2] * w]);
+            return [b[0] + bc[0] * w, b[1] + bc[1] * w, b[2] + bc[2] * w];
         }
         let denom = 1.0 / (va + vb + vc);
         let v = vb * denom;
         let w = vc * denom;
-        dist(p, [a[0] + ab[0] * v + ac[0] * w, a[1] + ab[1] * v + ac[1] * w, a[2] + ab[2] * v + ac[2] * w])
+        [a[0] + ab[0] * v + ac[0] * w, a[1] + ab[1] * v + ac[1] * w, a[2] + ab[2] * v + ac[2] * w]
     }
 
     fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -1450,6 +1529,8 @@ mod tests {
         assert!((look.rim_strength - 1.0).abs() < 1.0e-6);
         assert!((look.view_gun_mask_threshold - 0.45).abs() < 1.0e-6);
         assert!((look.view_gun_rim_strength - 0.35).abs() < 1.0e-6);
+        assert!((look.glow_falloff - 2.0).abs() < 1.0e-6);
+        assert!((look.glow_show_through - 0.45).abs() < 1.0e-6);
         let text = include_str!("../../../content/cast.toml");
         assert!(
             !text.lines().any(|line| line.trim_start().starts_with("mask_threshold")),
@@ -1466,6 +1547,11 @@ mod tests {
         assert_eq!(acid, [0.0, 1.0, 0.0]);
         let body = tint_texel(base, [0.0, 0.0, 0.0], base_c, accent, glow, rim, 1.0, 0.0, look.base_light, look.base_gray, look.rim_strength);
         assert!((body[0] - look.base_light * base_c[0]).abs() < 1.0e-4, "mid-gray lift {body:?}");
+        let camo = tint_texel([0.92, 0.14, 0.04], [0.0, 0.0, 0.0], base_c, accent, glow, rim, 1.0, 0.0, look.base_light, look.base_gray, look.rim_strength);
+        assert!(
+            (camo[0] - body[0]).abs() < 1.0e-4 && (camo[1] - body[1]).abs() < 1.0e-4 && (camo[2] - body[2]).abs() < 1.0e-4,
+            "albedo is not a tint color {camo:?}"
+        );
         let edged = tint_texel(base, [0.0, 0.0, 0.0], base_c, accent, glow, rim, 1.0, 1.0, look.base_light, look.base_gray, look.rim_strength);
         assert!((edged[0] - (body[0] + look.rim_strength)).abs() < 1.0e-4, "rim {edged:?}");
     }

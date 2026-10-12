@@ -3,8 +3,8 @@
 #
 # The cleaned mask PNGs are solid. Red is the accent palette key.
 # Green is the glow palette key, unlit. There is no noise threshold.
-# A texel at `base_gray` is lifted to `base_light` (mid-gray) before the
-# model's base palette key. Hero dark tones are the hero_*_base keys.
+# A texel with an empty mask is flat mid-gray (`base_light`) times the base
+# palette key. The albedo is not a color. Mask red and green are region weights.
 # `rim_strength` scales the fresnel on unmasked texels when a model has a rim key.
 # A weapon (`fit = "weapon"`) uses the cleaned mask as stored. Green or red at
 # or above `view_gun_mask_threshold` is the glow or the accent. The cleaned
@@ -13,6 +13,8 @@
 # Overdrive gun emissive is `overdrive_emissive_key` scaled per channel.
 # The gains are HDR, so they are not hex colors.
 # Brood pod emissive is `pod_glow_key` times `pod_glow_base + glow * pod_glow_per_glow`.
+# A glow disc uses `glow_falloff` (radial exponent, solid core) and
+# `glow_show_through` (sac visible at the edge). The painter has no second copy.
 # The review orbit is the camera from the approved side_<id>.png sheets
 # (distance is radii, vertical field of view in degrees).
 
@@ -26,6 +28,8 @@ overdrive_emissive_gain = [5.0, 2.2, 0.4]
 pod_glow_key = "swarmer_glow"
 pod_glow_base = 2.8
 pod_glow_per_glow = 1.7
+glow_falloff = 2.0
+glow_show_through = 0.45
 review_yaw_deg = -24.0
 review_elev_deg = 20.0
 review_distance = 3.2

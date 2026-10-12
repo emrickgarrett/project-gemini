@@ -6,8 +6,9 @@
 # `audio` names the events. Mix levels live in audio_mix.toml.
 #
 # Design "phase 1" is the first phase (sim phase index 0, above the first
-# threshold). The hive cannon follows the visual part named "cannon"
-# (phase_max = 1). The tail entry owns the chain pitch, joint, and segment cap.
+# threshold). The hive cannon is anchored on the procedural tail
+# (`anchor = "procedural_tail"`), not the cast. Its center stays at the
+# tail end. The tail entry owns the chain pitch, joint, and segment cap.
 #
 # A weak-point hitbox has to cover its glowing mesh. The mesh test fails when
 # the hitbox radius is under that mesh radius times hitbox_margin.
@@ -73,7 +74,7 @@ parts = [
   { name="thorax", part="thorax", shape="capsule", size=[0.25,0.9], offset=[0,0.75,0.1], tilt_deg=-35, color="spitter_carapace" },
   { name="head",   part="head",   shape="cone",    size=[0.24,0.46], offset=[0,0.48,0.72], color="spitter_carapace", point="forward" },
   { name="eyes",   part="eyes",   shape="sphere",  size=[0.05,0.05,0.05], offset=[0.09,0.56,0.82], color="spitter_glow", emissive=true, mirror=true, visual_radius=0.025 },
-  { name="sac",    part="gem",    shape="sphere",  size=[0.32,0.32,0.32], offset=[0,0.74,-0.22], color="spitter_glow", emissive=true, visual_radius=0.30 },
+  { name="sac",    part="gem",    shape="sphere",  size=[0.32,0.32,0.32], offset=[0.01385055, 0.67324573, -0.24146803], color="spitter_glow", emissive=true, visual_radius=0.30 },
   { name="leg",    part="leg",    shape="capsule", size=[0.09,0.78], count=4, ring_radius=0.45, color="spitter_carapace", layout="paired", hip=0.46, femur=0.46, femur_lod=0.92, tibia=0.40, foot=0.16 },
 ]
 anim = { bob=[0.04, 3.0], leg_swing=25, gait="alternate", sac_charge_scale=1.25, sac_charge_glow=3.0 }
@@ -193,7 +194,7 @@ parts = [
   { name="crown", part="crown", shape="cone",   size=[0.15,0.5], count=5, on="head", color="brute_amber", spread=[2.6, 0.25, 1.6], crown_pitch=0.85 },
   { name="gland", part="gem",   shape="sphere", size=[0.36,0.36,0.36], offset=[0,1.50,1.20], color="spitter_glow", emissive=true, visual_radius=0.40 },
   { name="sac",   part="gem",   shape="sphere", size=[2.6,2.0,2.6], offset=[0,1.75,-0.1], color="brood_sac" },
-  { name="pod",   part="pod",   shape="sphere", size=[0.44,0.44,0.44], count=6, on="sac", ring_radius=0.72, color="swarmer_glow", emissive=true, ring_phase=0.0, sink=0.88, ny_floor=0.2, ring_turn=0.4, visual_radius=0.52 },
+  { name="pod",   part="pod",   shape="sphere", size=[0.44,0.44,0.44], count=6, on="sac", ring_radius=0.72, color="swarmer_glow", emissive=true, ring_phase=0.0, sink=0.88, ny_floor=0.2, ring_turn=0.4, visual_radius=0.52, seats=[{index=1, offset=[0.07553730, 2.29495382, 0.61697435]}, {index=4, offset=[-0.08838622, 2.43034029, -0.95747310]}] },
   { name="bud",   part="bud",   shape="sphere", size=[0.52,0.46,0.52], count=6, on="sac", ring_radius=0.8, color="brood_sac", emissive=false, grows_into_pod_on="enrage", ring_phase=0.5, sink=1.32, ny_floor=0.55, ring_turn=0.4, grown_scale=2.4, grown_glow=2.2 },
   { name="leg",   part="leg",   shape="capsule", size=[0.30,1.7], count=6, ring_radius=2.85, color="brute_amber", layout="radial", hip_scale=0.95, plant_scale=1.55, ring_phase=0.35, hip=0.42, femur=0.46, femur_lod=0.92, tibia=0.40, foot=0.16 },
 ]
@@ -245,7 +246,7 @@ lod_distance = 62.0
 parts = [
   { name="torso",  part="torso",   shape="capsule", size=[1.2,3.0], offset=[0,3.2,0.5], tilt_deg=-15, color="brute_amber" },
   { name="armor",  part="armor",   shape="box",     size=[2.6,2.4,1.15], offset=[0,3.35,0.85], color="brute_amber", phase_max=1 },
-  { name="core",   part="gem",     shape="sphere",  size=[0.64,0.64,0.64], offset=[0,3.4,1.0], color="spitter_glow", emissive=true, visual_radius=0.56 },
+  { name="core",   part="gem",     shape="sphere",  size=[0.64,0.64,0.64], offset=[-0.00914036, 3.35820866, 0.86390787], color="spitter_glow", emissive=true, visual_radius=0.56 },
   { name="head",   part="head",    shape="cone",    size=[0.85,1.05], offset=[0,5.05,1.15], color="brute_amber", point="up" },
   { name="crown",  part="crown",   shape="cone",    size=[0.14,1.05], count=6, on="head", color="brute_amber", spread=[1.7, 0.55, 1.15], crown_pitch=0.35 },
   { name="scythe", part="scythe",  shape="cone",    size=[0.36,3.35], offset=[1.55,3.55,0.85], tilt_deg=70, color="brute_amber", mirror=true, aim=[1.25, 0.02, 0.7], seg=0.38, rad=0.62, taper=0.55, blade=1.25, blade_euler=[0.35, 0.0, 0.15], blade_r=[0.85, 0.16], swing_hz=1.4, swing_amp=0.12 },
@@ -290,7 +291,7 @@ spines = 0
 [hive_tyrant.hitbox]
 body = { shape = "capsule", radius = 2.0, height = 5.0, offset = [0, 2.5, 0] }
 core = { anchor = "core", shape = "sphere", radius = 0.7 }
-cannon = { shape = "sphere", radius = 0.83, anchor = "cannon" }
+cannon = { name = "cannon", shape = "sphere", radius = 0.83, anchor = "procedural_tail" }
 
 [hive_tyrant.audio]
 footstep = "tyrant_footstep"

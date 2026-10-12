@@ -165,6 +165,16 @@ pub struct VisualPart {
     /// Radial yaw offset, radians. Pod rings use the same key.
     #[serde(default)]
     pub ring_phase: Option<f32>,
+    /// Pod indices that sit on the cast instead of the ring. Empty on every other part.
+    #[serde(default)]
+    pub seats: Vec<PodSeat>,
+}
+
+/// One pod center snapped onto the cast. The ring still places every other pod.
+#[derive(Clone, Debug, Deserialize)]
+pub struct PodSeat {
+    pub index: u32,
+    pub offset: [f32; 3],
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -435,8 +445,18 @@ fn anchor_name(shape: &ShapeDef) -> Option<&str> {
     }
 }
 
+/// 5 cm. Every hit-center surface check uses this one bar.
+pub const HIT_SURFACE_GAP_M: f32 = 0.05;
+
+/// Hitbox anchor that follows the procedural tail chain, not the cast mesh.
+pub const PROCEDURAL_TAIL_ANCHOR: &str = "procedural_tail";
+
 /// Local center of a visual part. `None` when the part is missing or has no anchor.
 pub fn visual_anchor(visual: &BugVisual, name: &str) -> Option<[f32; 3]> {
+    if name == PROCEDURAL_TAIL_ANCHOR {
+        let part = tail_end_part(visual)?;
+        return tail_end(visual, part);
+    }
     let part = part_named(visual, name)?;
     if part.at.as_deref() == Some("tail_end") {
         return tail_end(visual, part);
@@ -483,18 +503,28 @@ fn bake_pods(bug: &str, visual: &BugVisual, hitbox: &mut BugHitbox) -> Result<()
     let phase = pod
         .ring_phase
         .ok_or_else(|| format!("{bug} visual pod is missing ring_phase"))?;
+    for seat in &pod.seats {
+        if seat.index >= count {
+            return Err(format!("{bug} pod seat {} is outside the ring", seat.index));
+        }
+    }
     for i in 0..count {
         let a = (i as f32 + phase) / count as f32 * std::f32::consts::TAU + turn;
         let nx = a.cos() * pod.ring_radius;
         let nz = a.sin() * pod.ring_radius;
         let ny = (1.0 - nx * nx - nz * nz).max(floor).sqrt();
-        hitbox.pods.push(PodPlacement {
-            offset: [
-                host.offset[0] + nx * radii[0] * sink,
-                host.offset[1] + ny * radii[1] * sink,
-                host.offset[2] + nz * radii[2] * sink,
-            ],
-        });
+        let ring = [
+            host.offset[0] + nx * radii[0] * sink,
+            host.offset[1] + ny * radii[1] * sink,
+            host.offset[2] + nz * radii[2] * sink,
+        ];
+        let offset = pod
+            .seats
+            .iter()
+            .find(|seat| seat.index == i)
+            .map(|seat| seat.offset)
+            .unwrap_or(ring);
+        hitbox.pods.push(PodPlacement { offset });
     }
     Ok(())
 }
@@ -507,9 +537,17 @@ pub fn resolved_offset(visual: &BugVisual, shape: &ShapeDef) -> Result<[f32; 3],
     visual_anchor(visual, name).ok_or_else(|| format!("anchor \"{name}\" does not resolve to a visual part"))
 }
 
+fn tail_end_part(visual: &BugVisual) -> Option<&VisualPart> {
+    visual.parts.iter().find(|part| part.at.as_deref() == Some("tail_end"))
+}
+
 /// Volume of the glowing part named in the visual table.
 pub fn glow_bounds(visual: &BugVisual, name: &str) -> Option<PartBounds> {
-    let part = part_named(visual, name)?;
+    let part = if name == PROCEDURAL_TAIL_ANCHOR {
+        tail_end_part(visual)?
+    } else {
+        part_named(visual, name)?
+    };
     let center = visual_anchor(visual, name)?;
     let half = if part.size.is_empty() {
         let host_name = part.on.as_deref().unwrap_or("");

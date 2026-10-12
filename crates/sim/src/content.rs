@@ -1368,6 +1368,10 @@ pub struct CastLook {
     /// Emissive multiplier is `pod_glow_base + glow * pod_glow_per_glow`.
     pub pod_glow_base: f32,
     pub pod_glow_per_glow: f32,
+    /// Exponent on the glow's radial edge. Higher keeps a solid core.
+    pub glow_falloff: f32,
+    /// How much of the painted sac shows through at the glow's edge. The core stays solid.
+    pub glow_show_through: f32,
     pub review_yaw_deg: f32,
     pub review_elev_deg: f32,
     pub review_distance: f32,
@@ -1947,6 +1951,8 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
             "pod_glow_key",
             "pod_glow_base",
             "pod_glow_per_glow",
+            "glow_falloff",
+            "glow_show_through",
             "review_yaw_deg",
             "review_elev_deg",
             "review_distance",
@@ -1994,6 +2000,14 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
     if !pod_glow_base.is_finite() || pod_glow_base < 0.0 || !pod_glow_per_glow.is_finite() || pod_glow_per_glow < 0.0 {
         return Err("cast.toml pod glow multipliers must be finite and >= 0".into());
     }
+    let glow_falloff = vis_f32(table, "glow_falloff", "cast.toml")?;
+    let glow_show_through = vis_f32(table, "glow_show_through", "cast.toml")?;
+    if !(glow_falloff > 1.0 && glow_falloff <= 8.0) {
+        return Err("cast.toml glow_falloff must be > 1 and <= 8".into());
+    }
+    if !(glow_show_through >= 0.0 && glow_show_through < 1.0) {
+        return Err("cast.toml glow_show_through must be >= 0 and < 1".into());
+    }
     let review_yaw_deg = vis_f32(table, "review_yaw_deg", "cast.toml")?;
     let review_elev_deg = vis_f32(table, "review_elev_deg", "cast.toml")?;
     let review_distance = vis_f32(table, "review_distance", "cast.toml")?;
@@ -2012,6 +2026,8 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
         pod_glow_key,
         pod_glow_base,
         pod_glow_per_glow,
+        glow_falloff,
+        glow_show_through,
         review_yaw_deg,
         review_elev_deg,
         review_distance,

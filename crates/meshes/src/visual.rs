@@ -822,8 +822,14 @@ fn add_cannon(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalo
     geom::rotate_x(&mut nozzle, std::f32::consts::FRAC_PI_2);
     geom::translate(&mut nozzle, [0.0, barrel - along, 0.0]);
     geom::append(&mut mesh, &nozzle);
-    // The hit center uses the authored size, not the glow radius. Keep the gem on that center.
-    let place_r = spec.size.first().copied().filter(|n| *n > 0.0).unwrap_or(rad * 2.0) * 0.5;
+    // The hit center uses the authored size. A missing size must not fall back to the glow radius.
+    let place_r = spec
+        .size
+        .first()
+        .copied()
+        .filter(|n| *n > 0.0)
+        .expect("cannon size is missing a positive radius; refusing to fall back to the glow radius")
+        * 0.5;
     let pos = [0.0, -(len * tail.segment_scale + place_r + tip_gap), 0.0];
     parts.push(Part {
         name: "cannon".into(),
@@ -902,11 +908,17 @@ fn add_sac_orbs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cata
         let nx = a.cos() * ring;
         let nz = a.sin() * ring;
         let ny = (1.0 - nx * nx - nz * nz).max(ny_floor).sqrt();
-        let pos = [
+        let ring = [
             center[0] + nx * radii[0] * sink,
             center[1] + ny * radii[1] * sink,
             center[2] + nz * radii[2] * sink,
         ];
+        let pos = spec
+            .seats
+            .iter()
+            .find(|seat| seat.index == i)
+            .map(|seat| seat.offset)
+            .unwrap_or(ring);
         let name = if nestled { format!("bud{i}") } else { format!("pod{i}") };
         let pod_slot = if nestled { None } else { Some(i) };
         parts.push(Part {
@@ -1829,6 +1841,15 @@ struct VPart {
     spread: Option<Vec<f32>>,
     #[serde(default)]
     crown_pitch: Option<f32>,
+    /// Pod indices that sit on the cast. The ring still places the rest.
+    #[serde(default)]
+    seats: Vec<VSeat>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+struct VSeat {
+    index: u32,
+    offset: [f32; 3],
 }
 
 impl VPart {
