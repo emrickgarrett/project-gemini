@@ -44,7 +44,7 @@ pub fn paint_reveal(content: &Content, plan: &RevealPlan, t: f32, width: u32, he
     let view = look(content, plan, t);
     let mut rgb = vec![0u8; (width * height * 3) as usize];
     let layout = &content.crate_reveal.layout;
-    paint_stage(&mut rgb, width, height, layout);
+    paint_stage(&mut rgb, width, height, content, layout);
     let color = bytes(view.rgb);
     let ink = if luminance(view.rgb) > layout.ink_luma {
         palette_bytes(content, &layout.ink_dark)
@@ -79,15 +79,20 @@ pub fn paint_reveal(content: &Content, plan: &RevealPlan, t: f32, width: u32, he
         }
     }
     let hint = if view.card { "ENTER" } else { "SKIP" };
-    paint_hint(&mut rgb, width, height, hint, light, &content.crate_reveal.hint);
+    paint_hint(&mut rgb, width, height, hint, light, &content.crate_reveal.hint, layout);
     rgb
 }
 
-fn paint_stage(rgb: &mut [u8], width: u32, height: u32, layout: &gemini_sim::content::RevealLayout) {
+fn paint_stage(rgb: &mut [u8], width: u32, height: u32, content: &Content, layout: &gemini_sim::content::RevealLayout) {
     let cx = (width as f32 - 1.0) * 0.5;
     let cy = (height as f32 - 1.0) * 0.42;
     let max_d = (cx * cx + (height as f32) * (height as f32)).sqrt().max(1.0);
-    let base = layout.stage_base;
+    let stage = palette_bytes(content, &layout.stage);
+    let base = [
+        stage[0] as f32 + layout.stage_base[0],
+        stage[1] as f32 + layout.stage_base[1],
+        stage[2] as f32 + layout.stage_base[2],
+    ];
     let lift_c = layout.stage_lift;
     let vig = layout.stage_vignette;
     for y in 0..height {
@@ -114,7 +119,7 @@ fn paint_card(
     ink: [u8; 3],
     light: [u8; 3],
     shown: &str,
-    _card: &gemini_sim::content::CardTitle,
+    card: &gemini_sim::content::CardTitle,
     layout: &gemini_sim::content::RevealLayout,
 ) {
     let (x, y, panel_w, panel_h) = card_panel(width, height, layout);
@@ -127,11 +132,11 @@ fn paint_card(
     let face_h = panel_h.saturating_sub(border * 2);
     fill(rgb, width, height, face_x, face_y, face_w, face_h, color);
 
-    let scale = shared_title_scale(layout);
+    let scale = shared_title_scale(layout, card);
     let label = shown.to_uppercase();
     let glyph = layout.title_glyph_px.max(1);
     let text_w = label.chars().count() as u32 * glyph * scale;
-    let text_h = GLYPH_ROWS * scale;
+    let text_h = layout.glyph_rows.max(1) * scale;
     let gem_h = (layout.panel_height * layout.gem_height).round().max(1.0) as u32;
     let div_h = layout.divider_px.max(1);
     let stack = gem_h.saturating_add(div_h).saturating_add(text_h);
@@ -163,7 +168,7 @@ fn paint_card(
         div_h,
         blend(ink, color, 0.45),
     );
-    let text_x = face_x + face_w.saturating_sub(text_w) / 2;
+    let text_x = title_origin(face_x, face_w, text_w, card.title_pad.round().max(0.0) as u32);
     let text_y = text_top.round() as u32;
     blit_at(rgb, width, height, text_x + scale / 2, text_y + scale / 2, &label, blend(ink, [0, 0, 0], 0.65), scale);
     blit_at(rgb, width, height, text_x, text_y, &label, ink, scale);
@@ -375,29 +380,63 @@ fn card_panel(width: u32, height: u32, layout: &gemini_sim::content::RevealLayou
     (x, y, panel_w, panel_h)
 }
 
-const GLYPH_ROWS: u32 = 7;
+/// Centers a title in the face. `pad` is `card.title_pad`. A centered title
+/// sits in the same place inside a symmetric inset, and a word wider than
+/// that inset stays centered on the full face.
+fn title_origin(face_x: u32, face_w: u32, text_w: u32, pad: u32) -> u32 {
+    let inner = face_w.saturating_sub(pad.saturating_mul(2));
+    if text_w <= inner {
+        face_x + pad + inner.saturating_sub(text_w) / 2
+    } else {
+        face_x + face_w.saturating_sub(text_w) / 2
+    }
+}
 
-fn shared_title_scale(layout: &gemini_sim::content::RevealLayout) -> u32 {
+fn shared_title_scale(layout: &gemini_sim::content::RevealLayout, card: &gemini_sim::content::CardTitle) -> u32 {
     let panel_w = layout.panel_width.round().max(0.0) as u32;
     let panel_h = layout.panel_height.round().max(0.0) as u32;
     let face_w = panel_w.saturating_sub(layout.border_px.saturating_mul(2));
     let face_h = panel_h.saturating_sub(layout.border_px.saturating_mul(2));
-    title_scale(face_w, face_h, "LEGENDARY".chars().count() as u32, layout)
+    title_scale(face_w, face_h, "LEGENDARY".chars().count() as u32, layout, card)
 }
 
-fn title_scale(face_w: u32, face_h: u32, cols: u32, layout: &gemini_sim::content::RevealLayout) -> u32 {
+fn title_scale(
+    face_w: u32,
+    face_h: u32,
+    cols: u32,
+    layout: &gemini_sim::content::RevealLayout,
+    card: &gemini_sim::content::CardTitle,
+) -> u32 {
     let cols = cols.max(1);
     let glyph = layout.title_glyph_px.max(1);
     let rows = layout.title_height_div.max(1);
-    let fit_w = face_w.saturating_sub(layout.title_pad_px.saturating_mul(2)) / (cols * glyph);
+    let pad = still_title_pad(layout, card);
+    let fit_w = face_w.saturating_sub(pad.saturating_mul(2)) / (cols * glyph);
     let fit_h = face_h / rows;
     fit_w.min(fit_h).clamp(layout.title_scale_min, layout.title_scale_max)
 }
 
-fn paint_hint(rgb: &mut [u8], width: u32, height: u32, text: &str, ink: [u8; 3], hint: &gemini_sim::content::RevealHint) {
-    let scale = (hint.text_px / 7.0).round().max(1.0) as u32;
-    let cols = text.chars().count() as u32 * 6 * scale;
-    let rows = 7 * scale;
+/// The still fit uses the layout pad. A tighter card inset (a smaller
+/// `title_pad`) replaces it. The shipped inset is looser, so the scale stays.
+fn still_title_pad(layout: &gemini_sim::content::RevealLayout, card: &gemini_sim::content::CardTitle) -> u32 {
+    let inset = card.title_pad.round().max(0.0) as u32;
+    layout.title_pad_px.min(inset)
+}
+
+fn paint_hint(
+    rgb: &mut [u8],
+    width: u32,
+    height: u32,
+    text: &str,
+    ink: [u8; 3],
+    hint: &gemini_sim::content::RevealHint,
+    layout: &gemini_sim::content::RevealLayout,
+) {
+    let rows_n = layout.glyph_rows.max(1);
+    let glyph = layout.title_glyph_px.max(1);
+    let scale = (hint.text_px / rows_n as f32).round().max(1.0) as u32;
+    let cols = text.chars().count() as u32 * glyph * scale;
+    let rows = rows_n * scale;
     let margin_x = hint.margin_x.round().max(0.0) as u32;
     let margin_y = hint.margin_y.round().max(0.0) as u32;
     let origin_x = width.saturating_sub(margin_x + cols);
@@ -577,22 +616,72 @@ mod tests {
     fn every_rarity_word_fits_at_the_shared_title_size() {
         let content = Content::embedded();
         let layout = &content.crate_reveal.layout;
-        let scale = shared_title_scale(layout);
+        let card = &content.crate_reveal.card;
+        let scale = shared_title_scale(layout, card);
         let panel_w = layout.panel_width.round() as u32;
         let panel_h = layout.panel_height.round() as u32;
-        let inner_w = panel_w - layout.border_px * 2 - layout.title_pad_px * 2;
-        let inner_h = panel_h - layout.border_px * 2 - layout.title_pad_px * 2;
+        let pad = still_title_pad(layout, card);
+        let inner_w = panel_w - layout.border_px * 2 - pad * 2;
+        let inner_h = panel_h - layout.border_px * 2 - pad * 2;
         let face_w = panel_w - layout.border_px * 2;
         let face_h = panel_h - layout.border_px * 2;
         for word in ["COMMON", "RARE", "EPIC", "LEGENDARY"] {
             let box_w = word.chars().count() as u32 * layout.title_glyph_px * scale;
-            let box_h = GLYPH_ROWS * scale;
+            let box_h = layout.glyph_rows * scale;
             assert!(box_w <= inner_w, "{word} is {box_w}px wide, padding leaves {inner_w}");
             assert!(box_h <= inner_h, "{word} is {box_h}px tall, padding leaves {inner_h}");
+            let origin = title_origin(0, face_w, box_w, card.title_pad.round() as u32);
+            assert_eq!(origin, face_w.saturating_sub(box_w) / 2, "{word} stays centered");
         }
-        assert_eq!(scale, title_scale(face_w, face_h, "LEGENDARY".chars().count() as u32, layout));
-        let common = title_scale(face_w, face_h, "COMMON".chars().count() as u32, layout);
+        assert_eq!(scale, title_scale(face_w, face_h, "LEGENDARY".chars().count() as u32, layout, card));
+        let common = title_scale(face_w, face_h, "COMMON".chars().count() as u32, layout, card);
         assert!(common > scale, "a shorter word would be larger if each card sized itself");
+    }
+
+    #[test]
+    fn card_title_pad_is_the_still_inset() {
+        let content = Content::embedded();
+        let layout = &content.crate_reveal.layout;
+        let card = &content.crate_reveal.card;
+        assert_eq!(still_title_pad(layout, card), layout.title_pad_px);
+        let mut tight = card.clone();
+        tight.title_pad = 0.0;
+        assert_eq!(still_title_pad(layout, &tight), 0);
+        let face_w = layout.panel_width.round() as u32 - layout.border_px * 2;
+        let legend = "LEGENDARY".chars().count() as u32 * layout.title_glyph_px * shared_title_scale(layout, card);
+        assert_eq!(
+            title_origin(8, face_w, legend, card.title_pad.round() as u32),
+            8 + face_w.saturating_sub(legend) / 2
+        );
+    }
+
+    #[test]
+    fn reveal_backdrop_follows_the_stage_palette_key() {
+        let content = Content::embedded();
+        let layout = &content.crate_reveal.layout;
+        let mut rgb = vec![0u8; 64 * 64 * 3];
+        paint_stage(&mut rgb, 64, 64, &content, layout);
+        let stage = palette_bytes(&content, &layout.stage);
+        let base = [
+            stage[0] as f32 + layout.stage_base[0],
+            stage[1] as f32 + layout.stage_base[1],
+            stage[2] as f32 + layout.stage_base[2],
+        ];
+        assert_eq!(base, [16.0, 12.0, 22.0]);
+        let cx = (64.0f32 - 1.0) * 0.5;
+        let cy = (64.0f32 - 1.0) * 0.42;
+        let max_d = (cx * cx + 64.0 * 64.0).sqrt().max(1.0);
+        let dx = 0.0 - cx;
+        let dy = 0.0 - cy;
+        let d = (dx * dx + dy * dy).sqrt() / max_d;
+        let lift = (1.0 - d).clamp(0.0, 1.0).powf(1.35);
+        let vignette = d.clamp(0.0, 1.0).powf(1.6);
+        let expect = [
+            (base[0] + lift * layout.stage_lift[0] - vignette * layout.stage_vignette[0]).clamp(0.0, 255.0) as u8,
+            (base[1] + lift * layout.stage_lift[1] - vignette * layout.stage_vignette[1]).clamp(0.0, 255.0) as u8,
+            (base[2] + lift * layout.stage_lift[2] - vignette * layout.stage_vignette[2]).clamp(0.0, 255.0) as u8,
+        ];
+        assert_eq!(&rgb[0..3], &expect);
     }
 
     #[test]

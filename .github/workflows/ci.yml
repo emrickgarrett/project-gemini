@@ -8,7 +8,8 @@ on:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Pull requests cancel older runs of the same ref. Pushes to main do not.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   test:
@@ -102,5 +103,5 @@ jobs:
       - name: wasm webgl2
         run: cargo build -p gemini-client --target wasm32-unknown-unknown --profile wasm-release
       - name: wasm webgpu
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
         run: cargo build -p gemini-client --target wasm32-unknown-unknown --profile wasm-release --features webgpu
