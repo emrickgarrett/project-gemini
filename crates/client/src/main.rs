@@ -78,6 +78,7 @@ fn install_match(app: &mut App) {
                     world::camera,
                     world::grade,
                     hud::draw,
+                    hud::resume_prompt,
                 )
                     .chain(),
                 (flow::rebuild, flow::end_of_match, flow::click_prompt, act_now::dispatch, audio::flush_ui_cues).chain(),

@@ -83,6 +83,30 @@ fn ledge_catch_fails_when_missing_or_not_positive() {
 }
 
 #[test]
+fn revive_times_reject_zero() {
+    let base = gemini_sim::content::embedded_sources();
+    let load = |controller: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            controller,
+            ..sources_with(&base, base.coop)
+        })
+    };
+    for (from, key) in [("revive_time = 3.0", "revive_time"), ("solo_self_revive_time = 5.0", "solo_self_revive_time")] {
+        let text = base.controller.replace(from, &format!("{key} = 0.0"));
+        let err = load(&text).expect_err(key);
+        assert!(err.contains(key), "{key}: {err}");
+        let missing = base
+            .controller
+            .lines()
+            .filter(|line| !line.trim_start().starts_with(&format!("{key} ")))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let err = load(&missing).expect_err(key);
+        assert!(err.contains(key), "missing {key}: {err}");
+    }
+}
+
+#[test]
 fn jump_reads_controller() {
     let mut content = Content::embedded();
     content.controller.jump.jump_velocity = 30.0;
@@ -2037,6 +2061,9 @@ fn ui_spacing_and_font_coverage_fail_closed() {
     assert!((content.ui.layout.inset_portrait - 4.0).abs() < 1e-4);
     assert!((content.ui.layout.inset_min - 1.0).abs() < 1e-4);
     assert!((content.ui.layout.panel_alpha - 0.85).abs() < 1e-4);
+    assert!((content.ui.layout.stepper_min_px - 8.0).abs() < 1e-4);
+    assert_eq!(content.ui.layout.stepper_width_divisor, 5);
+    assert_eq!(content.ui.layout.stepper_border_divisor, 8);
     assert_eq!(content.ui.colors.panel, "ui_panel_slate");
     assert_eq!(content.ui.portrait.bg, "portrait_field");
     assert_eq!(content.ui.portrait.raster, 320);
@@ -2083,6 +2110,21 @@ fn ui_spacing_and_font_coverage_fail_closed() {
     let missing_alpha = base.ui.replacen("panel_alpha = 0.85\n", "", 1);
     let err = load_ui(&missing_alpha).expect_err("missing panel alpha");
     assert!(err.contains("panel_alpha"), "{err}");
+    let tiny = base.ui.replacen("stepper_min_px = 8.0", "stepper_min_px = 0.0", 1);
+    let err = load_ui(&tiny).expect_err("zero stepper");
+    assert!(err.contains("stepper_min_px"), "{err}");
+    let wide = base.ui.replacen("stepper_width_divisor = 5", "stepper_width_divisor = 0", 1);
+    let err = load_ui(&wide).expect_err("zero stepper cap");
+    assert!(err.contains("stepper_width_divisor"), "{err}");
+    let border = base.ui.replacen("stepper_border_divisor = 8", "stepper_border_divisor = 1", 1);
+    let err = load_ui(&border).expect_err("thin stepper border");
+    assert!(err.contains("stepper_border_divisor"), "{err}");
+    for key in ["stepper_min_px = 8.0\n", "stepper_width_divisor = 5\n", "stepper_border_divisor = 8\n"] {
+        let missing = base.ui.replacen(key, "", 1);
+        let err = load_ui(&missing).expect_err(key);
+        let name = key.split_whitespace().next().unwrap();
+        assert!(err.contains(name), "{key}: {err}");
+    }
     let negative = base.ui.replacen("leading = 2.0", "leading = -1.0", 1);
     let err = load_ui(&negative).expect_err("negative leading");
     assert!(err.contains("leading"), "{err}");

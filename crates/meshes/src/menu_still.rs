@@ -486,12 +486,14 @@ fn slider_row(
         paint_bar(rgb, frame, content, hero, bx, by, bar_w, bar_h, fill);
         return vec![Hit { id: String::new(), x, y, w, h }];
     }
+    let min_side = ui.layout.stepper_min_px.round() as i32;
     let mut side = h - inset * 2;
-    if side < 8 {
-        side = 8;
+    if side < min_side {
+        side = min_side;
     }
-    if side > w / 5 {
-        side = w / 5;
+    let cap = w / ui.layout.stepper_width_divisor as i32;
+    if side > cap {
+        side = cap;
     }
     let top = y + (h - side) / 2;
     let minus_x = x + inset;
@@ -535,7 +537,7 @@ fn paint_stepper(
     scale: u32,
 ) {
     rect(rgb, frame.width, frame.height, x, y, side, side, border);
-    let inner = (side / 8).max(1);
+    let inner = (side / content.ui.layout.stepper_border_divisor as i32).max(1);
     rect(rgb, frame.width, frame.height, x + inner, y + inner, side - inner * 2, side - inner * 2, fill);
     let rows = content.crate_reveal.layout.glyph_rows;
     let tw = measure(label, scale, glyph) as i32;

@@ -87,6 +87,12 @@ pause_panel_height = 340.0
 slider_width = 360.0
 slider_height = 18.0
 settings_row_height = 52.0
+# Minus and plus buttons. stepper_min_px is a screen-pixel floor after scaling.
+# The button side is at most the row width divided by stepper_width_divisor.
+# The border thickness is that side divided by stepper_border_divisor.
+stepper_min_px = 8.0
+stepper_width_divisor = 5
+stepper_border_divisor = 8
 stat_decimals = 1
 mult_decimals = 1
 currency_decimals = 0

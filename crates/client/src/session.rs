@@ -114,6 +114,8 @@ pub struct PauseMenu {
     pub settings: bool,
     /// The pointer was grabbed this frame. That click is not a shot.
     pub swallow_fire: bool,
+    /// Wasm rejected the post-upgrade lock. The next click should grab again.
+    pub resume_click: bool,
 }
 
 /// Leftover time since the last sim step. A frame faster than `SIM_DT` must keep
@@ -233,16 +235,17 @@ pub fn gather_and_step(
     // The grab click itself is not a shot; fire starts on the next frame.
     let picking = matches!(game.sim.phase, Phase::Upgrade { .. });
     let was_locked = cursor.iter().any(|options| options.grab_mode == CursorGrabMode::Locked);
-    let grab_click = !picking
-        && !hold.open
-        && !cfg!(target_arch = "wasm32")
-        && mouse_buttons.just_pressed(MouseButton::Left)
-        && !was_locked;
+    // Native always re-grabs on a click. Wasm only does that after a rejected upgrade lock.
+    let want_grab = !cfg!(target_arch = "wasm32") || hold.resume_click;
+    let grab_click = !picking && !hold.open && want_grab && mouse_buttons.just_pressed(MouseButton::Left) && !was_locked;
     if picking || hold.open {
         set_cursor(&mut cursor, true);
+        hold.resume_click = false;
     } else if grab_click {
         set_cursor(&mut cursor, false);
         hold.swallow_fire = true;
+    } else if cfg!(target_arch = "wasm32") && hold.resume_click && was_locked {
+        hold.resume_click = false;
     }
     #[cfg(not(target_arch = "wasm32"))]
     if keys.just_pressed(KeyCode::F10) {
@@ -515,6 +518,10 @@ pub fn gather_and_step(
     let still_picking = matches!(game.sim.phase, Phase::Upgrade { .. });
     if picking && !still_picking && !hold.open {
         set_cursor(&mut cursor, false);
+        // The browser may reject the lock outside a gesture. The prompt stays until a click sticks.
+        if cfg!(target_arch = "wasm32") {
+            hold.resume_click = true;
+        }
     }
     fx.tick = game.sim.tick;
     if using_pad {
@@ -559,7 +566,7 @@ fn axis(pos: bool, neg: bool) -> f32 {
 
 fn set_cursor(cursor: &mut Query<&mut CursorOptions>, show: bool) {
     let Ok(mut cursor) = cursor.single_mut() else { return };
-    if show || cfg!(target_arch = "wasm32") {
+    if show {
         cursor.grab_mode = CursorGrabMode::None;
         cursor.visible = true;
     } else {

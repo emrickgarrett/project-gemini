@@ -160,6 +160,7 @@ fn enter_menu(
 fn enter_match(mut ready: ResMut<PointerReady>, mut pause: ResMut<PauseMenu>, mut dirty: ResMut<Dirty>, mut cursor: Query<&mut CursorOptions>) {
     pause.open = false;
     pause.settings = false;
+    pause.resume_click = false;
     dirty.0 = true;
     if cfg!(target_arch = "wasm32") {
         ready.0 = false;
@@ -704,7 +705,12 @@ pub(crate) fn rebuild(mut commands: Commands, mut dirty: ResMut<Dirty>, mut view
     };
     let (rgb, painted) = paint_menu(&content, &shot, width, height);
     view.hits.0 = painted;
-    let target = view.menu_cam.iter().next().or_else(|| view.ui_cam.iter().next());
+    let target = view
+        .menu_cam
+        .iter()
+        .next()
+        .or_else(|| view.ui_cam.iter().next())
+        .expect("menu UI has no camera");
     if let Some(images) = view.images.as_mut() {
         let handle = images.add(image_from_rgb(&rgb, width, height));
         let mut spawned = commands.spawn((
@@ -718,9 +724,7 @@ pub(crate) fn rebuild(mut commands: Commands, mut dirty: ResMut<Dirty>, mut view
             Visibility::Visible,
             MenuRoot,
         ));
-        if let Some(cam) = target {
-            spawned.insert(UiTargetCamera(cam));
-        }
+        spawned.insert(UiTargetCamera(target));
     }
     for hit in &view.hits.0 {
         let mut spawned = commands.spawn((
@@ -739,9 +743,7 @@ pub(crate) fn rebuild(mut commands: Commands, mut dirty: ResMut<Dirty>, mut view
             Visibility::Visible,
             MenuRoot,
         ));
-        if let Some(cam) = target {
-            spawned.insert(UiTargetCamera(cam));
-        }
+        spawned.insert(UiTargetCamera(target));
         spawned.observe(on_press);
     }
 }

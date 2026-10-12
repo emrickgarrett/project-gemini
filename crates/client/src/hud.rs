@@ -3,11 +3,12 @@
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, Button};
+use bevy::window::{CursorGrabMode, CursorOptions};
 use gemini_sim::content::{EnemyKind, StackRule};
 use gemini_sim::math::Vec3 as SimVec;
 use gemini_sim::sim::Phase;
 
-use crate::session::{Away, FrameFx, Game};
+use crate::session::{Away, FrameFx, Game, PauseMenu};
 use crate::world::PlayPiece;
 
 #[derive(Component)]
@@ -437,6 +438,42 @@ pub fn draw(
     }
 }
 
+/// Shown when a wasm pointer lock after an upgrade pick did not stick.
+#[derive(Component)]
+pub(crate) struct ResumePrompt;
+
+pub fn resume_prompt(
+    mut commands: Commands,
+    hold: Res<PauseMenu>,
+    cursor: Query<&CursorOptions>,
+    existing: Query<Entity, With<ResumePrompt>>,
+) {
+    let locked = cursor.iter().any(|options| options.grab_mode == CursorGrabMode::Locked);
+    let show = hold.resume_click && !locked;
+    if show {
+        if existing.is_empty() {
+            commands.spawn((
+                Text::new("CLICK TO RESUME"),
+                TextFont::from_font_size(28.0),
+                TextColor(Color::WHITE),
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Percent(50.0),
+                    top: Val::Percent(58.0),
+                    margin: UiRect::new(Val::Px(-120.0), Val::Auto, Val::Auto, Val::Auto),
+                    ..default()
+                },
+                ResumePrompt,
+                PlayPiece,
+            ));
+        }
+    } else {
+        for entity in &existing {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
 fn on_upgrade_card(activate: On<Activate>, cards: Query<&UpgradeCard>, mut game: ResMut<Game>) {
     let Ok(card) = cards.get(activate.entity) else { return };
     game.pending_pick = Some(card.0);
@@ -448,12 +485,12 @@ pub(crate) fn revive_line(game: &Game, player: &gemini_sim::sim::Player) -> Opti
     let solo = game.sim.connected_count() <= 1;
     if player.downed {
         if solo && player.self_revives_used < rules.solo_self_revives_per_wave {
-            let need = rules.solo_self_revive_time.max(0.1);
+            let need = rules.solo_self_revive_time;
             let pct = (player.self_revive_held / need * 100.0).clamp(0.0, 100.0);
             return Some(format!("HOLD E TO REVIVE  {pct:.0}%"));
         }
         if !solo && player.revive_progress > 0.0 {
-            let need = rules.revive_time.max(0.1);
+            let need = rules.revive_time;
             let pct = (player.revive_progress / need * 100.0).clamp(0.0, 100.0);
             return Some(format!("REVIVING  {pct:.0}%"));
         }
