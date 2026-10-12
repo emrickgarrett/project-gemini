@@ -26,5 +26,17 @@ credit = "per_round_present"         # you earn a round's currency only for roun
 leave_keeps_earned = true            # already-credited rounds are kept
 host_leave = "match_ends_rounds_kept"
 
+[host_away]
+# A hidden host tab freezes enemies, the wave timer, bleedout, and cooldowns
+# after detect_after_seconds. Multiplayer ends at end_after_seconds of silence
+# and keeps rounds the host already reported. Solo stays paused. Coming back
+# plays a resume countdown, then the match continues from this frame only.
+detect_after_seconds = 3.0
+end_after_seconds = 60.0
+resume_countdown_seconds = 3.0
+# Silence left on the clock clears only after this much continuous live play.
+away_timer_reset_after_play_seconds = 10.0
+freeze = "everything"
+
 [friendly_fire]
 enabled = false

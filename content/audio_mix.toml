@@ -734,6 +734,22 @@ loop = false
 category = "enemy"
 measured_rms_db = -12.5
 
+[host_away]
+volume_db = -8.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+
+[host_back]
+# 3 ticks at 0/1/2 s line up with the 3-2-1 countdown; the "go" tone lands at 3.0 s when play resumes.
+volume_db = -8.0
+pitch_rand_semitones = 0.0
+max_instances = 1
+loop = false
+category = "ui"
+sync_at = 3.0
+
 # Arena 01. Telegraphs stay fixed-pitch so the 1.5 s warn lines up with the vent and climb windows.
 [vent_warn]
 volume_db = -3.2

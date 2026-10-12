@@ -2,24 +2,137 @@
 //! Sfx playback volume is the `volume` column. Charge stops drop that owner's voice
 //! in the same frame the sim emits the stop.
 
-use bevy::audio::{AudioSinkPlayback, Volume};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use bevy::audio::{
+    AddAudioSource, AudioSinkPlayback, AudioSource, Decodable, GlobalVolume, Sample, SeekError, Source, Volume,
+};
 use bevy::prelude::*;
 
 use gemini_sim::audio_mix::{select_voices, SoundEvent};
 use gemini_sim::content::Content;
 use gemini_sim::math::Vec3 as SimVec;
 use gemini_sim::music::{
-    bpm_sanity, combat_intensity, plan_switch, switch_clock, FileClock, MusicDirectorCfg, PlannedSwitch,
-    StemMixer, SwitchClock, TrackDef, TransitionKind,
+    away_mix, bpm_sanity, combat_intensity, plan_switch, switch_clock, FileClock, Lowpass, MusicDirectorCfg,
+    PlannedSwitch, StemMixer, SwitchClock, TrackDef, TransitionKind, MUSIC_OPEN_HZ,
 };
 use gemini_sim::ogg::vorbis_seconds;
 use gemini_sim::sim::MusicMoment;
 
-use crate::session::{FrameFx, Game};
+use crate::session::{Away, FrameFx, Game};
 
 #[derive(Component)]
 pub(crate) struct MusicStem {
     index: usize,
+}
+
+#[derive(Component)]
+pub(crate) struct StemFile(Handle<AudioSource>);
+
+/// Shared cutoff. The playing decoder reads it every sample, so the low-pass
+/// moves without respawning the stem or seeking back to zero.
+struct FilterParams {
+    cutoff_bits: AtomicU32,
+}
+
+impl FilterParams {
+    fn open() -> Self {
+        Self {
+            cutoff_bits: AtomicU32::new(MUSIC_OPEN_HZ.to_bits()),
+        }
+    }
+
+    fn set_hz(&self, hz: f32) {
+        self.cutoff_bits.store(hz.to_bits(), Ordering::Relaxed);
+    }
+
+    fn hz(&self) -> f32 {
+        f32::from_bits(self.cutoff_bits.load(Ordering::Relaxed))
+    }
+}
+
+#[derive(Clone)]
+struct MusicFilter(Arc<FilterParams>);
+
+impl Default for MusicFilter {
+    fn default() -> Self {
+        Self(Arc::new(FilterParams::open()))
+    }
+}
+
+impl Default for FilterParams {
+    fn default() -> Self {
+        Self::open()
+    }
+}
+
+#[derive(Asset, TypePath, Clone)]
+pub(crate) struct DuckedMusic {
+    bytes: Arc<[u8]>,
+    filter: Arc<FilterParams>,
+}
+
+pub(crate) struct LiveLowpass<I> {
+    inner: I,
+    filter: Arc<FilterParams>,
+    bands: [Lowpass; 8],
+    channel: u16,
+}
+
+impl<I: Source> Iterator for LiveLowpass<I> {
+    type Item = Sample;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let sample = self.inner.next()?;
+        let channels = self.inner.channels().get() as usize;
+        let idx = (self.channel as usize) % self.bands.len().min(channels).max(1);
+        self.channel = self.channel.wrapping_add(1) % channels as u16;
+        let rate = self.inner.sample_rate().get() as f32;
+        Some(self.bands[idx].process(sample, self.filter.hz(), rate))
+    }
+}
+
+impl<I: Source> Source for LiveLowpass<I> {
+    fn current_span_len(&self) -> Option<usize> {
+        self.inner.current_span_len()
+    }
+
+    fn channels(&self) -> bevy::audio::ChannelCount {
+        self.inner.channels()
+    }
+
+    fn sample_rate(&self) -> bevy::audio::SampleRate {
+        self.inner.sample_rate()
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.inner.total_duration()
+    }
+
+    fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        self.bands = [Lowpass::new(); 8];
+        self.channel = 0;
+        self.inner.try_seek(pos)
+    }
+}
+
+impl Decodable for DuckedMusic {
+    type Decoder = LiveLowpass<<AudioSource as Decodable>::Decoder>;
+
+    fn decoder(&self) -> Self::Decoder {
+        let inner = AudioSource {
+            bytes: Arc::clone(&self.bytes),
+        }
+        .decoder();
+        LiveLowpass {
+            inner,
+            filter: Arc::clone(&self.filter),
+            bands: [Lowpass::new(); 8],
+            channel: 0,
+        }
+    }
 }
 
 #[derive(Component)]
@@ -31,7 +144,7 @@ pub(crate) struct OneShot {
 #[derive(Component)]
 pub(crate) struct CrowdVoice;
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct Music {
     pub track: String,
     pub mixer: Option<StemMixer>,
@@ -41,6 +154,25 @@ pub struct Music {
     /// One-beat overlap. Outgoing stems ramp down while the new track ramps up.
     pub fade_left: f32,
     pub fade_dur: f32,
+    /// Linear gain on top of the stem mix. 1 while live. Eases back from the away duck.
+    pub duck_gain: f32,
+    filter: MusicFilter,
+}
+
+impl Default for Music {
+    fn default() -> Self {
+        Self {
+            track: String::new(),
+            mixer: None,
+            loops: Vec::new(),
+            entities: Vec::new(),
+            pending: None,
+            fade_left: 0.0,
+            fade_dur: 0.0,
+            duck_gain: 1.0,
+            filter: MusicFilter::default(),
+        }
+    }
 }
 
 #[derive(Resource, Default)]
@@ -63,12 +195,16 @@ pub fn play(
     mut commands: Commands,
     assets: Res<AssetServer>,
     game: Res<Game>,
+    away: Res<Away>,
     fx: Res<FrameFx>,
     mut music: ResMut<Music>,
     mut crowd: ResMut<Crowd>,
     shots: Query<(Entity, &OneShot), Without<MusicStem>>,
     time: Res<Time>,
 ) {
+    let mix = away_mix(away.view.look, game.content.presentation.hud.away.music_duck_db);
+    music.duck_gain = mix.gain;
+    music.filter.0.set_hz(mix.lowpass_hz);
     let listener = listener_of(&game);
     if !fx.moments.is_empty() {
         apply_moments(&mut commands, &assets, &game.content, &mut music, &fx.moments, &game.sim);
@@ -287,8 +423,8 @@ fn start_track(commands: &mut Commands, assets: &AssetServer, content: &Content,
         for path in paths {
             let entity = commands
                 .spawn((
-                    AudioPlayer::new(assets.load::<AudioSource>(path)),
-                    PlaybackSettings::LOOP.with_volume(Volume::Linear(0.85)),
+                    StemFile(assets.load::<AudioSource>(path)),
+                    PlaybackSettings::LOOP.with_volume(Volume::Linear(0.85 * music.duck_gain)),
                     MusicStem { index: 0 },
                 ))
                 .id();
@@ -300,8 +436,8 @@ fn start_track(commands: &mut Commands, assets: &AssetServer, content: &Content,
             let gain = mixer.voices.get(i).map(|v| v.current).unwrap_or(0.0);
             let entity = commands
                 .spawn((
-                    AudioPlayer::new(assets.load::<AudioSource>(path.clone())),
-                    PlaybackSettings::LOOP.with_volume(Volume::Linear(gain)),
+                    StemFile(assets.load::<AudioSource>(path.clone())),
+                    PlaybackSettings::LOOP.with_volume(Volume::Linear(gain * music.duck_gain)),
                     MusicStem { index: i },
                 ))
                 .id();
@@ -379,11 +515,54 @@ fn fade_now(
     music.fade_left = music.fade_dur;
 }
 
+pub(crate) fn register(app: &mut App) -> &mut App {
+    app.add_audio_source::<DuckedMusic>()
+}
+
+pub fn attach_duck(
+    mut commands: Commands,
+    sources: Res<Assets<AudioSource>>,
+    ducked: Option<ResMut<Assets<DuckedMusic>>>,
+    music: Option<Res<Music>>,
+    output: Option<Res<GlobalVolume>>,
+    pending: Query<(Entity, &StemFile), (With<MusicStem>, Without<AudioPlayer<DuckedMusic>>)>,
+) {
+    // Bevy keeps AudioOutput private. GlobalVolume is inserted with that output,
+    // and a headless match does not install the audio plugin. A missing
+    // music_duck_db or host_away row still fails when content loads.
+    if output.is_none() {
+        return;
+    }
+    let Some(mut ducked) = ducked else {
+        panic!("audio output is present but DuckedMusic was not registered");
+    };
+    let Some(music) = music else {
+        panic!("audio output is present but Music was not inserted");
+    };
+    for (entity, file) in &pending {
+        let Some(source) = sources.get(&file.0) else { continue };
+        let handle = ducked.add(DuckedMusic {
+            bytes: Arc::clone(&source.bytes),
+            filter: Arc::clone(&music.filter.0),
+        });
+        // The entity already exists and keeps playing. Inserting the player once
+        // starts the file at its beginning. Later cutoff changes do not respawn it.
+        commands.entity(entity).insert(AudioPlayer(handle));
+    }
+}
+
 pub fn sync_gains(music: Res<Music>, mut stems: Query<(&MusicStem, &mut AudioSink)>) {
-    let Some(mixer) = &music.mixer else { return };
+    let duck = music.duck_gain.clamp(0.0, 1.0);
+    if music.mixer.is_none() {
+        for (_stem, mut sink) in &mut stems {
+            sink.set_volume(Volume::Linear(0.85 * duck));
+        }
+        return;
+    }
+    let mixer = music.mixer.as_ref().expect("mixer");
     for (stem, mut sink) in &mut stems {
         if let Some(voice) = mixer.voices.get(stem.index) {
-            sink.set_volume(Volume::Linear(voice.current.clamp(0.0, 1.0)));
+            sink.set_volume(Volume::Linear((voice.current * duck).clamp(0.0, 1.0)));
         }
     }
 }
@@ -484,4 +663,67 @@ fn owner_of(events: &[SoundEvent], id: &str, pos: SimVec) -> u32 {
 #[allow(dead_code)]
 fn _director(content: &Content) -> &MusicDirectorCfg {
     &content.music.director
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use bevy::audio::{AudioPlayer, AudioSource, GlobalVolume, Volume};
+    use bevy::prelude::*;
+
+    use super::{attach_duck, DuckedMusic, Music, MusicStem, StemFile};
+
+    fn app_with_stem() -> App {
+        let mut app = App::new();
+        app.init_resource::<Assets<AudioSource>>();
+        let handle = app.world_mut().resource_mut::<Assets<AudioSource>>().add(AudioSource {
+            bytes: Arc::<[u8]>::from(b"riff".as_slice()),
+        });
+        app.world_mut().spawn((StemFile(handle), MusicStem { index: 0 }));
+        app.add_systems(Update, attach_duck);
+        app
+    }
+
+    fn ducked_count(app: &mut App) -> usize {
+        let mut players = app.world_mut().query::<&AudioPlayer<DuckedMusic>>();
+        players.iter(app.world()).count()
+    }
+
+    #[test]
+    fn attach_duck_skips_when_the_audio_output_is_absent() {
+        let mut app = app_with_stem();
+        app.insert_resource(Music::default());
+        app.init_resource::<Assets<DuckedMusic>>();
+        app.update();
+        assert_eq!(ducked_count(&mut app), 0);
+    }
+
+    #[test]
+    fn attach_duck_attaches_when_the_audio_output_is_present() {
+        let mut app = app_with_stem();
+        app.insert_resource(GlobalVolume::new(Volume::Linear(1.0)));
+        app.insert_resource(Music::default());
+        app.init_resource::<Assets<DuckedMusic>>();
+        app.update();
+        assert_eq!(ducked_count(&mut app), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "DuckedMusic was not registered")]
+    fn attach_duck_panics_when_output_is_up_without_the_duck_source() {
+        let mut app = app_with_stem();
+        app.insert_resource(GlobalVolume::new(Volume::Linear(1.0)));
+        app.insert_resource(Music::default());
+        app.update();
+    }
+
+    #[test]
+    #[should_panic(expected = "Music was not inserted")]
+    fn attach_duck_panics_when_output_is_up_without_music() {
+        let mut app = app_with_stem();
+        app.insert_resource(GlobalVolume::new(Volume::Linear(1.0)));
+        app.init_resource::<Assets<DuckedMusic>>();
+        app.update();
+    }
 }

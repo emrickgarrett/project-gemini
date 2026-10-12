@@ -58,6 +58,8 @@ pub enum Packet {
     Join(JoinRequest),
     Reconnect(ReconnectRequest),
     Welcome(Welcome),
+    /// Host entered away after the detect wait. Clients show the banner on their next tick.
+    HostAway { version: u32 },
 }
 
 impl Packet {

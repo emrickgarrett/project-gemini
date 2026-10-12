@@ -43,8 +43,9 @@ fn main() {
                 },
                 ..default()
             }),
-    )
-    .insert_resource(ClearColor(Color::srgb(0.07, 0.06, 0.09)));
+    );
+    app.insert_resource(ClearColor(Color::srgb(0.07, 0.06, 0.09)));
+    audio::register(&mut app);
     install_match(&mut app);
     app.run();
 }
@@ -64,17 +65,19 @@ fn install_match(app: &mut App) {
             (
                 session::gather_and_step,
                 audio::play,
+                audio::attach_duck,
                 audio::sync_gains,
                 audio::sync_crowd,
                 world::sync,
                 world::sync_viewmodel,
                 world::camera,
+                world::grade,
                 hud::draw,
             )
                 .chain()
                 .run_if(in_state(AppState::Playing)),
         )
-        .add_systems(Update, (menu_keys, session::autoplay).run_if(in_state(AppState::Menu)))
+        .add_systems(Update, (menu_keys, session::autoplay, audio::attach_duck).run_if(in_state(AppState::Menu)))
         .add_systems(Update, reveal_ui::tick.run_if(in_state(AppState::Reveal)))
         .add_systems(OnExit(AppState::Reveal), reveal_ui::close);
 }
@@ -261,6 +264,7 @@ mod tests {
         app.init_resource::<AccumulatedMouseMotion>();
         app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(1.0 / 60.0)));
         app.insert_resource(MatchEntries::default());
+        app.add_message::<bevy::window::WindowOccluded>();
         install_match(&mut app);
         app.add_systems(OnEnter(AppState::Playing), count_match_enter);
 

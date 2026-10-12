@@ -87,6 +87,7 @@ pub fn prepare(launch: &Launch, content: &Content, sim: Sim) -> (Sim, u64, CoopL
                     stream,
                     buf: FrameBuf::default(),
                     out: Vec::new(),
+                    latest: None,
                 }),
             )
         }
@@ -108,9 +109,46 @@ struct Peer {
     dead: bool,
 }
 
+pub enum HostStep {
+    /// Step the sim and send a snapshot.
+    Simulate,
+    /// Stay frozen. `announce` sends one HostAway packet and no snapshot.
+    Hold { announce: bool },
+    /// Countdown. Broadcast a live snapshot without stepping so clients start 3-2-1.
+    SignalBack,
+}
+
 impl Host {
-    pub fn tick(&mut self, game: &mut Game, input: PlayerInput) {
+    pub fn tick(&mut self, game: &mut Game, input: PlayerInput, step: HostStep) {
         self.accept(game);
+        let inputs = self.collect_inputs(game, input);
+        match step {
+            HostStep::Simulate => {
+                game.sim.host_away = false;
+                game.sim.step_peers(&game.content, &inputs);
+                self.broadcast_snapshot(game);
+            }
+            HostStep::Hold { announce } => {
+                game.sim.host_away = true;
+                if announce {
+                    self.broadcast(&Packet::HostAway {
+                        version: PROTOCOL_VERSION,
+                    });
+                }
+            }
+            HostStep::SignalBack => {
+                game.sim.host_away = false;
+                game.sim.present_countdown = true;
+                {
+                    let crate::session::Game { sim, content, .. } = &mut *game;
+                    sim.step_peers(content, &inputs);
+                }
+                self.broadcast_snapshot(game);
+            }
+        }
+    }
+
+    fn collect_inputs(&mut self, game: &Game, input: PlayerInput) -> Vec<PlayerInput> {
         let mut inputs = vec![PlayerInput::default(); game.sim.players.len().max(1)];
         if !inputs.is_empty() {
             inputs[0] = input;
@@ -126,21 +164,28 @@ impl Host {
                 }
             }
         }
-        game.sim.step_peers(&game.content, &inputs);
+        inputs
+    }
+
+    fn broadcast_snapshot(&mut self, game: &Game) {
         let body = game.sim.to_bytes().unwrap_or_default();
         let tick = game.sim.tick;
+        self.broadcast(&Packet::Snapshot(SnapshotPacket {
+            version: PROTOCOL_VERSION,
+            tick,
+            body,
+        }));
+    }
+
+    fn broadcast(&mut self, packet: &Packet) {
+        let Ok(frame) = encode(packet) else {
+            return;
+        };
         for peer in &mut self.peers {
             if peer.dead || !peer.welcomed {
                 continue;
             }
-            let packet = Packet::Snapshot(SnapshotPacket {
-                version: PROTOCOL_VERSION,
-                tick,
-                body: body.clone(),
-            });
-            if let Ok(frame) = encode(&packet) {
-                peer.enqueue(&frame);
-            }
+            peer.enqueue(&frame);
         }
     }
 
@@ -236,31 +281,21 @@ impl Host {
     }
 }
 
+pub struct Heard {
+    pub away_packet: bool,
+    pub snapshot_away: Option<bool>,
+}
+
 pub struct Client {
     stream: TcpStream,
     buf: FrameBuf,
     out: Vec<u8>,
+    latest: Option<Vec<u8>>,
 }
 
 impl Client {
-    pub fn tick(&mut self, game: &mut Game, input: PlayerInput) {
-        let packet = Packet::Input(InputPacket {
-            version: PROTOCOL_VERSION,
-            tick: game.sim.tick,
-            input,
-        });
-        if let Ok(frame) = encode(&packet) {
-            self.enqueue(&frame);
-        }
-        self.pull(game);
-    }
-
-    fn enqueue(&mut self, frame: &[u8]) {
-        self.out.extend_from_slice(frame);
-        flush_out(&mut self.stream, &mut self.out);
-    }
-
-    fn pull(&mut self, game: &mut Game) {
+    /// Read the socket. Does not copy a snapshot onto the sim.
+    pub fn poll(&mut self, content: &Content) -> Heard {
         let mut tmp = [0u8; 8192];
         loop {
             match self.stream.read(&mut tmp) {
@@ -273,13 +308,49 @@ impl Client {
                 }
             }
         }
+        let mut away_packet = false;
+        let mut snapshot_away = None;
         while let Ok(Some(packet)) = self.buf.next() {
-            if let Packet::Snapshot(snap) = packet {
-                if let Ok(sim) = Sim::restore(&game.content, &snap.body) {
-                    game.sim = sim;
+            match packet {
+                Packet::Snapshot(snap) => {
+                    if let Ok(sim) = Sim::restore(content, &snap.body) {
+                        snapshot_away = Some(sim.host_away);
+                        self.latest = Some(snap.body);
+                    }
                 }
+                Packet::HostAway { .. } => away_packet = true,
+                _ => {}
             }
         }
+        Heard {
+            away_packet,
+            snapshot_away,
+        }
+    }
+
+    pub fn send(&mut self, tick: u64, input: PlayerInput) {
+        let packet = Packet::Input(InputPacket {
+            version: PROTOCOL_VERSION,
+            tick,
+            input,
+        });
+        if let Ok(frame) = encode(&packet) {
+            self.enqueue(&frame);
+        }
+    }
+
+    pub fn apply(&mut self, game: &mut Game) {
+        let Some(body) = &self.latest else {
+            return;
+        };
+        if let Ok(sim) = Sim::restore(&game.content, body) {
+            game.sim = sim;
+        }
+    }
+
+    fn enqueue(&mut self, frame: &[u8]) {
+        self.out.extend_from_slice(frame);
+        flush_out(&mut self.stream, &mut self.out);
     }
 }
 

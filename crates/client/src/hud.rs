@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use gemini_sim::content::{EnemyKind, StackRule};
 use gemini_sim::sim::Phase;
 
-use crate::session::{FrameFx, Game};
+use crate::session::{Away, FrameFx, Game};
 use crate::world::PlayPiece;
 
 #[derive(Component)]
@@ -35,6 +35,7 @@ pub(crate) struct Floater {
 pub fn draw(
     mut commands: Commands,
     game: Res<Game>,
+    away: Res<Away>,
     fx: Res<FrameFx>,
     time: Res<Time>,
     // Only the root. Despawning it already despawns `HudNode` children.
@@ -389,6 +390,8 @@ pub fn draw(
         }
     }
 
+    paint_away(&mut commands, root, &game, &away);
+
     let end = match game.sim.phase {
         Phase::Victory => Some("VICTORY\nENTER"),
         Phase::Defeat => Some("DEFEAT\nENTER"),
@@ -509,6 +512,141 @@ fn arc(commands: &mut Commands, root: Entity, cx: f32, bottom: f32, radius: f32,
                 ..default()
             },
             BackgroundColor(color),
+            ChildOf(root),
+            HudNode,
+        ));
+    }
+}
+
+fn paint_away(commands: &mut Commands, root: Entity, game: &Game, away: &Away) {
+    let hud = &game.content.presentation.hud.away;
+    let slate = game.content.palette.key(&hud.slate);
+    let ink = game.content.palette.key(&hud.text);
+    let bar = game.content.palette.key(&hud.bar);
+    let count = game.content.palette.key(&hud.count);
+    if away.view.banner {
+        let copy = if away.view.solo { &hud.solo } else { &hud.coop };
+        let panel = commands
+            .spawn((
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(hud.panel_top),
+                    left: Val::Percent(50.0),
+                    margin: UiRect::new(Val::Px(-hud.panel_width * 0.5), Val::Auto, Val::Auto, Val::Auto),
+                    width: Val::Px(hud.panel_width),
+                    height: Val::Px(hud.panel_height),
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    row_gap: Val::Px(hud.row_gap),
+                    padding: UiRect::horizontal(Val::Px(hud.panel_pad)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(slate[0], slate[1], slate[2], hud.panel_opacity)),
+                ChildOf(root),
+                HudNode,
+            ))
+            .id();
+        commands.spawn((
+            Text::new(copy.text.clone()),
+            TextFont::from_font_size(hud.title_px),
+            TextColor(Color::srgb(ink[0], ink[1], ink[2])),
+            ChildOf(panel),
+            HudNode,
+        ));
+        if copy.show_timer {
+            let track = commands
+                .spawn((
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(hud.bar_height),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(
+                        slate[0] * hud.bar_track,
+                        slate[1] * hud.bar_track,
+                        slate[2] * hud.bar_track,
+                        1.0,
+                    )),
+                    ChildOf(panel),
+                    HudNode,
+                ))
+                .id();
+            let fill = away.view.timer_fill.clamp(0.0, 1.0);
+            commands.spawn((
+                Node {
+                    width: Val::Percent(fill * 100.0),
+                    height: Val::Percent(100.0),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(bar[0], bar[1], bar[2])),
+                ChildOf(track),
+                HudNode,
+            ));
+        }
+    }
+    if let Some(digit) = away.view.digit {
+        let u = away.view.digit_u.clamp(0.0, 1.0);
+        let scale = hud.count_scale_from + (hud.count_scale_to - hud.count_scale_from) * u;
+        let alpha = (1.0 - u).clamp(0.0, 1.0);
+        let outline = game.content.palette.key(&hud.count_outline);
+        let shadow = game.content.palette.key(&hud.count_shadow);
+        let shift = hud.count_outline_px;
+        let label = digit.to_string();
+        let place = |dx: f32, dy: f32| Node {
+            position_type: PositionType::Absolute,
+            left: Val::Percent(50.0),
+            top: Val::Percent(50.0),
+            margin: UiRect::new(
+                Val::Px(-hud.count_px * scale * 0.35 + dx),
+                Val::Auto,
+                Val::Px(-hud.count_px * scale * 0.55 + dy),
+                Val::Auto,
+            ),
+            ..default()
+        };
+        let drop = hud.count_shadow_px;
+        let soft = hud.count_shadow_soft_px;
+        let mut shadow_marks = vec![(drop, drop, 1.0)];
+        if soft > 0.0 {
+            for (ox, oy) in [(1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
+                shadow_marks.push((drop + ox * soft * 0.5, drop + oy * soft * 0.5, 0.45));
+            }
+        }
+        for (dx, dy, weight) in shadow_marks {
+            commands.spawn((
+                Text::new(label.clone()),
+                TextFont::from_font_size(hud.count_px * scale),
+                TextColor(Color::srgba(shadow[0], shadow[1], shadow[2], hud.count_shadow_alpha * weight * alpha)),
+                place(dx, dy),
+                ChildOf(root),
+                HudNode,
+            ));
+        }
+        for (dx, dy) in [
+            (-shift, 0.0),
+            (shift, 0.0),
+            (0.0, -shift),
+            (0.0, shift),
+            (-shift, -shift),
+            (shift, -shift),
+            (-shift, shift),
+            (shift, shift),
+        ] {
+            commands.spawn((
+                Text::new(label.clone()),
+                TextFont::from_font_size(hud.count_px * scale),
+                TextColor(Color::srgba(outline[0], outline[1], outline[2], alpha)),
+                place(dx, dy),
+                ChildOf(root),
+                HudNode,
+            ));
+        }
+        commands.spawn((
+            Text::new(label),
+            TextFont::from_font_size(hud.count_px * scale),
+            TextColor(Color::srgba(count[0], count[1], count[2], alpha)),
+            place(0.0, 0.0),
             ChildOf(root),
             HudNode,
         ));

@@ -335,6 +335,13 @@ pub struct Sim {
     pub pending_vents: Vec<PendingVent>,
     /// Seconds every living player has stayed on a jetpack perch.
     pub all_perched_for: f32,
+    /// Host tab is away. `step_peers` returns before time, enemies, bleedout, or cooldowns move.
+    #[serde(default)]
+    pub host_away: bool,
+    /// Resume countdown. Aim updates; time, movement, fire, and abilities do not.
+    /// Presentation fades the away grade across this same window. Not replicated.
+    #[serde(skip)]
+    pub present_countdown: bool,
     /// Joiners waiting for the next breather. Counted toward the lobby cap.
     #[serde(default)]
     pub pending_joins: Vec<PendingJoin>,
@@ -404,6 +411,8 @@ impl Sim {
             endless_mode: false,
             pending_vents: Vec::new(),
             all_perched_for: 0.0,
+            host_away: false,
+            present_countdown: false,
             pending_joins: Vec::new(),
             credits: BTreeMap::new(),
             next_token: 2,
@@ -529,6 +538,23 @@ impl Sim {
     }
 
     pub fn step_peers(&mut self, content: &Content, inputs: &[PlayerInput]) {
+        if self.present_countdown {
+            self.apply_countdown_look(content, inputs);
+            self.sounds.clear();
+            self.stops.clear();
+            self.pings.clear();
+            self.music.clear();
+            self.landed_pulse = 0.0;
+            return;
+        }
+        if self.host_away {
+            self.sounds.clear();
+            self.stops.clear();
+            self.pings.clear();
+            self.music.clear();
+            self.landed_pulse = 0.0;
+            return;
+        }
         self.sounds.clear();
         self.stops.clear();
         self.pings.clear();
@@ -904,6 +930,16 @@ impl Sim {
         self.director.queue = queued;
         self.director.pool = 0.0;
         self.director.parked = true;
+    }
+
+    /// Aim only. Movement, fire, abilities, and the clock stay where they are.
+    fn apply_countdown_look(&mut self, content: &Content, inputs: &[PlayerInput]) {
+        let seats = self.players.len().min(inputs.len());
+        for seat in 0..seats {
+            let input = countdown_aim(inputs[seat]);
+            let Some(player) = self.players.get_mut(seat) else { continue };
+            apply_look(player, &input, content, &self.enemies);
+        }
     }
 
     fn tick_player(&mut self, content: &Content, seat: usize, input: PlayerInput, dt: f32) {
@@ -2637,6 +2673,18 @@ fn refresh_defense(content: &Content, player: &mut Player, mods: &Modifiers, ran
         player.max_hp = new_max;
     }
     player.max_shield = mods.shield_flat;
+}
+
+/// Keep aim. Drop move, fire, abilities, and the other gameplay buttons.
+pub fn countdown_aim(input: PlayerInput) -> PlayerInput {
+    PlayerInput {
+        yaw: input.yaw,
+        pitch: input.pitch,
+        look_dx_deg: input.look_dx_deg,
+        look_dy_deg: input.look_dy_deg,
+        using_gamepad: input.using_gamepad,
+        ..PlayerInput::default()
+    }
 }
 
 fn wish_dir(yaw: f32, x: f32, z: f32) -> Vec3 {
