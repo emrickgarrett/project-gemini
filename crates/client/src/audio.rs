@@ -6,7 +6,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use bevy::audio::{AddAudioSource, AudioSinkPlayback, AudioSource, Decodable, Sample, SeekError, Source, Volume};
+use bevy::audio::{
+    AddAudioSource, AudioSinkPlayback, AudioSource, Decodable, GlobalVolume, Sample, SeekError, Source, Volume,
+};
 use bevy::prelude::*;
 
 use gemini_sim::audio_mix::{select_voices, SoundEvent};
@@ -522,10 +524,20 @@ pub fn attach_duck(
     sources: Res<Assets<AudioSource>>,
     ducked: Option<ResMut<Assets<DuckedMusic>>>,
     music: Option<Res<Music>>,
+    output: Option<Res<GlobalVolume>>,
     pending: Query<(Entity, &StemFile), (With<MusicStem>, Without<AudioPlayer<DuckedMusic>>)>,
 ) {
-    let (Some(mut ducked), Some(music)) = (ducked, music) else {
+    // Bevy keeps AudioOutput private. GlobalVolume is inserted with that output,
+    // and a headless match does not install the audio plugin. A missing
+    // music_duck_db or host_away row still fails when content loads.
+    if output.is_none() {
         return;
+    }
+    let Some(mut ducked) = ducked else {
+        panic!("audio output is present but DuckedMusic was not registered");
+    };
+    let Some(music) = music else {
+        panic!("audio output is present but Music was not inserted");
     };
     for (entity, file) in &pending {
         let Some(source) = sources.get(&file.0) else { continue };
@@ -651,4 +663,67 @@ fn owner_of(events: &[SoundEvent], id: &str, pos: SimVec) -> u32 {
 #[allow(dead_code)]
 fn _director(content: &Content) -> &MusicDirectorCfg {
     &content.music.director
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use bevy::audio::{AudioPlayer, AudioSource, GlobalVolume, Volume};
+    use bevy::prelude::*;
+
+    use super::{attach_duck, DuckedMusic, Music, MusicStem, StemFile};
+
+    fn app_with_stem() -> App {
+        let mut app = App::new();
+        app.init_resource::<Assets<AudioSource>>();
+        let handle = app.world_mut().resource_mut::<Assets<AudioSource>>().add(AudioSource {
+            bytes: Arc::<[u8]>::from(b"riff".as_slice()),
+        });
+        app.world_mut().spawn((StemFile(handle), MusicStem { index: 0 }));
+        app.add_systems(Update, attach_duck);
+        app
+    }
+
+    fn ducked_count(app: &mut App) -> usize {
+        let mut players = app.world_mut().query::<&AudioPlayer<DuckedMusic>>();
+        players.iter(app.world()).count()
+    }
+
+    #[test]
+    fn attach_duck_skips_when_the_audio_output_is_absent() {
+        let mut app = app_with_stem();
+        app.insert_resource(Music::default());
+        app.init_resource::<Assets<DuckedMusic>>();
+        app.update();
+        assert_eq!(ducked_count(&mut app), 0);
+    }
+
+    #[test]
+    fn attach_duck_attaches_when_the_audio_output_is_present() {
+        let mut app = app_with_stem();
+        app.insert_resource(GlobalVolume::new(Volume::Linear(1.0)));
+        app.insert_resource(Music::default());
+        app.init_resource::<Assets<DuckedMusic>>();
+        app.update();
+        assert_eq!(ducked_count(&mut app), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "DuckedMusic was not registered")]
+    fn attach_duck_panics_when_output_is_up_without_the_duck_source() {
+        let mut app = app_with_stem();
+        app.insert_resource(GlobalVolume::new(Volume::Linear(1.0)));
+        app.insert_resource(Music::default());
+        app.update();
+    }
+
+    #[test]
+    #[should_panic(expected = "Music was not inserted")]
+    fn attach_duck_panics_when_output_is_up_without_music() {
+        let mut app = app_with_stem();
+        app.insert_resource(GlobalVolume::new(Volume::Linear(1.0)));
+        app.init_resource::<Assets<DuckedMusic>>();
+        app.update();
+    }
 }
