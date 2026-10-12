@@ -890,20 +890,199 @@ mod tests {
     #[test]
     fn cast_mesh_bounds_fit_inside_the_existing_hitbox() {
         let content = Content::embedded();
+        let mut table = vec![
+            "id | mesh min | mesh max | hitbox | inside | weak glow".to_string(),
+        ];
         for (id, row) in content.bugs.rows() {
             let mesh = cast(id);
             let hit = hit_bounds(&row.hitbox.body);
             let (mn, mx) = bounds(&mesh.positions);
-            assert!(
-                outside_hitbox(&mesh.positions, hit).is_none(),
-                "{id} leaves the hitbox"
-            );
-            for axis in 0..3 {
-                assert!(mn[axis] >= hit.min[axis] - 1.0e-3, "{id} min axis {axis}");
-                assert!(mx[axis] <= hit.max[axis] + 1.0e-3, "{id} max axis {axis}");
-            }
+            assert!(outside_hitbox(&mesh.positions, hit).is_none(), "{id} leaves the hitbox");
             let authored = content.models.iter().find(|model| model.id == id).unwrap();
             assert_eq!(authored.fit, "hitbox", "{id}");
+            let visual = crate::bug(id);
+            let posed = rest_pose(visual);
+            let mut glow = Vec::new();
+            for (slot, shape) in row.hitbox.anchored() {
+                glow.push(glow_sits_on_hit(id, visual, &posed, slot, shape));
+            }
+            if let Some(radius) = row.hitbox.pod_radius() {
+                for (index, place) in row.hitbox.pods.iter().enumerate() {
+                    let name = format!("pod{index}");
+                    let part = visual
+                        .parts
+                        .iter()
+                        .find(|part| part.name == name)
+                        .unwrap_or_else(|| panic!("{id} missing {name}"));
+                    let center = part.rest_pos;
+                    let gap = dist(center, place.offset);
+                    assert!(gap < 1.0e-3, "{id} {name} center is {gap} off the pod hit");
+                    let mesh_r = local_radius(&part.mesh.positions);
+                    assert!(
+                        mesh_r <= radius + 1.0e-3,
+                        "{id} {name} glow radius {mesh_r:.3} is outside the pod hit {radius:.3}"
+                    );
+                    glow.push(format!(
+                        "{name} center ({:.2},{:.2},{:.2}) r {:.2} inside hit r {radius:.2}",
+                        center[0], center[1], center[2], mesh_r
+                    ));
+                }
+            }
+            let glow = if glow.is_empty() { "none".into() } else { glow.join("; ") };
+            table.push(format!(
+                "{id} | ({:.2},{:.2},{:.2}) | ({:.2},{:.2},{:.2}) | {} | yes | {glow}",
+                mn[0], mn[1], mn[2], mx[0], mx[1], mx[2], shape_label(&row.hitbox.body)
+            ));
+        }
+        let player_r = content.combat.hit_radius.player;
+        let eye = content.controller.camera.eye_height;
+        let sphere_y = eye * 0.5;
+        for hero in ["vex", "nyra", "brakk", "kip"] {
+            let id = format!("{hero}_body");
+            let mesh = cast(&id);
+            let spec = content.models.iter().find(|model| model.id == id).unwrap();
+            assert_eq!(spec.fit, "hero", "{id}");
+            let (mn, mx) = bounds(&mesh.positions);
+            let horiz = mesh
+                .positions
+                .iter()
+                .map(|p| (p[0] * p[0] + p[2] * p[2]).sqrt())
+                .fold(0.0_f32, f32::max);
+            assert!(mn[1] >= -1.0e-3 && (mx[1] - spec.size).abs() < 1.0e-2, "{id} height");
+            assert!(
+                (mn[0] + mx[0]).abs() < 1.0e-2 && (mn[2] + mx[2]).abs() < 1.0e-2,
+                "{id} is not centered on the player"
+            );
+            // Shots use a sphere of `hit_radius.player` around half eye height.
+            // Movement uses that same radius as a wall pad. Neither volume is a
+            // body box, and the cast stays at the authored height.
+            let outside_sphere = mesh.positions.iter().any(|p| {
+                let dx = p[0];
+                let dy = p[1] - sphere_y;
+                let dz = p[2];
+                (dx * dx + dy * dy + dz * dz).sqrt() > player_r + 1.0e-3
+            });
+            let sphere = if horiz <= player_r + 1.0e-3 && !outside_sphere {
+                "yes"
+            } else {
+                "no"
+            };
+            table.push(format!(
+                "{id} | ({:.2},{:.2},{:.2}) | ({:.2},{:.2},{:.2}) | authored height {:.2} feet 0; player sphere r {player_r:.2} at y {sphere_y:.2}, mesh r {horiz:.2} | height yes, sphere {sphere} | none",
+                mn[0], mn[1], mn[2], mx[0], mx[1], mx[2], spec.size
+            ));
+        }
+        eprintln!("{}", table.join("\n"));
+    }
+
+    fn rest_pose(visual: &crate::EnemyVisual) -> crate::pose::Pose {
+        crate::pose::pose(
+            visual,
+            crate::pose::AnimInput {
+                time: 0.0,
+                moving: false,
+                charging: false,
+                vulnerable: true,
+                phase: 0,
+                frenzy: false,
+                preview_glow: true,
+                regrow: 0,
+                hatch_pod: 255,
+                hatch_charge: 0.0,
+            },
+            &[],
+        )
+    }
+
+    fn glow_sits_on_hit(
+        id: &str,
+        visual: &crate::EnemyVisual,
+        posed: &crate::pose::Pose,
+        slot: &str,
+        shape: &gemini_sim::bugs::ShapeDef,
+    ) -> String {
+        let name = shape.anchor.as_str();
+        let index = visual
+            .parts
+            .iter()
+            .position(|part| part.name == name)
+            .unwrap_or_else(|| panic!("{id} {slot} has no part {name}"));
+        let part = &visual.parts[index];
+        assert!(part.emissive, "{id} {name} is the weak glow and it is not emissive");
+        let xf = &posed.xforms[index];
+        let hit = hit_bounds(shape);
+        let mut glow_min = [f32::MAX; 3];
+        let mut glow_max = [f32::MIN; 3];
+        let mut centroid = [0.0f32; 3];
+        let count = part.mesh.positions.len().max(1) as f32;
+        for p in &part.mesh.positions {
+            let p = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
+            let p = crate::pose::rotate_vec(xf.rot, p);
+            let world = [p[0] + xf.pos[0], p[1] + xf.pos[1], p[2] + xf.pos[2]];
+            centroid[0] += world[0] / count;
+            centroid[1] += world[1] / count;
+            centroid[2] += world[2] / count;
+            for axis in 0..3 {
+                glow_min[axis] = glow_min[axis].min(world[axis]);
+                glow_max[axis] = glow_max[axis].max(world[axis]);
+            }
+        }
+        let glow = PartBounds { min: glow_min, max: glow_max };
+        assert!(hit.overlaps(glow), "{id} {slot} glow {glow:?} misses the hit {hit:?}");
+        assert!(
+            point_in_shape(shape, centroid),
+            "{id} {slot} glow center {centroid:?} is outside the hit at {:?} r {}",
+            shape.offset,
+            shape.bounding_radius()
+        );
+        format!(
+            "{slot} {name} center ({:.2},{:.2},{:.2}) on hit ({:.2},{:.2},{:.2})",
+            centroid[0], centroid[1], centroid[2], shape.offset[0], shape.offset[1], shape.offset[2]
+        )
+    }
+
+    fn point_in_shape(shape: &gemini_sim::bugs::ShapeDef, p: [f32; 3]) -> bool {
+        let d = [p[0] - shape.offset[0], p[1] - shape.offset[1], p[2] - shape.offset[2]];
+        match shape.shape.as_str() {
+            "box" => d.iter().zip(shape.half_extents).all(|(n, h)| n.abs() <= h + 1.0e-3),
+            "capsule" => {
+                let half = shape.height * 0.5;
+                let y = d[1].clamp(-half, half);
+                let dx = d[0];
+                let dy = d[1] - y;
+                let dz = d[2];
+                (dx * dx + dy * dy + dz * dz).sqrt() <= shape.radius + 1.0e-3
+            }
+            _ => (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() <= shape.radius + 1.0e-3,
+        }
+    }
+
+    fn local_radius(positions: &[[f32; 3]]) -> f32 {
+        positions
+            .iter()
+            .map(|p| (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt())
+            .fold(0.0_f32, f32::max)
+    }
+
+    fn shape_label(shape: &gemini_sim::bugs::ShapeDef) -> String {
+        match shape.shape.as_str() {
+            "capsule" => format!(
+                "capsule r {:.2} h {:.2} at ({:.2},{:.2},{:.2})",
+                shape.radius, shape.height, shape.offset[0], shape.offset[1], shape.offset[2]
+            ),
+            "box" => format!(
+                "box half ({:.2},{:.2},{:.2}) at ({:.2},{:.2},{:.2})",
+                shape.half_extents[0],
+                shape.half_extents[1],
+                shape.half_extents[2],
+                shape.offset[0],
+                shape.offset[1],
+                shape.offset[2]
+            ),
+            _ => format!(
+                "sphere r {:.2} at ({:.2},{:.2},{:.2})",
+                shape.radius, shape.offset[0], shape.offset[1], shape.offset[2]
+            ),
         }
     }
 

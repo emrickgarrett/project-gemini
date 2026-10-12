@@ -3377,9 +3377,10 @@ pub fn launch_pending_shots(sim: &mut Sim, content: &Content) {
 mod frame_time {
     use super::*;
 
-    /// One sim step is a 30 Hz tick (`SIM_DT`). This checks the live-enemy cap
-    /// by counting enemies, not the wall clock. A loaded runner can miss 33 ms
-    /// at random, so the release timing is a one-time measurement, not CI.
+    /// Counts the live-enemy cap. The test steps the sim six times and checks
+    /// enemies, movement, and a same-seed checksum. It does not read the wall
+    /// clock. Release timing is a one-time measurement of a sim step, not a
+    /// client frame, so it stays out of CI.
     #[test]
     fn three_hundred_live_enemies_stay_at_the_cap() {
         let content = Content::embedded();
@@ -3440,7 +3441,8 @@ mod frame_time {
         sum
     }
 
-    /// Release wall-clock for one 30 Hz tick at the live-enemy cap.
+    /// Wall clock for one `Sim::step` with 300 live swarmers.
+    /// That is sim-tick timing. The client target stays 60 fps.
     /// `cargo test -p gemini-sim --release -- --ignored --nocapture frame_time_release`
     #[test]
     #[ignore = "one-time release measurement; CI counts the cap instead"]
@@ -3466,8 +3468,10 @@ mod frame_time {
             sim.step(&content, PlayerInput::default());
         }
         let per_ms = start.elapsed().as_secs_f64() * 1000.0 / f64::from(frames);
-        let budget_ms = f64::from(SIM_DT) * 1000.0;
-        eprintln!("release 300 live enemies: {per_ms:.3} ms per 30 Hz tick (budget {budget_ms:.3} ms)");
+        let step_ms = f64::from(SIM_DT) * 1000.0;
+        eprintln!(
+            "release 300 live enemies: {per_ms:.3} ms wall clock for one sim step (SIM_DT is {step_ms:.3} ms of simulated time, not a client frame)"
+        );
         assert_eq!(sim.enemies.iter().filter(|enemy| enemy.alive).count(), cap as usize);
     }
 }
