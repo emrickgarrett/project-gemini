@@ -165,7 +165,7 @@ fn enter_match(mut ready: ResMut<PointerReady>, mut pause: ResMut<PauseMenu>, mu
         ready.0 = false;
     } else {
         ready.0 = true;
-        lock_cursor(&mut cursor, true);
+        lock_cursor(&mut cursor, &mut pause, true);
     }
 }
 
@@ -244,7 +244,7 @@ pub(crate) fn pause_keys(
         pause.open = false;
         dirty.0 = true;
         audio::ui_cue(&mut commands, &assets, &content, &prefs, &content.ui.sounds.pause_close);
-        lock_cursor(&mut cursor, true);
+        lock_cursor(&mut cursor, &mut pause, true);
         return;
     }
     pause.open = true;
@@ -252,12 +252,12 @@ pub(crate) fn pause_keys(
     focus.0 = 0;
     dirty.0 = true;
     audio::ui_cue(&mut commands, &assets, &content, &prefs, &content.ui.sounds.pause_open);
-    lock_cursor(&mut cursor, false);
+    lock_cursor(&mut cursor, &mut pause, false);
 }
 
 pub(crate) fn click_prompt(
     mut ready: ResMut<PointerReady>,
-    pause: Res<PauseMenu>,
+    mut pause: ResMut<PauseMenu>,
     mut dirty: ResMut<Dirty>,
     mut cursor: Query<&mut CursorOptions>,
     mut action: ResMut<PendingAction>,
@@ -272,7 +272,9 @@ pub(crate) fn click_prompt(
     if action.0.as_deref() == Some("click") {
         action.0 = None;
         ready.0 = true;
-        lock_cursor(&mut cursor, true);
+        lock_cursor(&mut cursor, &mut pause, true);
+        // Gather already sampled this frame, so the flag would skip the next shot.
+        pause.swallow_fire = false;
         dirty.0 = true;
     }
 }
@@ -503,7 +505,7 @@ pub(crate) fn apply(
             pause.open = false;
             pause.settings = false;
             dirty.0 = true;
-            lock_cursor(&mut cursor, true);
+            lock_cursor(&mut cursor, &mut pause, true);
             audio::ui_cue(&mut commands, &assets, &content, &prefs, &content.ui.sounds.pause_close);
         }
         "quit_to_menu" => {
@@ -512,7 +514,7 @@ pub(crate) fn apply(
             commands.remove_resource::<MatchSummary>();
             *page = Page::Title;
             focus.0 = 0;
-            lock_cursor(&mut cursor, false);
+            lock_cursor(&mut cursor, &mut pause, false);
             next.set(AppState::Menu);
             audio::ui_cue(&mut commands, &assets, &content, &prefs, back_cue);
         }
@@ -530,7 +532,7 @@ pub(crate) fn apply(
             commands.remove_resource::<MatchSummary>();
             *page = Page::Title;
             focus.0 = 0;
-            lock_cursor(&mut cursor, false);
+            lock_cursor(&mut cursor, &mut pause, false);
             dirty.0 = true;
             audio::ui_cue(&mut commands, &assets, &content, &prefs, back_cue);
         }
@@ -858,9 +860,12 @@ fn image_from_rgb(rgb: &[u8], width: u32, height: u32) -> Image {
     )
 }
 
-fn lock_cursor(cursor: &mut Query<&mut CursorOptions>, lock: bool) {
+fn lock_cursor(cursor: &mut Query<&mut CursorOptions>, pause: &mut PauseMenu, lock: bool) {
     if let Ok(mut cursor) = cursor.single_mut() {
         if lock {
+            if cursor.grab_mode != CursorGrabMode::Locked {
+                pause.swallow_fire = true;
+            }
             cursor.grab_mode = CursorGrabMode::Locked;
             cursor.visible = false;
         } else {

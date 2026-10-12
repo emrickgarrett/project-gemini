@@ -400,7 +400,7 @@ pub fn draw(
                         border_radius: BorderRadius::all(Val::Px(8.0)),
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(0.05, 0.05, 0.08, 0.85)),
+                    BackgroundColor(panel_fill(&game)),
                     BorderColor::all(border),
                     ChildOf(root),
                     HudNode,
@@ -701,4 +701,9 @@ fn paint_away(commands: &mut Commands, root: Entity, game: &Game, away: &Away) {
 fn color(game: &Game, key: &str) -> Color {
     let c = game.content.palette.key(key);
     Color::srgb(c[0], c[1], c[2])
+}
+
+fn panel_fill(game: &Game) -> Color {
+    let c = game.content.palette.key(&game.content.ui.colors.panel);
+    Color::srgba(c[0], c[1], c[2], game.content.ui.layout.panel_alpha)
 }

@@ -467,11 +467,19 @@ mod tests {
         app.update();
         offer_upgrades(&mut app);
         app.update();
+        let content = gemini_sim::content::Content::embedded();
+        let rgb = content.palette.key(&content.ui.colors.panel);
+        let alpha = content.ui.layout.panel_alpha;
         let card = {
-            let mut query = app.world_mut().query::<(Entity, &hud::UpgradeCard)>();
-            let found: Vec<_> = query.iter(app.world()).map(|(entity, card)| (entity, card.0)).collect();
-            assert!(found.iter().any(|(_, index)| *index == 2), "card 3 should exist: {found:?}");
-            found.into_iter().find(|(_, index)| *index == 2).unwrap().0
+            let mut query = app.world_mut().query::<(Entity, &hud::UpgradeCard, &BackgroundColor)>();
+            let found: Vec<_> = query.iter(app.world()).map(|(entity, card, fill)| (entity, card.0, *fill)).collect();
+            assert!(found.iter().any(|(_, index, _)| *index == 2), "card 3 should exist: {found:?}");
+            for (_, _, BackgroundColor(fill)) in &found {
+                let fill = fill.to_srgba();
+                assert!((fill.red - rgb[0]).abs() < 1e-4 && (fill.green - rgb[1]).abs() < 1e-4 && (fill.blue - rgb[2]).abs() < 1e-4, "card fill should be the panel palette");
+                assert!((fill.alpha - alpha).abs() < 1e-4, "card alpha should be ui layout.panel_alpha");
+            }
+            found.into_iter().find(|(_, index, _)| *index == 2).unwrap().0
         };
         app.world_mut().trigger(bevy::ui_widgets::Activate { entity: card });
         app.world_mut().resource_mut::<session::SimClock>().set_accumulated(1.0);
@@ -479,6 +487,38 @@ mod tests {
         let game = app.world().resource::<session::Game>();
         assert!(game.sim.players[0].upgrades.contains_key("servo_legs"), "{:?}", game.sim.players[0].upgrades);
         assert!(matches!(game.sim.phase, gemini_sim::sim::Phase::Breather { .. }));
+    }
+
+    #[test]
+    fn relock_click_does_not_fire_until_the_next_frame() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        app.world_mut().spawn(locked_cursor());
+        app.update();
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Playing);
+        app.update();
+        {
+            let mut query = app.world_mut().query::<&mut CursorOptions>();
+            let mut cursor = query.single_mut(app.world_mut()).expect("cursor");
+            cursor.grab_mode = CursorGrabMode::None;
+            cursor.visible = true;
+        }
+        let before = app.world().resource::<session::Game>().sim.players[0].primary.ammo;
+        assert!(before > 0, "the starter gun should be loaded");
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().press(MouseButton::Left);
+        app.world_mut().resource_mut::<session::SimClock>().set_accumulated(1.0);
+        app.update();
+        let (grab, visible) = cursor_state(&mut app);
+        assert_eq!(grab, CursorGrabMode::Locked);
+        assert!(!visible);
+        let grabbed = app.world().resource::<session::Game>().sim.players[0].primary.ammo;
+        assert_eq!(grabbed, before, "the click that locks the pointer must not fire");
+
+        app.world_mut().resource_mut::<ButtonInput<MouseButton>>().clear_just_pressed(MouseButton::Left);
+        app.world_mut().resource_mut::<session::SimClock>().set_accumulated(1.0);
+        app.update();
+        let held = app.world().resource::<session::Game>().sim.players[0].primary.ammo;
+        assert!(held < before, "a hold after the grab should fire, ammo {before} -> {held}");
     }
 
     #[test]

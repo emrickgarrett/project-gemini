@@ -2036,6 +2036,8 @@ fn ui_spacing_and_font_coverage_fail_closed() {
     assert!((content.ui.layout.inset_bar - 8.0).abs() < 1e-4);
     assert!((content.ui.layout.inset_portrait - 4.0).abs() < 1e-4);
     assert!((content.ui.layout.inset_min - 1.0).abs() < 1e-4);
+    assert!((content.ui.layout.panel_alpha - 0.85).abs() < 1e-4);
+    assert_eq!(content.ui.colors.panel, "ui_panel_slate");
     assert_eq!(content.ui.portrait.bg, "portrait_field");
     assert_eq!(content.ui.portrait.raster, 320);
     assert!((content.ui.portrait.fov_floor - 10.0).abs() < 1e-4);
@@ -2075,6 +2077,12 @@ fn ui_spacing_and_font_coverage_fail_closed() {
             arena_visual: base.arena_visual,
         })
     };
+    let clear = base.ui.replacen("panel_alpha = 0.85", "panel_alpha = 0.0", 1);
+    let err = load_ui(&clear).expect_err("clear panel");
+    assert!(err.contains("panel_alpha"), "{err}");
+    let missing_alpha = base.ui.replacen("panel_alpha = 0.85\n", "", 1);
+    let err = load_ui(&missing_alpha).expect_err("missing panel alpha");
+    assert!(err.contains("panel_alpha"), "{err}");
     let negative = base.ui.replacen("leading = 2.0", "leading = -1.0", 1);
     let err = load_ui(&negative).expect_err("negative leading");
     assert!(err.contains("leading"), "{err}");

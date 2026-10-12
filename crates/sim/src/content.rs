@@ -3980,6 +3980,8 @@ pub struct UiLayout {
     pub locked_body_desaturation: f32,
     pub card_pad: f32,
     pub pause_keep: f32,
+    /// Upgrade-card fill alpha. The RGB comes from `colors.panel`.
+    pub panel_alpha: f32,
     pub pause_panel_width: f32,
     pub pause_panel_height: f32,
     pub slider_width: f32,
@@ -4130,6 +4132,9 @@ fn validate_ui(
     }
     if !(layout.pause_keep > 0.0 && layout.pause_keep <= 1.0) {
         return Err("ui.toml layout.pause_keep must be in (0, 1]".into());
+    }
+    if !(layout.panel_alpha > 0.0 && layout.panel_alpha <= 1.0) {
+        return Err("ui.toml layout.panel_alpha must be in (0, 1]".into());
     }
     if !(layout.focus_lift > 0.0 && layout.focus_lift < 1.0) {
         return Err("ui.toml layout.focus_lift must be in (0, 1)".into());

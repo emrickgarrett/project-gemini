@@ -112,6 +112,8 @@ pub struct PendingDifficulty(pub String);
 pub struct PauseMenu {
     pub open: bool,
     pub settings: bool,
+    /// The pointer was grabbed this frame. That click is not a shot.
+    pub swallow_fire: bool,
 }
 
 /// Leftover time since the last sim step. A frame faster than `SIM_DT` must keep
@@ -223,16 +225,24 @@ pub fn gather_and_step(
     motion: Res<AccumulatedMouseMotion>,
     gamepads: Query<&Gamepad>,
     mut cursor: Query<&mut CursorOptions>,
-    hold: Res<PauseMenu>,
+    mut hold: ResMut<PauseMenu>,
     prefs: Res<Prefs>,
 ) {
     // The upgrade picker and the pause menu both need a visible cursor. A click
     // outside those screens grabs it again. Wasm waits for click-to-play.
+    // The grab click itself is not a shot; fire starts on the next frame.
     let picking = matches!(game.sim.phase, Phase::Upgrade { .. });
+    let was_locked = cursor.iter().any(|options| options.grab_mode == CursorGrabMode::Locked);
+    let grab_click = !picking
+        && !hold.open
+        && !cfg!(target_arch = "wasm32")
+        && mouse_buttons.just_pressed(MouseButton::Left)
+        && !was_locked;
     if picking || hold.open {
         set_cursor(&mut cursor, true);
-    } else if !cfg!(target_arch = "wasm32") && mouse_buttons.just_pressed(MouseButton::Left) {
+    } else if grab_click {
         set_cursor(&mut cursor, false);
+        hold.swallow_fire = true;
     }
     #[cfg(not(target_arch = "wasm32"))]
     if keys.just_pressed(KeyCode::F10) {
@@ -281,7 +291,10 @@ pub fn gather_and_step(
     let mut crouch = keys.pressed(KeyCode::ControlLeft);
     let mut boost_held = keys.pressed(KeyCode::KeyF);
     let mut boost_pressed = keys.just_pressed(KeyCode::KeyF);
-    let mut fire = mouse_buttons.pressed(MouseButton::Left);
+    // A click that grabs the pointer, including the upgrade-card click and a
+    // resume click, is consumed here. A hold that is still down next frame fires.
+    let suppress_mouse = std::mem::take(&mut hold.swallow_fire) || (picking && mouse_buttons.just_pressed(MouseButton::Left));
+    let mut fire = mouse_buttons.pressed(MouseButton::Left) && !suppress_mouse;
     let mut reload = keys.just_pressed(KeyCode::KeyR);
     let mut ability = keys.just_pressed(KeyCode::KeyQ);
     let mut interact = keys.pressed(KeyCode::KeyE);
