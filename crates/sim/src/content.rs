@@ -125,7 +125,7 @@ impl Content {
         crate::bugs::require_leg_layout(&bugs).map_err(|err| format!("bugs.toml: {err}"))?;
         let bosses = load_bosses(src.bosses).map_err(|err| format!("bosses.toml: {err}"))?;
         require_spawn_clearance(&bosses, &bugs).map_err(|err| format!("bosses.toml: {err}"))?;
-        let (hero, guns, roster, heroes) = load_characters(src.hero)?;
+        let (mut hero, guns, roster, heroes) = load_characters(src.hero)?;
         let mut weapons = parse::<WeaponFile>("weapons.toml", src.weapons)?;
         weapons.weapon = guns;
         let audio = crate::audio_mix::load_mix(src.audio).map_err(|err| format!("audio_mix.toml: {err}"))?;
@@ -134,7 +134,7 @@ impl Content {
         let crate_reveal: CrateReveal = parse("crate_reveal.toml", src.crate_reveal)?;
         validate_reveal_cues(&crate_reveal, &audio)?;
         validate_reveal_layout(&crate_reveal)?;
-        let palette: Palette = parse("palette.toml", src.palette)?;
+        let mut palette: Palette = parse("palette.toml", src.palette)?;
         let presentation: Presentation = parse("presentation.toml", src.presentation)?;
         validate_away_hud(&presentation.hud.away)?;
         let ui = load_ui(src.ui)?;
@@ -146,6 +146,19 @@ impl Content {
         let difficulty = parse::<DifficultyFile>("difficulty.toml", src.difficulty)?.tier;
         require_palette_keys(&palette, &bugs, &presentation.hud.away, &crate_reveal.layout, &ui, &heroes)
             .map_err(|err| format!("palette.toml: {err}"))?;
+        let accent_key = heroes
+            .iter()
+            .find(|card| card.id == hero.id)
+            .map(|card| card.accent_key.clone())
+            .ok_or_else(|| format!("characters.toml starter {} has no card", hero.id))?;
+        let accent = palette
+            .hex(&accent_key)
+            .ok_or_else(|| format!("characters.toml {} accent_key \"{accent_key}\" does not resolve", hero.id))?
+            .to_string();
+        parse_accent(&accent)?;
+        hero.accent = accent.clone();
+        // The palette key on the hero card is the only accent source.
+        palette.hero.accent = accent;
         validate_ui(&ui, &presentation, &controller, &audio, &difficulty, &crate_reveal.layout, &heroes)?;
         let arena = load_arena(src.arena).map_err(|err| format!("arena_01.toml: {err}"))?;
         require_arena_colors(&palette, &arena).map_err(|err| format!("arena_01.toml: {err}"))?;
@@ -185,6 +198,14 @@ impl Content {
             cosmetics: load_cosmetics(src.cosmetics).map_err(|err| format!("cosmetics.toml: {err}"))?,
             ui,
         })
+    }
+
+    /// Playtest selection. `unlock_all` does not grant ownership, currency, or crates.
+    pub fn hero_selectable(&self, id: &str) -> bool {
+        let Some(card) = self.heroes.iter().find(|hero| hero.id == id) else {
+            return false;
+        };
+        self.ui.settings.unlock_all || (card.owned && card.id == self.hero.id)
     }
 
     pub fn tier(&self, id: &str) -> &Tier {
@@ -1195,7 +1216,7 @@ pub struct HeroCard {
     pub ability: String,
     pub max_hp: f32,
     pub move_speed_mult: f32,
-    /// Palette key. The hex accent on the hero row stays for the viewmodel.
+    /// Palette key. The viewmodel hex is resolved from this key at load.
     pub accent_key: String,
     pub owned: bool,
 }
@@ -1301,7 +1322,7 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>, Vec
         name: req_str(row, "name", starter)?.to_string(),
         primary: weapon_id.to_string(),
         sidearm: "sidearm".into(),
-        accent: req_str(row, "accent", starter)?.to_string(),
+        accent: String::new(),
         max_hp: req_f32(row, "max_hp", starter)?,
         move_speed_mult: req_f32(row, "move_speed_mult", starter)?,
         ability_id: ability_id.to_string(),
@@ -1360,7 +1381,6 @@ fn load_characters(text: &str) -> Result<(Hero, Vec<WeaponDef>, Vec<String>, Vec
             "characters.toml {starter} viewmodel_fov must be between 1 and 170"
         ));
     }
-    parse_accent(&hero.accent)?;
     Ok((hero, vec![primary, sidearm], roster, cards))
 }
 
@@ -2726,7 +2746,6 @@ pub struct PaletteKeys {
     pub hero_nyra: String,
     pub hero_brakk: String,
     pub hero_kip: String,
-    pub bug_red: String,
 }
 
 impl Palette {
@@ -2749,7 +2768,6 @@ impl Palette {
             "hero_nyra" => self.keys.hero_nyra.as_str(),
             "hero_brakk" => self.keys.hero_brakk.as_str(),
             "hero_kip" => self.keys.hero_kip.as_str(),
-            "bug_red" => self.keys.bug_red.as_str(),
             "hero_teal" | "teal" => self.hero.teal.as_str(),
             "hero_cobalt" | "cobalt" => self.hero.cobalt.as_str(),
             "hero_white" | "white" => self.hero.white.as_str(),
@@ -3261,7 +3279,8 @@ pub struct UiLayout {
     pub card_width: f32,
     pub card_height: f32,
     pub card_gap: f32,
-    pub portrait_height: f32,
+    /// Portrait height as a fraction of the card. Centered in the top half.
+    pub portrait_fraction: f32,
     pub card_pad: f32,
     pub pause_keep: f32,
     pub pause_panel_width: f32,
@@ -3271,6 +3290,7 @@ pub struct UiLayout {
     pub settings_row_height: f32,
     pub stat_decimals: u32,
     pub mult_decimals: u32,
+    pub currency_decimals: u32,
     pub nav_repeat_secs: f32,
     pub stick_deadzone: f32,
     /// How far a focused border mixes toward the paper color. 0 is the base color.
@@ -3300,8 +3320,8 @@ pub struct UiSettings {
     pub default_difficulty: String,
     pub settings_file: String,
     pub settings_key: String,
-    pub guest_credits: f32,
-    pub banner_id: String,
+    /// Playtest hero selection. Off by default. Does not grant ownership.
+    pub unlock_all: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -3363,7 +3383,6 @@ fn validate_ui(
         ("button_height", layout.button_height),
         ("card_width", layout.card_width),
         ("card_height", layout.card_height),
-        ("portrait_height", layout.portrait_height),
         ("pause_panel_width", layout.pause_panel_width),
         ("pause_panel_height", layout.pause_panel_height),
         ("slider_width", layout.slider_width),
@@ -3391,8 +3410,11 @@ fn validate_ui(
     if !(layout.stick_deadzone > 0.0 && layout.stick_deadzone < 1.0) {
         return Err("ui.toml layout.stick_deadzone must be in (0, 1)".into());
     }
-    if layout.stat_decimals > 4 || layout.mult_decimals > 4 {
+    if layout.stat_decimals > 4 || layout.mult_decimals > 4 || layout.currency_decimals > 4 {
         return Err("ui.toml decimals must be in 0..=4".into());
+    }
+    if !(layout.portrait_fraction > 0.0 && layout.portrait_fraction <= 0.5) {
+        return Err("ui.toml layout.portrait_fraction must be in (0, 0.5]".into());
     }
     check_range("sensitivity", settings.sensitivity, settings.sensitivity_min, settings.sensitivity_max, settings.sensitivity_step)?;
     check_range("fov", settings.fov, settings.fov_min, settings.fov_max, settings.fov_step)?;
@@ -3411,11 +3433,8 @@ fn validate_ui(
             settings.default_difficulty
         ));
     }
-    if settings.settings_file.is_empty() || settings.settings_key.is_empty() || settings.banner_id.is_empty() {
-        return Err("ui.toml settings file, key, and banner_id must be set".into());
-    }
-    if !(settings.guest_credits.is_finite() && settings.guest_credits > 0.0) {
-        return Err("ui.toml guest_credits must be > 0".into());
+    if settings.settings_file.is_empty() || settings.settings_key.is_empty() {
+        return Err("ui.toml settings file and key must be set".into());
     }
     let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
     let check_files = assets.is_dir();

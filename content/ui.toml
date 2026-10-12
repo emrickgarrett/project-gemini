@@ -9,7 +9,7 @@ dim = "reveal_ink"
 stage = "reveal_stage"
 focus_before_hero = "rarity_common"
 victory = "rarity_legendary"
-defeat = "bug_red"
+defeat = "spitter_glow"
 locked = "reveal_ink"
 
 [copy]
@@ -70,7 +70,8 @@ margin_y = 28.0
 card_width = 280.0
 card_height = 500.0
 card_gap = 16.0
-portrait_height = 168.0
+# Portrait height as a fraction of the card. It is centered in the top half, above the name.
+portrait_fraction = 0.40
 card_pad = 12.0
 pause_keep = 0.60
 pause_panel_width = 480.0
@@ -80,6 +81,7 @@ slider_height = 18.0
 settings_row_height = 52.0
 stat_decimals = 1
 mult_decimals = 1
+currency_decimals = 0
 nav_repeat_secs = 0.18
 stick_deadzone = 0.45
 # Focused borders mix this far toward the paper color so the highlight reads without a mouse.
@@ -108,8 +110,8 @@ volume_step = 0.05
 default_difficulty = "normal"
 settings_file = "gemini-settings.toml"
 settings_key = "gemini-settings"
-guest_credits = 1000.0
-banner_id = "standard"
+# Playtest only. Unlocks hero selection on this client. Does not grant ownership, currency, or crates.
+unlock_all = false
 
 [sounds]
 hover = "ui_hover"

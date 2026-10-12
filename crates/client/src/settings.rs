@@ -147,8 +147,7 @@ fn remembered_hero(table: &toml::map::Map<String, toml::Value>, content: &Conten
     if id.is_empty() {
         return Ok(None);
     }
-    let playable = content.heroes.iter().any(|hero| hero.id == id && hero.owned && hero.id == content.hero.id);
-    Ok(playable.then(|| id.to_string()))
+    Ok(content.hero_selectable(id).then(|| id.to_string()))
 }
 
 fn remembered_tier(table: &toml::map::Map<String, toml::Value>, content: &Content) -> Result<Option<String>, String> {

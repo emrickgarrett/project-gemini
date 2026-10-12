@@ -119,7 +119,7 @@ pub fn register(app: &mut App) {
         .add_systems(OnEnter(AppState::Menu), enter_menu)
         .add_systems(OnExit(AppState::Menu), despawn_menu)
         .add_systems(OnEnter(AppState::Playing), (enter_match, drop_summary))
-        .add_systems(Update, (navigate, hover, apply, rebuild, debug_hotkeys).run_if(in_state(AppState::Menu)));
+        .add_systems(Update, (navigate, hover, apply, rebuild, debug_hotkeys, crate::audio::flush_ui_cues).chain().run_if(in_state(AppState::Menu)));
 }
 
 fn enter_menu(mut dirty: ResMut<Dirty>, summary: Option<Res<MatchSummary>>, mut page: ResMut<Page>, mut focus: ResMut<Focus>) {
@@ -163,19 +163,22 @@ fn debug_hotkeys(
     if !flag.0 {
         return;
     }
-    let pick = if keys.just_pressed(KeyCode::Digit1) {
-        Some("normal")
+    let content = Content::embedded();
+    let index = if keys.just_pressed(KeyCode::Digit1) {
+        Some(0)
     } else if keys.just_pressed(KeyCode::Digit2) {
-        Some("hard")
+        Some(1)
     } else if keys.just_pressed(KeyCode::Digit3) {
-        Some("heroic")
+        Some(2)
     } else if keys.just_pressed(KeyCode::Digit4) {
-        Some("legendary")
+        Some(3)
     } else {
         None
     };
-    if let Some(id) = pick {
-        let content = Content::embedded();
+    if let Some(index) = index {
+        let Some(id) = content.difficulty.get(index).map(|tier| tier.id.clone()) else {
+            return;
+        };
         hero.0 = content.hero.id.clone();
         prefs.character = Some(content.hero.id.clone());
         prefs.difficulty = Some(id.to_string());
@@ -428,7 +431,7 @@ pub(crate) fn apply(
     match id.as_str() {
         "play" => {
             *page = Page::Heroes;
-            focus.0 = content.heroes.iter().position(|hero| hero.owned).unwrap_or(0);
+            focus.0 = content.heroes.iter().position(|hero| content.hero_selectable(&hero.id)).unwrap_or(0);
             dirty.0 = true;
             audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
         }
@@ -521,8 +524,7 @@ pub(crate) fn apply(
         "click" => {}
         other if other.starts_with("hero:") => {
             let id = other.trim_start_matches("hero:");
-            let owned = content.heroes.iter().any(|hero| hero.id == id && hero.owned);
-            if !owned || id != content.hero.id {
+            if !content.hero_selectable(id) {
                 audio::ui_cue(&mut commands, &assets, &content, &prefs, error);
             } else {
                 hero.0 = id.to_string();
@@ -540,7 +542,7 @@ pub(crate) fn apply(
         }
         other if other.starts_with("tier:") => {
             let id = other.trim_start_matches("tier:");
-            if content.difficulty.iter().any(|tier| tier.id == id) && hero.0 == content.hero.id {
+            if content.difficulty.iter().any(|tier| tier.id == id) && content.hero_selectable(&hero.0) {
                 pending.0 = id.to_string();
                 prefs.difficulty = Some(id.to_string());
                 settings::store(&content, &prefs);
@@ -573,7 +575,7 @@ fn play_again(
     commands: &mut Commands,
     dirty: &mut Dirty,
 ) -> bool {
-    let hero_ok = prefs.character.as_ref().is_some_and(|id| id == &content.hero.id && content.heroes.iter().any(|card| &card.id == id && card.owned));
+    let hero_ok = prefs.character.as_ref().is_some_and(|id| content.hero_selectable(id));
     let diff_ok = prefs.difficulty.as_ref().is_some_and(|id| content.difficulty.iter().any(|tier| &tier.id == id));
     if !hero_ok {
         prefs.character = None;
@@ -736,7 +738,9 @@ fn shot_for(
         Page::Difficulty => MenuShot::Difficulty { focus, hero_id: hero.to_string(), notice: soon },
         Page::Settings => MenuShot::Settings { focus, hero_id: hero.to_string(), prefs: paint_prefs(prefs), notice },
         Page::Results => {
-            let summary = summary.cloned().unwrap_or(MatchSummary { victory: true, waves: 0, kills: 0, seconds: 0.0, currency: 0.0 });
+            let Some(summary) = summary.cloned() else {
+                return None;
+            };
             MenuShot::Results {
                 focus,
                 victory: summary.victory,

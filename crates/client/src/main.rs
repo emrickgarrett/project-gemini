@@ -79,7 +79,7 @@ fn install_match(app: &mut App) {
                     hud::draw,
                 )
                     .chain(),
-                (flow::rebuild, flow::end_of_match, flow::click_prompt).chain(),
+                (flow::rebuild, flow::end_of_match, flow::click_prompt, audio::flush_ui_cues).chain(),
             )
                 .chain()
                 .run_if(in_state(AppState::Playing)),

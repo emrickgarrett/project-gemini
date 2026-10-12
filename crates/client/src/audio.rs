@@ -320,13 +320,57 @@ pub fn bus_gain(prefs: &Prefs, music: bool) -> f32 {
     (prefs.master * bus).clamp(0.0, 1.0)
 }
 
-pub fn ui_cue(commands: &mut Commands, assets: &AssetServer, content: &Content, prefs: &Prefs, id: &str) {
-    let Some(def) = content.sfx(id) else { return };
-    commands.spawn((
-        AudioPlayer::new(assets.load::<AudioSource>(def.path.clone())),
-        PlaybackSettings::DESPAWN.with_volume(Volume::Linear(def.volume * bus_gain(prefs, false))),
-        OneShot { id: id.to_string(), owner: 0 },
-    ));
+#[derive(Component)]
+pub(crate) struct UiRequest(String);
+
+/// Queues a UI cue. `flush_ui_cues` runs it through the shared voice picker.
+pub fn ui_cue(commands: &mut Commands, _assets: &AssetServer, content: &Content, _prefs: &Prefs, id: &str) {
+    if content.sfx(id).is_none() {
+        return;
+    }
+    commands.spawn(UiRequest(id.to_string()));
+}
+
+/// The same picker as gameplay sfx. Live voices occupy `max_instances` and the 32-voice cap.
+pub fn flush_ui_cues(mut commands: Commands, assets: Res<AssetServer>, prefs: Res<Prefs>, requests: Query<(Entity, &UiRequest)>, live: Query<&OneShot>) {
+    let asked: Vec<String> = requests.iter().map(|(_, request)| request.0.clone()).collect();
+    for (entity, _) in &requests {
+        commands.entity(entity).despawn();
+    }
+    if asked.is_empty() {
+        return;
+    }
+    let content = Content::embedded();
+    let playing: Vec<SoundEvent> = live
+        .iter()
+        .map(|shot| SoundEvent { id: shot.id.clone(), pos: SimVec::ZERO, owner: shot.owner })
+        .collect();
+    for id in admit_ui(&content.audio, &playing, &asked) {
+        let Some(def) = content.sfx(&id) else { continue };
+        commands.spawn((
+            AudioPlayer::new(assets.load::<AudioSource>(def.path.clone())),
+            PlaybackSettings::DESPAWN.with_volume(Volume::Linear(def.volume * bus_gain(&prefs, false))),
+            OneShot { id, owner: 0 },
+        ));
+    }
+}
+
+/// Admits queued cues one at a time so earlier voices keep their slots.
+pub fn admit_ui(audio: &gemini_sim::content::AudioTable, playing: &[SoundEvent], asked: &[String]) -> Vec<String> {
+    let mut events = playing.to_vec();
+    let mut admitted = Vec::new();
+    for id in asked {
+        events.push(SoundEvent { id: id.clone(), pos: SimVec::ZERO, owner: 0 });
+        let selected = select_voices(audio, &events, SimVec::ZERO);
+        let kept = selected.iter().filter(|voice| voice.id == *id).count();
+        let before = events.iter().filter(|event| event.id == *id).count() - 1;
+        if kept > before {
+            admitted.push(id.clone());
+        } else {
+            events.pop();
+        }
+    }
+    admitted
 }
 
 pub fn menu_levels(prefs: Res<Prefs>, mut music: Option<ResMut<Music>>) {
@@ -783,5 +827,31 @@ mod tests {
         app.insert_resource(GlobalVolume::new(Volume::Linear(1.0)));
         app.init_resource::<Assets<DuckedMusic>>();
         app.update();
+    }
+
+    #[test]
+    fn repeated_hovers_stay_within_max_instances() {
+        use gemini_sim::audio_mix::SoundEvent;
+        use gemini_sim::content::Content;
+        use gemini_sim::math::Vec3;
+
+        use super::admit_ui;
+
+        let content = Content::embedded();
+        let hover = content.ui.sounds.hover.clone();
+        let cap = content.sfx(&hover).unwrap().max_instances;
+        assert_eq!(cap, 2, "ui_hover max_instances");
+        let asked = vec![hover.clone(); 8];
+        let admitted = admit_ui(&content.audio, &[], &asked);
+        assert_eq!(admitted.len() as u32, cap);
+        let playing: Vec<SoundEvent> = admitted
+            .iter()
+            .map(|id| SoundEvent { id: id.clone(), pos: Vec3::ZERO, owner: 0 })
+            .collect();
+        assert!(admit_ui(&content.audio, &playing, &asked).is_empty(), "live hovers already fill the cap");
+        let tick = content.ui.sounds.slider.clone();
+        assert_eq!(content.sfx(&tick).unwrap().max_instances, 3, "ui_slider_tick max_instances");
+        let ticks = vec![tick; 6];
+        assert_eq!(admit_ui(&content.audio, &[], &ticks).len(), 3);
     }
 }

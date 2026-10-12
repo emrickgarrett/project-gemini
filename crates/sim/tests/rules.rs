@@ -1272,7 +1272,11 @@ fn vex_overdrive_comes_from_characters() {
     assert_eq!(content.hero.id, "vex");
     assert_eq!(content.hero.primary, "pulse_rifle");
     assert_eq!(content.hero.sidearm, "sidearm");
-    assert_eq!(content.hero.accent, "#F97316");
+    assert_eq!(content.hero.accent, content.palette.hex("hero_vex").unwrap());
+    assert!(!content.ui.settings.unlock_all, "unlock_all is off unless the content flag says otherwise");
+    assert!(content.hero_selectable("vex"));
+    assert!(!content.hero_selectable("nyra"));
+    assert!(content.heroes.iter().any(|hero| hero.id == "nyra" && !hero.owned));
     assert!((content.hero.max_hp - 100.0).abs() < 1e-4);
     assert!((content.hero.move_speed_mult - 1.0).abs() < 1e-4);
     assert!((content.hero.ability_cooldown - 20.0).abs() < 1e-4);

@@ -50,6 +50,13 @@ fn main() {
         write_png(&path, &rgb, 1280, 720);
         println!("wrote {path}");
     }
+    let heroes = MenuShot::Heroes { focus: 0 };
+    for (width, height) in [(1366, 768), (2560, 1440)] {
+        let (rgb, _) = paint_menu(&content, &heroes, width, height);
+        let path = format!("{out}/heroes_{width}x{height}.png");
+        write_png(&path, &rgb, width, height);
+        println!("wrote {path}");
+    }
     let (rgb, _) = paint_menu(&content, &MenuShot::Pause { focus: 0, hero_id: hero }, 1920, 1080);
     let path = format!("{out}/pause_1920x1080.png");
     write_png(&path, &rgb, 1920, 1080);
