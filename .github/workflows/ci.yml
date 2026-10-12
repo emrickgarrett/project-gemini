@@ -2,10 +2,17 @@ name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -13,6 +20,7 @@ jobs:
         with:
           toolchain: 1.97.1
           targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
       - name: native client libraries
         run: |
           sudo apt-get update
@@ -69,4 +77,5 @@ jobs:
       - name: wasm webgl2
         run: cargo build -p gemini-client --target wasm32-unknown-unknown --profile wasm-release
       - name: wasm webgpu
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: cargo build -p gemini-client --target wasm32-unknown-unknown --profile wasm-release --features webgpu
