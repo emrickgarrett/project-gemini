@@ -9,8 +9,8 @@ accent_key = "hero_vex"
 max_hp = 100
 move_speed_mult = 1.0
 weapon = "pulse_rifle"
-# yaw 0 is the unrotated viewmodel. A non-zero yaw turns that posed rifle about Y.
-portrait = { mesh = "pulse_rifle", yaw_deg = 0.0, fit = 0.78 }
+# yaw 0 and pitch 0 are the unrotated viewmodel. The rifle's three-quarter is in the mesh.
+portrait = { mesh = "pulse_rifle", yaw_deg = 0.0, pitch_deg = 0.0, fit = 0.78 }
 ability = { id = "overdrive", cooldown = 20.0, cooldown_floor = 0.1, duration = 6.0, fire_rate = 0.35, infinite_magazine = true, kill_cd_refund = 1.0, desc = "6s: +35% fire rate, infinite magazine" }
 passive = "kills during overdrive refund 1s of cooldown"
 fantasy = "the all-rounder; easiest to pick up"
@@ -31,7 +31,8 @@ accent_key = "hero_nyra"
 max_hp = 90
 move_speed_mult = 1.05
 weapon = "arc_caster"        # chaining beam, short range
-portrait = { mesh = "gauntlet", yaw_deg = 12.0, fit = 0.78 }
+# Three-quarter, like the rifle: yaw about 30, pitched so the top faces the camera.
+portrait = { mesh = "gauntlet", yaw_deg = 30.0, pitch_deg = 12.0, fit = 0.78 }
 ability = { id = "mend_field", cooldown = 24.0, infinite_magazine = false, desc = "drop a 6m field for 8s: heals 8 hp/s, revives inside it take 50% less time" }
 passive = "revives teammates 25% faster"
 fantasy = "keeps the squad standing; solo she self-heals in her own field"
@@ -44,7 +45,7 @@ accent_key = "hero_brakk"
 max_hp = 140
 move_speed_mult = 0.9
 weapon = "scatter_cannon"    # shotgun, big knockback
-portrait = { mesh = "slab_shield", yaw_deg = -6.0, fit = 0.78 }
+portrait = { mesh = "slab_shield", yaw_deg = 30.0, pitch_deg = 12.0, fit = 0.78 }
 ability = { id = "bulwark", cooldown = 18.0, infinite_magazine = false, desc = "4s: frontal shield blocks all projectiles, then slams for 150 damage + knockback" }
 passive = "takes 15% less damage from melee"
 fantasy = "holds the chokepoint against brutes"
@@ -57,7 +58,7 @@ accent_key = "hero_kip"
 max_hp = 85
 move_speed_mult = 1.12
 weapon = "rail_needle"       # precision, pierces, slow fire
-portrait = { mesh = "marker_pistol", yaw_deg = 16.0, fit = 0.78 }
+portrait = { mesh = "marker_pistol", yaw_deg = 30.0, pitch_deg = 12.0, fit = 0.78 }
 ability = { id = "mark", cooldown = 16.0, infinite_magazine = false, desc = "ping a 15m area for 6s: marked bugs show weak points through walls and take +30% weak-point damage for the squad" }
 passive = "+50% jetpack fuel"
 fantasy = "spots and deletes spitters and boss weak points"

@@ -97,11 +97,11 @@ pub fn raster_parts(width: u32, height: u32, parts: &[(crate::MeshData, [f32; 4]
 
 /// First-person still. The camera sits at the origin looking down -Z, matching the overlay camera.
 pub fn raster_viewmodel(width: u32, height: u32, frame: &ViewmodelFrame) -> Vec<u8> {
-    raster_viewmodel_yaw(width, height, frame, 0.0)
+    raster_viewmodel_yaw(width, height, frame, 0.0, 0.0)
 }
 
-/// Same still, with the posed viewmodel yawed about Y. Zero yaw is the unrotated raster.
-pub fn raster_viewmodel_yaw(width: u32, height: u32, frame: &ViewmodelFrame, yaw_deg: f32) -> Vec<u8> {
+/// Same still, with the posed viewmodel turned. Zero yaw and pitch is the unrotated raster.
+pub fn raster_viewmodel_yaw(width: u32, height: u32, frame: &ViewmodelFrame, yaw_deg: f32, pitch_deg: f32) -> Vec<u8> {
     let vm = crate::viewmodel();
     let palette = palette_of();
     let shift = frame.offset;
@@ -116,9 +116,9 @@ pub fn raster_viewmodel_yaw(width: u32, height: u32, frame: &ViewmodelFrame, yaw
     parts.push((shifted(&vm.barrel, shift), barrel_color, frame.overdrive));
     parts.push((shifted(&vm.accent, shift), orange, true));
     parts.push((shifted(&vm.core, shift), palette("hero_teal"), true));
-    if yaw_deg != 0.0 {
+    if yaw_deg != 0.0 || pitch_deg != 0.0 {
         for (mesh, _, _) in &mut parts {
-            *mesh = crate::portrait::yaw_mesh(mesh, yaw_deg);
+            *mesh = crate::portrait::turn_mesh(mesh, yaw_deg, pitch_deg);
         }
     }
     let w = width.max(8);

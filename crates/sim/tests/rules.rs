@@ -2946,15 +2946,16 @@ fn warnings_and_infinite_magazine_fail_closed() {
 fn hero_portraits_fail_closed() {
     let content = Content::embedded();
     let expect = [
-        ("vex", "pulse_rifle", 0.0, 0.78),
-        ("nyra", "gauntlet", 12.0, 0.78),
-        ("brakk", "slab_shield", -6.0, 0.78),
-        ("kip", "marker_pistol", 16.0, 0.78),
+        ("vex", "pulse_rifle", 0.0, 0.0, 0.78),
+        ("nyra", "gauntlet", 30.0, 12.0, 0.78),
+        ("brakk", "slab_shield", 30.0, 12.0, 0.78),
+        ("kip", "marker_pistol", 30.0, 12.0, 0.78),
     ];
-    for (id, mesh, yaw, fit) in expect {
+    for (id, mesh, yaw, pitch, fit) in expect {
         let card = content.heroes.iter().find(|hero| hero.id == id).unwrap();
         assert_eq!(card.portrait.mesh, mesh);
         assert!((card.portrait.yaw_deg - yaw).abs() < 1e-4, "{id}");
+        assert!((card.portrait.pitch_deg - pitch).abs() < 1e-4, "{id}");
         assert!((card.portrait.fit - fit).abs() < 1e-4, "{id}");
     }
     assert!((content.ui.layout.locked_accent_mix - 0.35).abs() < 1e-4);
@@ -2965,7 +2966,11 @@ fn hero_portraits_fail_closed() {
             ..sources_with(&base, base.coop)
         })
     };
-    let missing = base.hero.replacen("portrait = { mesh = \"gauntlet\", yaw_deg = 12.0, fit = 0.78 }\n", "", 1);
+    let missing = base.hero.replacen(
+        "portrait = { mesh = \"gauntlet\", yaw_deg = 30.0, pitch_deg = 12.0, fit = 0.78 }\n",
+        "",
+        1,
+    );
     let err = load(&missing).expect_err("nyra portrait");
     assert!(err.contains("nyra"), "{err}");
     assert!(err.contains("portrait"), "{err}");
@@ -2973,6 +2978,14 @@ fn hero_portraits_fail_closed() {
     let err = load(&unknown).expect_err("unknown mesh");
     assert!(err.contains("kip"), "{err}");
     assert!(err.contains("laser_knife"), "{err}");
+    let steep = base.hero.replacen("pitch_deg = 12.0", "pitch_deg = 90.1", 1);
+    let err = load(&steep).expect_err("pitch past a quarter turn");
+    assert!(err.contains("nyra"), "{err}");
+    assert!(err.contains("pitch_deg"), "{err}");
+    let flipped = base.hero.replacen("pitch_deg = 0.0", "pitch_deg = -90.1", 1);
+    let err = load(&flipped).expect_err("pitch past a quarter turn");
+    assert!(err.contains("vex"), "{err}");
+    assert!(err.contains("[-90, 90]"), "{err}");
     let mix = base.ui.replacen("locked_accent_mix = 0.35", "locked_accent_mix = 1", 1);
     let err = Content::parse(&gemini_sim::content::Sources {
         ui: &mix,

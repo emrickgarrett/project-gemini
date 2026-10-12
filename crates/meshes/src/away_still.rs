@@ -159,7 +159,8 @@ fn blit_bug(rgb: &mut [u8], width: u32, height: u32, id: &str, origin_x: u32, or
     }
 }
 
-fn grade(r: u8, g: u8, b: u8, dim: f32, desat: f32, floor: f32) -> [u8; 3] {
+/// Away-screen grade. Locked hero cards use this same function so they share its gray.
+pub(crate) fn grade(r: u8, g: u8, b: u8, dim: f32, desat: f32, floor: f32) -> [u8; 3] {
     let rf = r as f32;
     let gf = g as f32;
     let bf = b as f32;

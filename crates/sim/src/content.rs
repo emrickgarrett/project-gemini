@@ -1268,6 +1268,7 @@ pub struct HeroCard {
 pub struct HeroPortrait {
     pub mesh: String,
     pub yaw_deg: f32,
+    pub pitch_deg: f32,
     pub fit: f32,
 }
 
@@ -1528,20 +1529,29 @@ fn load_portrait(row: &toml::map::Map<String, toml::Value>, id: &str) -> Result<
         .get("portrait")
         .and_then(|value| value.as_table())
         .ok_or_else(|| format!("characters.toml {id} is missing portrait"))?;
-    expect_keys(table, &["mesh", "yaw_deg", "fit"], &format!("characters.toml {id} portrait"))?;
+    expect_keys(
+        table,
+        &["mesh", "yaw_deg", "pitch_deg", "fit"],
+        &format!("characters.toml {id} portrait"),
+    )?;
     let mesh = req_str(table, "mesh", &format!("{id} portrait"))?.to_string();
     if mesh.is_empty() || !PORTRAIT_MESHES.contains(&mesh.as_str()) {
         return Err(format!("characters.toml {id} portrait mesh \"{mesh}\" is unknown"));
     }
     let yaw_deg = req_f32(table, "yaw_deg", &format!("{id} portrait"))?;
+    let pitch_deg = req_f32(table, "pitch_deg", &format!("{id} portrait"))?;
     let fit = req_f32(table, "fit", &format!("{id} portrait"))?;
     if !yaw_deg.is_finite() {
         return Err(format!("characters.toml {id} portrait yaw_deg must be finite"));
     }
+    // Pitch past a quarter turn flips the portrait. That is the out-of-range case.
+    if !pitch_deg.is_finite() || pitch_deg.abs() > 90.0 {
+        return Err(format!("characters.toml {id} portrait pitch_deg must be in [-90, 90]"));
+    }
     if !(fit > 0.0 && fit <= 1.0) {
         return Err(format!("characters.toml {id} portrait fit must be in (0, 1]"));
     }
-    Ok(HeroPortrait { mesh, yaw_deg, fit })
+    Ok(HeroPortrait { mesh, yaw_deg, pitch_deg, fit })
 }
 
 fn load_cosmetics(text: &str) -> Result<Cosmetics, String> {

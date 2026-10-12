@@ -540,7 +540,8 @@ fn paint_portrait(rgb: &mut [u8], content: &Content, frame: Frame, hero: &gemini
                 continue;
             }
             if !hero.owned {
-                px = locked_pixel(px, accent_px, content.ui.layout.locked_accent_mix);
+                let away = &content.presentation.hud.away;
+                px = locked_pixel(px, accent_px, content.ui.layout.locked_accent_mix, away.away_dim, away.away_desaturation, away.dim_floor);
             }
             put(rgb, frame.width, frame.height, dx + col, dy + row, px);
         }
@@ -595,17 +596,18 @@ fn portrait_raster(content: &Content, hero: &gemini_sim::content::HeroCard, rast
     if hero.portrait.mesh == "pulse_rifle" {
         let mut view = view_frame(content, hero);
         view.fov = portrait_fov(content, &view, hero.portrait.fit);
-        return raster_viewmodel_yaw(raster, raster, &view, hero.portrait.yaw_deg);
+        return raster_viewmodel_yaw(raster, raster, &view, hero.portrait.yaw_deg, hero.portrait.pitch_deg);
     }
     let built = crate::portrait::build(&hero.portrait.mesh).unwrap_or_else(|| panic!("unknown portrait mesh {}", hero.portrait.mesh));
-    let turned = crate::portrait::yaw(&built, hero.portrait.yaw_deg);
+    let turned = crate::portrait::turn(&built, hero.portrait.yaw_deg, hero.portrait.pitch_deg);
     let positions: Vec<[f32; 3]> = turned.iter().flat_map(|part| part.mesh.positions.iter().copied()).collect();
     let fov = mesh_fov(content, &positions, hero.portrait.fit);
     let accent = {
         let c = content.palette.key(&hero.accent_key);
         [c[0], c[1], c[2], 1.0]
     };
-    let body = content.palette.key("hero_cobalt");
+    // White so the key light stays in the mid grays. Cobalt grays down to near-black.
+    let body = content.palette.key("hero_white");
     let parts: Vec<(crate::MeshData, [f32; 4], bool)> = turned
         .iter()
         .map(|part| {
@@ -745,8 +747,8 @@ fn gray(px: [u8; 3]) -> [u8; 3] {
     [y, y, y]
 }
 
-fn locked_pixel(px: [u8; 3], accent: [u8; 3], mix: f32) -> [u8; 3] {
-    let body = gray(px);
+fn locked_pixel(px: [u8; 3], accent: [u8; 3], mix: f32, dim: f32, desat: f32, floor: f32) -> [u8; 3] {
+    let body = crate::away_still::grade(px[0], px[1], px[2], dim, desat, floor);
     if px == accent { lift(body, accent, mix) } else { body }
 }
 
@@ -918,7 +920,9 @@ mod tests {
             let id = hit.id.trim_start_matches("hero:");
             let hero = content.heroes.iter().find(|hero| hero.id == id).unwrap();
             let accent = round_bytes(&content, &hero.accent_key);
-            let mixed = lift(gray(accent), accent, content.ui.layout.locked_accent_mix);
+            let away = &content.presentation.hud.away;
+            let graded = crate::away_still::grade(accent[0], accent[1], accent[2], away.away_dim, away.away_desaturation, away.dim_floor);
+            let mixed = lift(graded, accent, content.ui.layout.locked_accent_mix);
             let mut glow = 0u32;
             let mut colored = 0u32;
             let inset = ((content.ui.layout.border_px * (720.0 / content.ui.layout.fit_height)).round() as i32).max(1);
@@ -947,12 +951,14 @@ mod tests {
         let content = Content::embedded();
         let hero = content.heroes.iter().find(|hero| hero.id == "vex").unwrap();
         assert_eq!(hero.portrait.yaw_deg, 0.0);
+        assert_eq!(hero.portrait.pitch_deg, 0.0);
         let raster = content.ui.portrait.raster;
         let painted = portrait_raster(&content, hero, raster);
         let mut view = view_frame(&content, hero);
         view.fov = portrait_fov(&content, &view, hero.portrait.fit);
         assert_eq!(painted, crate::preview::raster_viewmodel(raster, raster, &view));
-        assert_ne!(painted, raster_viewmodel_yaw(raster, raster, &view, 12.0));
+        assert_ne!(painted, raster_viewmodel_yaw(raster, raster, &view, 12.0, 0.0));
+        assert_ne!(painted, raster_viewmodel_yaw(raster, raster, &view, 0.0, -12.0));
     }
 
     #[test]
