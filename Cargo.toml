@@ -7,6 +7,7 @@ members = [
     "crates/server",
     "crates/client",
 ]
+default-members = ["crates/client"]
 
 [workspace.package]
 version = "0.1.0"

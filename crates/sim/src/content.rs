@@ -1159,6 +1159,11 @@ pub struct ArenaPickup {
 
 #[derive(Clone, Debug)]
 pub struct PerchRules {
+    pub perch_radius: f32,
+    pub perch_height_slack: f32,
+    pub climb_trigger_distance: f32,
+    pub climb_slide_rate: f32,
+    pub climb_target_radius: f32,
     pub flow_field_targets: String,
     pub all_perched_grace: f32,
     pub climb_speed_mult: f32,
@@ -1185,7 +1190,8 @@ impl Arena {
         self.ledges.iter().any(|ledge| {
             let dx = pos.x - ledge.pos.x;
             let dz = pos.z - ledge.pos.z;
-            dx * dx + dz * dz <= 1.44 && (pos.y - ledge.pos.y).abs() <= 0.45
+            let r = self.perch_rules.perch_radius;
+            dx * dx + dz * dz <= r * r && (pos.y - ledge.pos.y).abs() <= self.perch_rules.perch_height_slack
         })
     }
 
@@ -1330,7 +1336,8 @@ impl Arena {
         for ledge in &self.ledges {
             let dx = x - ledge.pos.x;
             let dz = z - ledge.pos.z;
-            if dx * dx + dz * dz > 1.44 {
+            let r = self.perch_rules.perch_radius;
+            if dx * dx + dz * dz > r * r {
                 continue;
             }
             let top = ledge.pos.y;
@@ -1590,6 +1597,11 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
     expect_keys(
         table,
         &[
+            "perch_radius",
+            "perch_height_slack",
+            "climb_trigger_distance",
+            "climb_slide_rate",
+            "climb_target_radius",
             "flow_field_targets",
             "all_perched_grace",
             "climb_speed_mult",
@@ -1606,6 +1618,11 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
     if flow_field_targets != "nearest_grounded_player" {
         return Err(format!("flow_field_targets \"{flow_field_targets}\" is unknown"));
     }
+    let perch_radius = num(table.get("perch_radius").unwrap(), "perch_radius")?;
+    let perch_height_slack = num(table.get("perch_height_slack").unwrap(), "perch_height_slack")?;
+    let climb_trigger_distance = num(table.get("climb_trigger_distance").unwrap(), "climb_trigger_distance")?;
+    let climb_slide_rate = num(table.get("climb_slide_rate").unwrap(), "climb_slide_rate")?;
+    let climb_target_radius = num(table.get("climb_target_radius").unwrap(), "climb_target_radius")?;
     let all_perched_grace = num(table.get("all_perched_grace").unwrap(), "all_perched_grace")?;
     let climb_speed_mult = num(table.get("climb_speed_mult").unwrap(), "climb_speed_mult")?;
     let budget_shift_to_spitters = num(table.get("budget_shift_to_spitters").unwrap(), "budget_shift_to_spitters")?;
@@ -1613,10 +1630,23 @@ fn load_perch_rules(value: &toml::Value) -> Result<PerchRules, String> {
         .get("fuel_regen_on_perch")
         .and_then(|v| v.as_bool())
         .ok_or_else(|| "fuel_regen_on_perch must be a bool".to_string())?;
-    if all_perched_grace < 0.0 || climb_speed_mult < 0.0 || !(0.0..=1.0).contains(&budget_shift_to_spitters) {
+    if perch_radius <= 0.0
+        || perch_height_slack < 0.0
+        || climb_trigger_distance <= 0.0
+        || climb_slide_rate < 0.0
+        || climb_target_radius <= 0.0
+        || all_perched_grace < 0.0
+        || climb_speed_mult < 0.0
+        || !(0.0..=1.0).contains(&budget_shift_to_spitters)
+    {
         return Err("perch_rules numbers are out of range".into());
     }
     Ok(PerchRules {
+        perch_radius,
+        perch_height_slack,
+        climb_trigger_distance,
+        climb_slide_rate,
+        climb_target_radius,
         flow_field_targets,
         all_perched_grace,
         climb_speed_mult,
@@ -1653,7 +1683,7 @@ pub struct CoopRules {
     pub multi_reviver_speedup: f32,
     pub bleedout_pause_while_reviving: bool,
     pub squad_wipe: String,
-    /// Authored only as `max N extra` on the revive speedup comment. Not a table key.
+    /// Extra revivers past the first that still add `multi_reviver_speedup`.
     pub max_extra_revivers: u32,
     pub currency_credit: String,
     pub leave_keeps_earned: bool,
@@ -1700,6 +1730,7 @@ fn load_coop(text: &str) -> Result<CoopRules, String> {
         revive,
         &[
             "multi_reviver_speedup",
+            "max_extra_revivers",
             "bleedout_pause_while_reviving",
             "squad_wipe",
         ],
@@ -1747,7 +1778,7 @@ fn load_coop(text: &str) -> Result<CoopRules, String> {
         multi_reviver_speedup: req_f32(revive, "multi_reviver_speedup", "coop.toml revive")?,
         bleedout_pause_while_reviving: req_bool(revive, "bleedout_pause_while_reviving", "coop.toml revive")?,
         squad_wipe,
-        max_extra_revivers: max_extra_revivers(text)?,
+        max_extra_revivers: req_u32(revive, "max_extra_revivers", "coop.toml revive")?,
         currency_credit,
         leave_keeps_earned: req_bool(currency, "leave_keeps_earned", "coop.toml currency_share")?,
         host_leave,
@@ -1800,26 +1831,6 @@ fn parse_choose_from(mode: &str) -> Result<u32, String> {
         return Err(format!("catchup_pick_mode {mode} needs at least one offer"));
     }
     Ok(count)
-}
-
-/// The extra-reviver cap is a comment on the speedup line (`max N extra`), not its own key.
-fn max_extra_revivers(text: &str) -> Result<u32, String> {
-    for line in text.lines() {
-        let Some(at) = line.find("max ") else {
-            continue;
-        };
-        let after = &line[at + 4..];
-        let digits: String = after.chars().take_while(|ch| ch.is_ascii_digit()).collect();
-        if digits.is_empty() {
-            continue;
-        }
-        if after[digits.len()..].trim_start().starts_with("extra") {
-            return digits
-                .parse()
-                .map_err(|_| "coop.toml revive max extra revivers is not a number".into());
-        }
-    }
-    Err("coop.toml revive comment is missing max N extra".into())
 }
 
 fn expect_keys(table: &toml::map::Map<String, toml::Value>, allowed: &[&str], what: &str) -> Result<(), String> {

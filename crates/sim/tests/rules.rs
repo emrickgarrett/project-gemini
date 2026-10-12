@@ -955,6 +955,7 @@ fn every_emitted_sound_resolves_to_a_mix_file() {
         "vent_warn".into(),
         "vent_burst".into(),
         "perch_climb_warn".into(),
+        "fuel_regen_paused".into(),
         content.bugs.feedback.weakpoint_hit.clone(),
     ];
     for (_, row) in content.bugs.rows() {
@@ -1231,6 +1232,17 @@ fn arena_01_vents_perches_and_pickups() {
     assert!((content.arena.perch_rules.climb_speed_mult - 0.5).abs() < 1e-4);
     assert!((content.arena.perch_rules.all_perched_grace - 8.0).abs() < 1e-4);
     assert!((content.arena.perch_rules.budget_shift_to_spitters - 0.3).abs() < 1e-4);
+    assert!((content.arena.perch_rules.perch_radius - 1.5).abs() < 1e-4);
+    assert!((content.arena.perch_rules.perch_height_slack - 0.45).abs() < 1e-4);
+    assert!((content.arena.perch_rules.climb_trigger_distance - 1.8).abs() < 1e-4);
+    assert!((content.arena.perch_rules.climb_slide_rate - 0.4).abs() < 1e-4);
+    assert!((content.arena.perch_rules.climb_target_radius - 2.0).abs() < 1e-4);
+    let tower = content.arena.ledges.iter().find(|ledge| ledge.id == "tower").unwrap().pos;
+    assert!(content.arena.on_perch(Vec3::new(tower.x + 1.4, tower.y, tower.z)));
+    assert!(content.arena.on_perch(Vec3::new(tower.x, tower.y + 0.4, tower.z)));
+    assert!(!content.arena.on_perch(Vec3::new(tower.x, tower.y + 0.5, tower.z)));
+    assert!((content.arena.support_y(tower.x + 1.3, tower.y, tower.z, 0.0) - tower.y).abs() < 1e-3);
+    assert!(content.arena.support_y(tower.x + 1.6, tower.y, tower.z, 0.0).abs() < 1e-3);
     assert!((content.controller.camera.eye_height - 1.62).abs() < 1e-4);
     assert!((content.controller.camera.crouch_eye - 1.02).abs() < 1e-4);
 
@@ -1259,6 +1271,26 @@ fn arena_01_vents_perches_and_pickups() {
             coop: base.coop,
         })
     };
+    for key in [
+        "perch_radius",
+        "perch_height_slack",
+        "climb_trigger_distance",
+        "climb_slide_rate",
+        "climb_target_radius",
+    ] {
+        let missing_key = include_str!("../../../content/arena_01.toml")
+            .lines()
+            .filter(|line| !line.trim_start().starts_with(&format!("{key} ")))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let err = parse(&missing_key).expect_err(key);
+        assert!(err.contains(key), "{err}");
+    }
+    for bad in ["climb_target_radius = 0.0", "climb_target_radius = -2.0"] {
+        let text = include_str!("../../../content/arena_01.toml").replacen("climb_target_radius = 2.0", bad, 1);
+        let err = parse(&text).expect_err(bad);
+        assert!(err.contains("out of range"), "{err}");
+    }
     let missing = include_str!("../../../content/arena_01.toml").replacen("telegraph = 1.5\n", "", 1);
     let err = parse(&missing).expect_err("missing telegraph");
     assert!(err.contains("telegraph"), "{err}");
@@ -1388,6 +1420,14 @@ fn coop_table_rejects_missing_keys() {
         .join("\n");
     let err = Content::parse(&sources_with(&base, &stripped)).expect_err("missing max_players");
     assert!(err.contains("max_players"), "{err}");
+    let stripped_extra = base
+        .coop
+        .lines()
+        .filter(|line| !line.contains("max_extra_revivers"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let err = Content::parse(&sources_with(&base, &stripped_extra)).expect_err("missing max_extra_revivers");
+    assert!(err.contains("max_extra_revivers"), "{err}");
 
     let unknown = format!("{}\n[extra]\nnope = 1\n", base.coop);
     let err = Content::parse(&sources_with(&base, &unknown)).expect_err("unknown table");
