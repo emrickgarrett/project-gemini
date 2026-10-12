@@ -6,6 +6,10 @@
 # A texel at `base_gray` is lifted to `base_light` (mid-gray) before the
 # model's base palette key. Hero dark tones are the hero_*_base keys.
 # `rim_strength` scales the fresnel on unmasked texels when a model has a rim key.
+# A weapon (`fit = "weapon"`) uses the cleaned mask as stored. Green or red at
+# or above `view_gun_mask_threshold` is the glow or the accent. The cleaned
+# PNGs are 0 or 255, so this does not pick up glb noise.
+# `view_gun_rim_strength` is that gun's fresnel, separate from `rim_strength`.
 # Overdrive gun emissive is `overdrive_emissive_key` scaled per channel.
 # The gains are HDR, so they are not hex colors.
 # Brood pod emissive is `pod_glow_key` times `pod_glow_base + glow * pod_glow_per_glow`.
@@ -15,6 +19,8 @@
 base_light = 0.5
 base_gray = 0.25
 rim_strength = 1.0
+view_gun_mask_threshold = 0.45
+view_gun_rim_strength = 0.35
 overdrive_emissive_key = "accent"
 overdrive_emissive_gain = [5.0, 2.2, 0.4]
 pod_glow_key = "swarmer_glow"

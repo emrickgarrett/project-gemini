@@ -1356,6 +1356,10 @@ pub struct CastLook {
     /// Meshy gray that `base_light` replaces. A texel of this value stays at `base_light`.
     pub base_gray: f32,
     pub rim_strength: f32,
+    /// Weapon grade. Compared against the cleaned mask, which is 0 or 255.
+    pub view_gun_mask_threshold: f32,
+    /// Fresnel on an unmasked weapon texel. Separate from `rim_strength`.
+    pub view_gun_rim_strength: f32,
     /// Palette key. Overdrive multiplies this color by `overdrive_emissive_gain`.
     pub overdrive_emissive_key: String,
     pub overdrive_emissive_gain: [f32; 3],
@@ -1936,6 +1940,8 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
             "base_light",
             "base_gray",
             "rim_strength",
+            "view_gun_mask_threshold",
+            "view_gun_rim_strength",
             "overdrive_emissive_key",
             "overdrive_emissive_gain",
             "pod_glow_key",
@@ -1959,6 +1965,14 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
     }
     if !(rim_strength >= 0.0 && rim_strength <= 1.0) {
         return Err("cast.toml rim_strength must be between 0 and 1".into());
+    }
+    let view_gun_mask_threshold = vis_f32(table, "view_gun_mask_threshold", "cast.toml")?;
+    let view_gun_rim_strength = vis_f32(table, "view_gun_rim_strength", "cast.toml")?;
+    if !(view_gun_mask_threshold > 0.0 && view_gun_mask_threshold < 1.0) {
+        return Err("cast.toml view_gun_mask_threshold must be between 0 and 1".into());
+    }
+    if !(view_gun_rim_strength >= 0.0 && view_gun_rim_strength <= 1.0) {
+        return Err("cast.toml view_gun_rim_strength must be between 0 and 1".into());
     }
     let overdrive_emissive_key = vis_str(table, "overdrive_emissive_key", "cast.toml")?.to_string();
     if palette.hex(&overdrive_emissive_key).is_none() {
@@ -1991,6 +2005,8 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
         base_light,
         base_gray,
         rim_strength,
+        view_gun_mask_threshold,
+        view_gun_rim_strength,
         overdrive_emissive_key,
         overdrive_emissive_gain,
         pod_glow_key,

@@ -32,7 +32,7 @@ pub fn raster_model(id: &str, width: u32, height: u32) -> Vec<u8> {
     let look = &content.cast;
     let mesh = crate::cast(id);
     // fit_weapon yaws a gun -90° about Y. The sheet rendered the raw gun, so the camera follows that yaw.
-    let yaw = if mesh.id.ends_with("_gun") {
+    let yaw = if mesh.fit == "weapon" {
         look.review_yaw_deg - 90.0
     } else {
         look.review_yaw_deg

@@ -939,6 +939,37 @@ fn weakpoint_hitboxes_overlap_their_glowing_parts() {
 }
 
 #[test]
+fn cast_hit_centers_stay_on_the_moved_anchors() {
+    use gemini_sim::content::EnemyKind;
+    let content = Content::embedded();
+    let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1.0e-4);
+
+    let spitter = content.bug(EnemyKind::Spitter);
+    let sac = spitter.hitbox.weak().expect("spitter sac");
+    assert!(near(sac.offset, [0.0, 0.74, -0.22]), "spitter sac {:?}", sac.offset);
+    assert!((sac.radius - 0.36).abs() < 1.0e-4, "spitter sac radius {}", sac.radius);
+
+    let brute = content.bug(EnemyKind::Brute);
+    let cracks = brute.hitbox.weak().expect("brute cracks");
+    assert!(near(cracks.offset, [0.0, 1.28, 0.15]), "brute cracks {:?}", cracks.offset);
+    assert!(
+        near(cracks.half_extents, [0.75, 0.50, 0.62]),
+        "brute cracks half {:?}",
+        cracks.half_extents
+    );
+
+    let brood = content.bug(EnemyKind::BroodMother);
+    let gland = brood.hitbox.weak().expect("brood gland");
+    assert!(near(gland.offset, [0.0, 1.50, 1.20]), "brood gland {:?}", gland.offset);
+    assert!((gland.radius - 0.50).abs() < 1.0e-4, "gland radius {}", gland.radius);
+    let pod = brood.visual.parts.iter().find(|part| part.name == "pod").expect("pod");
+    assert!((pod.ring_radius - 0.72).abs() < 1.0e-4, "pod ring {}", pod.ring_radius);
+    let sink = pod.sink.expect("pod sink");
+    assert!((sink - 0.88).abs() < 1.0e-4, "pod sink {sink}");
+    assert!((brood.hitbox.pod_radius().unwrap() - 0.65).abs() < 1.0e-4);
+}
+
+#[test]
 fn missing_weakpoint_anchor_fails_content_load() {
     let base = gemini_sim::content::embedded_sources();
     let bugs = include_str!("../../../content/bugs.toml");

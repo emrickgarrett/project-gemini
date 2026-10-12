@@ -627,7 +627,7 @@ mod tests {
             .iter()
             .map(|p| p[0].abs().max(p[1].abs()).max(p[2].abs()))
             .fold(0.0_f32, f32::max);
-        assert!((rad - 0.22).abs() < 0.02, "pod radius {rad}");
+        assert!((rad - 0.52).abs() < 0.02, "pod radius {rad}");
         let posed = pose(
             brood,
             AnimInput {

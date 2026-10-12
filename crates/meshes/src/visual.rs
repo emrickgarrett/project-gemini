@@ -814,12 +814,17 @@ fn add_cannon(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalo
     let rad = glow_radius(id, spec)?;
     let tip_gap = tail.tip_gap;
     let mut mesh = gem_mesh([rad, rad, rad * 0.92], dens);
-    // Barrel continues along the tail (-Y) and sits clear of the last segment's cap.
-    let mut nozzle = point_z(rad * 1.05, rad * 0.55, rad * 0.32, dens.sides.max(5));
+    // The barrel stays inside the glow sphere, so the mesh is no bigger than visual_radius.
+    let tip_r = rad * 0.32;
+    let along = (rad * rad - tip_r * tip_r).max(0.0).sqrt();
+    let barrel = (along * 0.45).max(0.04);
+    let mut nozzle = point_z(barrel, rad * 0.42, tip_r, dens.sides.max(5));
     geom::rotate_x(&mut nozzle, std::f32::consts::FRAC_PI_2);
-    geom::translate(&mut nozzle, [0.0, -(rad + tip_gap), 0.0]);
+    geom::translate(&mut nozzle, [0.0, barrel - along, 0.0]);
     geom::append(&mut mesh, &nozzle);
-    let pos = [0.0, -(len * tail.segment_scale + rad + tip_gap), 0.0];
+    // The hit center uses the authored size, not the glow radius. Keep the gem on that center.
+    let place_r = spec.size.first().copied().filter(|n| *n > 0.0).unwrap_or(rad * 2.0) * 0.5;
+    let pos = [0.0, -(len * tail.segment_scale + place_r + tip_gap), 0.0];
     parts.push(Part {
         name: "cannon".into(),
         parent: Some(parent),

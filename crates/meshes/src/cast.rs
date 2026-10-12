@@ -23,8 +23,8 @@ pub struct CastMesh {
     pub indices: Vec<u32>,
     pub base: Tex,
     pub mask: Tex,
-    /// Glb mask. The approved first-person gun still uses this, not the cleaned PNG.
-    source_mask: Tex,
+    /// `weapon`, `hero`, `hitbox`, or `shield`. A weapon uses the view-gun grade.
+    pub fit: String,
     pub base_key: String,
     pub accent_key: String,
     pub glow_key: String,
@@ -159,11 +159,6 @@ fn fit_model(bytes: &[u8], spec: &CastModel, content: &Content) -> Result<CastMe
     if spec.yaw_deg != 0.0 && spec.fit != "weapon" {
         yaw_about_center(&mut decoded.positions, &mut decoded.normals, spec.yaw_deg);
     }
-    let source_mask = Tex {
-        w: decoded.mask.w,
-        h: decoded.mask.h,
-        rgba: decoded.mask.rgba.clone(),
-    };
     decoded.mask = decode_mask(mask_png(&spec.id)?, &spec.id)?;
     Ok(CastMesh {
         id: spec.id.clone(),
@@ -173,7 +168,7 @@ fn fit_model(bytes: &[u8], spec: &CastModel, content: &Content) -> Result<CastMe
         indices: decoded.indices,
         base: decoded.base,
         mask: decoded.mask,
-        source_mask,
+        fit: spec.fit.clone(),
         base_key: spec.base.clone(),
         accent_key: spec.accent.clone(),
         glow_key: spec.glow.clone(),
@@ -537,9 +532,9 @@ pub fn bake_textures(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> (u3
         [c[0], c[1], c[2], 1.0]
     };
     let (base_light, base_gray, rim_strength) = tint_constants();
+    let (view_threshold, view_rim) = view_gun_grade();
     // The baked albedo has no view. Rim is the fresnel in the still raster.
-    // First-person guns keep the approved grade so the Vex still does not move.
-    let view_gun = mesh.id.ends_with("_gun");
+    let view_gun = mesh.fit == "weapon";
     let fresnel = 0.0;
     let mut albedo = vec![0u8; (w * h * 4) as usize];
     let mut emit = vec![0u8; (w * h * 4) as usize];
@@ -548,9 +543,9 @@ pub fn bake_textures(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> (u3
             let u = if w > 1 { x as f32 / (w as f32 - 1.0) } else { 0.0 };
             let v = if h > 1 { 1.0 - (y as f32 / (h as f32 - 1.0)) } else { 0.0 };
             let base = sample(&mesh.base, [u, v]);
-            let mask = sample(if view_gun { &mesh.source_mask } else { &mesh.mask }, [u, v]);
+            let mask = sample(&mesh.mask, [u, v]);
             let color = if view_gun {
-                tint_view_gun(base, mask, base_c, accent, glow, rim, 1.0, fresnel)
+                tint_view_gun(base, mask, base_c, accent, glow, rim, 1.0, fresnel, view_threshold, view_rim)
             } else {
                 tint_texel(base, mask, base_c, accent, glow, rim, 1.0, fresnel, base_light, base_gray, rim_strength)
             };
@@ -559,7 +554,7 @@ pub fn bake_textures(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> (u3
             albedo[i + 1] = (color[1].clamp(0.0, 1.0) * 255.0).round() as u8;
             albedo[i + 2] = (color[2].clamp(0.0, 1.0) * 255.0).round() as u8;
             albedo[i + 3] = 255;
-            if (!view_gun && mask[1] > 0.0) || (view_gun && mask[1] >= VIEW_MASK_THRESHOLD) {
+            if (!view_gun && mask[1] > 0.0) || (view_gun && mask[1] >= view_threshold) {
                 emit[i] = (glow[0].clamp(0.0, 1.0) * 255.0).round() as u8;
                 emit[i + 1] = (glow[1].clamp(0.0, 1.0) * 255.0).round() as u8;
                 emit[i + 2] = (glow[2].clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -606,10 +601,8 @@ pub fn tint_texel(
     color
 }
 
-/// Approved first-person gun grade. Not a cast.toml key. The #12 still was painted this way.
-const VIEW_MASK_THRESHOLD: f32 = 0.45;
-const VIEW_RIM_STRENGTH: f32 = 0.35;
-
+/// First-person gun. `threshold` and `rim_strength` come from cast.toml.
+/// The mask is the cleaned PNG. On a 0-or-255 mask the threshold matches a solid texel.
 fn tint_view_gun(
     base: [f32; 3],
     mask: [f32; 3],
@@ -619,13 +612,15 @@ fn tint_view_gun(
     rim: [f32; 4],
     shade: f32,
     fresnel: f32,
+    threshold: f32,
+    rim_strength: f32,
 ) -> [f32; 3] {
     let r = mask[0];
     let g = mask[1];
-    if g >= VIEW_MASK_THRESHOLD {
+    if g >= threshold {
         return [glow[0], glow[1], glow[2]];
     }
-    if r >= VIEW_MASK_THRESHOLD {
+    if r >= threshold {
         return [accent[0], accent[1], accent[2]];
     }
     let unmasked = (1.0 - r - g).clamp(0.0, 1.0);
@@ -635,7 +630,7 @@ fn tint_view_gun(
         base[2] * base_c[2] * shade * unmasked + base[2] * accent[2] * r + glow[2] * g,
     ];
     if rim[3] > 0.0 || rim[0] + rim[1] + rim[2] > 0.0 {
-        let k = fresnel * VIEW_RIM_STRENGTH * unmasked;
+        let k = fresnel * rim_strength * unmasked;
         color[0] += rim[0] * k;
         color[1] += rim[1] * k;
         color[2] += rim[2] * k;
@@ -700,7 +695,7 @@ pub fn paint(
     );
 }
 
-/// First-person gun. Uses the glb mask and the approved grade, not the cleaned review tint.
+/// First-person gun. Uses the cleaned mask and the view-gun grade from cast.toml.
 pub fn paint_approved_gun(
     color: &mut [u8],
     depth: &mut [f32],
@@ -737,11 +732,11 @@ pub fn paint_approved_gun(
         base_light,
         base_gray,
         rim_strength,
-        true,
+        mesh.fit == "weapon",
     );
 }
 
-/// Same raster as `paint`, plus a per-pixel tag: 1 when the winning fragment's mask is on.
+/// Same raster as `paint`, plus a per-pixel tag. 2 is mask green, 1 is mask red.
 #[cfg(test)]
 fn paint_tagged(
     color: &mut [u8],
@@ -844,6 +839,14 @@ fn tint_constants() -> (f32, f32, f32) {
     })
 }
 
+fn view_gun_grade() -> (f32, f32) {
+    static CELL: OnceLock<(f32, f32)> = OnceLock::new();
+    *CELL.get_or_init(|| {
+        let look = &Content::embedded().cast;
+        (look.view_gun_mask_threshold, look.view_gun_rim_strength)
+    })
+}
+
 fn fill_textured(
     color: &mut [u8],
     depth: &mut [f32],
@@ -895,9 +898,9 @@ fn fill_textured(
                 uvs[0][0] * w0 + uvs[1][0] * w1 + uvs[2][0] * w2,
                 uvs[0][1] * w0 + uvs[1][1] * w1 + uvs[2][1] * w2,
             ];
-            let mask = sample(if view_gun { &mesh.source_mask } else { &mesh.mask }, uv);
+            let mask = sample(&mesh.mask, uv);
             if let Some(tags) = tags.as_deref_mut() {
-                tags[idx] = if mask[0] > 0.0 || mask[1] > 0.0 { 1 } else { 0 };
+                tags[idx] = if mask[1] > 0.0 { 2 } else if mask[0] > 0.0 { 1 } else { 0 };
             }
             let rgb = if silhouette {
                 [0x29, 0x29, 0x29]
@@ -919,9 +922,10 @@ fn fill_textured(
                 let nd = norm(n);
                 let facing = (nd[0] * view[0] + nd[1] * view[1] + nd[2] * view[2]).clamp(0.0, 1.0);
                 let fresnel = (1.0 - facing).powf(2.0);
-                let sampled = sample(if view_gun { &mesh.source_mask } else { &mesh.mask }, uv);
+                let sampled = sample(&mesh.mask, uv);
                 let texel = if view_gun {
-                    tint_view_gun(sample(&mesh.base, uv), sampled, base_c, accent, glow, rim, shade, fresnel)
+                    let (threshold, view_rim) = view_gun_grade();
+                    tint_view_gun(sample(&mesh.base, uv), sampled, base_c, accent, glow, rim, shade, fresnel, threshold, view_rim)
                 } else {
                     tint_texel(
                         sample(&mesh.base, uv),
@@ -1106,6 +1110,7 @@ mod tests {
         let mut table = vec![
             "id | mesh min | mesh max | hitbox | inside | weak glow".to_string(),
         ];
+        let mut gaps: Vec<(String, String, [f32; 3], f32)> = Vec::new();
         for (id, row) in content.bugs.rows() {
             let mesh = cast(id);
             let hit = hit_bounds(&row.hitbox.body);
@@ -1117,6 +1122,12 @@ mod tests {
             let posed = rest_pose(visual);
             let mut glow = Vec::new();
             for (slot, shape) in row.hitbox.anchored() {
+                gaps.push((
+                    id.to_string(),
+                    slot.to_string(),
+                    shape.offset,
+                    surface_gap(&mesh.positions, &mesh.indices, shape.offset),
+                ));
                 glow.push(glow_sits_on_hit(id, visual, &posed, slot, shape));
             }
             if let Some(radius) = row.hitbox.pod_radius() {
@@ -1138,9 +1149,19 @@ mod tests {
                         "{id} {name} mesh radius {mesh_r:.3} is not the content visual radius {authored:.3}"
                     );
                     assert!(
+                        authored + 1.0e-3 >= 0.70 * radius,
+                        "{id} {name} visual radius {authored:.3} is under 70% of the hit radius {radius:.3}"
+                    );
+                    assert!(
                         mesh_r <= radius + 1.0e-3,
                         "{id} {name} glow radius {mesh_r:.3} is outside the pod hit {radius:.3}"
                     );
+                    gaps.push((
+                        id.to_string(),
+                        name.clone(),
+                        place.offset,
+                        surface_gap(&mesh.positions, &mesh.indices, place.offset),
+                    ));
                     glow.push(format!(
                         "{name} center ({:.2},{:.2},{:.2}) r {:.2} inside hit r {radius:.2}",
                         center[0], center[1], center[2], mesh_r
@@ -1153,6 +1174,16 @@ mod tests {
                 mn[0], mn[1], mn[2], mx[0], mx[1], mx[2], shape_label(&row.hitbox.body)
             ));
         }
+        let mut missed = Vec::new();
+        for (id, slot, center, gap) in &gaps {
+            eprintln!("{id} {slot} center {center:?} surface gap {gap:.3}");
+            if *gap > 0.05 {
+                missed.push(format!(
+                    "{id} {slot} center {center:?} is {gap:.3} off the cast surface"
+                ));
+            }
+        }
+        assert!(missed.is_empty(), "hit centers off the cast:\n{}", missed.join("\n"));
         let player_r = content.combat.hit_radius.player;
         let eye = content.controller.camera.eye_height;
         let sphere_y = eye * 0.5;
@@ -1250,10 +1281,14 @@ mod tests {
         assert!(hit.overlaps(glow), "{id} {slot} glow {glow:?} misses the hit {hit:?}");
         let authored = content_visual_radius(id, name);
         assert!(authored > 0.0, "{id} {name} glow is missing visual_radius");
+        let fit_r = glow_fit_radius(shape);
         assert!(
-            authored <= shape.bounding_radius() + 1.0e-3,
-            "{id} {slot} visual radius {authored:.3} is larger than the hit {}",
-            shape.bounding_radius()
+            authored + 1.0e-3 >= 0.70 * fit_r,
+            "{id} {slot} visual radius {authored:.3} is under 70% of the hit radius {fit_r:.3}"
+        );
+        assert!(
+            authored <= fit_r + 1.0e-3,
+            "{id} {slot} visual radius {authored:.3} is larger than the hit radius {fit_r:.3}"
         );
         for p in &part.mesh.positions {
             let p = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
@@ -1291,6 +1326,80 @@ mod tests {
             }
             _ => (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() <= shape.radius + 1.0e-3,
         }
+    }
+
+    /// Largest sphere centered on the hit that stays inside the zone.
+    fn glow_fit_radius(shape: &gemini_sim::bugs::ShapeDef) -> f32 {
+        match shape.shape.as_str() {
+            "box" => shape.half_extents[0].min(shape.half_extents[1]).min(shape.half_extents[2]),
+            _ => shape.radius,
+        }
+    }
+
+    fn surface_gap(positions: &[[f32; 3]], indices: &[u32], point: [f32; 3]) -> f32 {
+        let mut best = f32::MAX;
+        for tri in indices.chunks(3) {
+            if tri.len() < 3 {
+                continue;
+            }
+            let d = dist_point_triangle(
+                point,
+                positions[tri[0] as usize],
+                positions[tri[1] as usize],
+                positions[tri[2] as usize],
+            );
+            if d < best {
+                best = d;
+            }
+        }
+        best
+    }
+
+    fn dist_point_triangle(p: [f32; 3], a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> f32 {
+        let ab = sub(b, a);
+        let ac = sub(c, a);
+        let ap = sub(p, a);
+        let d1 = dot3(ab, ap);
+        let d2 = dot3(ac, ap);
+        if d1 <= 0.0 && d2 <= 0.0 {
+            return dist(p, a);
+        }
+        let bp = sub(p, b);
+        let d3 = dot3(ab, bp);
+        let d4 = dot3(ac, bp);
+        if d3 >= 0.0 && d4 <= d3 {
+            return dist(p, b);
+        }
+        let vc = d1 * d4 - d3 * d2;
+        if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+            let v = d1 / (d1 - d3);
+            return dist(p, [a[0] + ab[0] * v, a[1] + ab[1] * v, a[2] + ab[2] * v]);
+        }
+        let cp = sub(p, c);
+        let d5 = dot3(ab, cp);
+        let d6 = dot3(ac, cp);
+        if d6 >= 0.0 && d5 <= d6 {
+            return dist(p, c);
+        }
+        let vb = d5 * d2 - d1 * d6;
+        if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+            let w = d2 / (d2 - d6);
+            return dist(p, [a[0] + ac[0] * w, a[1] + ac[1] * w, a[2] + ac[2] * w]);
+        }
+        let va = d3 * d6 - d5 * d4;
+        if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+            let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+            let bc = sub(c, b);
+            return dist(p, [b[0] + bc[0] * w, b[1] + bc[1] * w, b[2] + bc[2] * w]);
+        }
+        let denom = 1.0 / (va + vb + vc);
+        let v = vb * denom;
+        let w = vc * denom;
+        dist(p, [a[0] + ab[0] * v + ac[0] * w, a[1] + ab[1] * v + ac[1] * w, a[2] + ab[2] * v + ac[2] * w])
+    }
+
+    fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
+        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
     }
 
     fn content_visual_radius(id: &str, name: &str) -> f32 {
@@ -1339,8 +1448,13 @@ mod tests {
         assert!((look.base_light - 0.5).abs() < 1.0e-6);
         assert!((look.base_gray - 0.25).abs() < 1.0e-6);
         assert!((look.rim_strength - 1.0).abs() < 1.0e-6);
+        assert!((look.view_gun_mask_threshold - 0.45).abs() < 1.0e-6);
+        assert!((look.view_gun_rim_strength - 0.35).abs() < 1.0e-6);
         let text = include_str!("../../../content/cast.toml");
-        assert!(!text.contains("mask_threshold"), "mask_threshold is not a cast key");
+        assert!(
+            !text.lines().any(|line| line.trim_start().starts_with("mask_threshold")),
+            "mask_threshold is not a cast key"
+        );
         let base = [look.base_gray, look.base_gray, look.base_gray];
         let accent = [1.0, 0.0, 0.0, 1.0];
         let glow = [0.0, 1.0, 0.0, 1.0];
@@ -1488,7 +1602,9 @@ mod tests {
                     let dy = y - cy;
                     dx * dx + dy * dy <= r * r
                 });
-                if on_glow || tags[i] != 0 {
+                // Green is the acid glow on the mesh. Red on the brute is a speck, not trim.
+                let mask_exempt = tags[i] == 2 || (id != "brute" && tags[i] == 1);
+                if on_glow || mask_exempt {
                     continue;
                 }
                 body += 1;

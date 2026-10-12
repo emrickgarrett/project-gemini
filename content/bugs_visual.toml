@@ -2,7 +2,8 @@
 # `file` is under assets/. A missing or unknown file fails at load.
 # `triangles` and `bytes` are the budgets. `fit = "hitbox"` scales the mesh
 # into that bug's body hitbox. Colors are palette.toml keys.
-# Red in the mask uses `accent` (magenta). Green uses `glow` (acid, emissive).
+# Red in the mask uses `accent`. Green uses `glow` (acid, emissive).
+# The brute mask has no red. Its crack color was a scatter of specks; the crack is the emissive part.
 
 [[model]]
 id = "swarmer"
