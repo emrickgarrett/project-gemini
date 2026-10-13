@@ -1607,16 +1607,16 @@ mod tests {
     #[test]
     fn a_missing_or_undeclared_grip_root_fails_the_load() {
         let gun = model_bytes("vex_gun").unwrap();
-        let err = decode_glb(gun, &model_spec("swarmer")).expect_err("bug bytes are not a gun");
+        let err = must_err(decode_glb(gun, &model_spec("swarmer")), "bug bytes are not a gun");
         assert!(err.contains("swarmer") || err.contains("grip") || err.contains("primitive"), "{err}");
         let spec = model_spec("vex_gun");
         let mut bare = spec.clone();
         bare.grip_root = false;
-        let err = decode_glb(gun, &bare).expect_err("undeclared grip");
+        let err = must_err(decode_glb(gun, &bare), "undeclared grip");
         assert!(err.contains("grip_root"), "{err}");
         let mut body = model_spec("vex_body");
         body.grip_root = true;
-        let err = decode_glb(model_bytes("vex_body").unwrap(), &body).expect_err("body has no grip");
+        let err = must_err(decode_glb(model_bytes("vex_body").unwrap(), &body), "body has no grip");
         assert!(err.contains("missing a grip root"), "{err}");
     }
 
@@ -1687,7 +1687,14 @@ mod tests {
             .unwrap_or_else(|| panic!("{id}"))
     }
 
-    fn glb_parts(bytes: &[u8], id: &str) -> (serde_json::Value, &[u8]) {
+    fn must_err(result: Result<RawMesh, String>, what: &str) -> String {
+        match result {
+            Err(err) => err,
+            Ok(_) => panic!("{what}"),
+        }
+    }
+
+    fn glb_parts<'a>(bytes: &'a [u8], id: &str) -> (serde_json::Value, &'a [u8]) {
         let json_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
         let json_end = 20 + json_len;
         let doc: serde_json::Value = serde_json::from_slice(&bytes[20..json_end]).unwrap_or_else(|err| panic!("{id} {err}"));
