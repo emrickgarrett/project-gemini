@@ -77,7 +77,6 @@ fn install_match(app: &mut App) {
                     audio::sync_bed,
                     audio::sync_crowd,
                     world::sync,
-                    world::sync_vent_tells,
                     world::sync_viewmodel,
                     world::camera,
                     world::grade,

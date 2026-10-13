@@ -280,31 +280,6 @@ pub struct PendingVent {
     pub left: f32,
 }
 
-/// A vent telegraph the client draws. Built from pending vents, never from the voice list.
-#[derive(Clone, Debug, PartialEq)]
-pub struct VentTell {
-    pub vent: u8,
-    pub left: f32,
-    pub pos: Vec3,
-}
-
-pub fn vent_tells(content: &Content, pending: &[PendingVent]) -> Result<Vec<VentTell>, String> {
-    let mut tells = Vec::with_capacity(pending.len());
-    for item in pending {
-        let vent = content
-            .arena
-            .vents
-            .get(item.vent as usize)
-            .ok_or_else(|| format!("pending vent {} has no arena vent", item.vent))?;
-        tells.push(VentTell {
-            vent: item.vent,
-            left: item.left,
-            pos: vent.pos,
-        });
-    }
-    Ok(tells)
-}
-
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Team {
     Player,

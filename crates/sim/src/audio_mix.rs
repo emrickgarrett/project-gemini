@@ -246,17 +246,19 @@ fn row_id(audio: &AudioTable, id: &str) -> String {
         .clone()
 }
 
-fn budget_voices(sfx: &[SfxDef], keep: impl Fn(&SfxDef) -> bool) -> u32 {
+fn budget_voices(sfx: &[SfxDef], keep: impl Fn(&SfxDef) -> bool) -> Result<u32, String> {
     let mut seen = std::collections::BTreeSet::new();
     let mut sum = 0u32;
     for row in sfx {
         if !keep(row) || !seen.insert(row.row_id.clone()) {
             continue;
         }
-        let canonical = sfx.iter().find(|item| item.id == row.row_id).unwrap_or(row);
+        let canonical = sfx.iter().find(|item| item.id == row.row_id).ok_or_else(|| {
+            format!("alias {} names missing source row {}", row.id, row.row_id)
+        })?;
         sum += canonical.max_instances;
     }
-    sum
+    Ok(sum)
 }
 
 fn is_player_step(audio: &AudioTable, id: &str) -> bool {
@@ -464,8 +466,8 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
     if !(warning_fade > 0.0) {
         return Err("warning_fade must be > 0".into());
     }
-    let warning_voices = budget_voices(&sfx, |row| row.is_warning);
-    let crowd_loops = budget_voices(&sfx, |row| row.crowd && row.looped);
+    let warning_voices = budget_voices(&sfx, |row| row.is_warning)?;
+    let crowd_loops = budget_voices(&sfx, |row| row.crowd && row.looped)?;
     let used = warning_voices as usize + crowd_loops as usize + hit_reserve;
     if used > voice_cap {
         return Err(format!(
@@ -816,7 +818,7 @@ flat = true
         }
         let free = audio.voice_cap - pick.voices.len();
         assert!(free >= audio.hit_reserve, "free {free}");
-        let crowd = super::budget_voices(&audio.sfx, |row| row.crowd && row.looped);
+        let crowd = super::budget_voices(&audio.sfx, |row| row.crowd && row.looped).expect("crowd loops");
         assert_eq!(
             warning_sum as usize + crowd as usize + audio.hit_reserve,
             audio.voice_cap
@@ -888,6 +890,36 @@ flat = true
             .join("\n");
         let err = load_mix(&zero_fade).expect_err("zero warning_fade");
         assert!(err.contains("warning_fade"), "{err}");
+    }
+
+    fn stub_row(id: &str, row_id: &str, max_instances: u32) -> crate::content::SfxDef {
+        crate::content::SfxDef {
+            id: id.into(),
+            row_id: row_id.into(),
+            path: String::new(),
+            loudness: 1.0,
+            volume: 1.0,
+            crowd: false,
+            critical: false,
+            max_instances,
+            looped: false,
+            pitch_semitones: 0.0,
+            sync_at: None,
+            category_ui: false,
+            stealable: false,
+            is_warning: true,
+            flat: false,
+            priority: 100,
+            category: "enemy".into(),
+        }
+    }
+
+    #[test]
+    fn a_missing_alias_source_row_fails_the_budget() {
+        let alias = stub_row("downed", "player_downed", 2);
+        let err = super::budget_voices(&[alias], |row| row.is_warning).expect_err("missing source");
+        assert!(err.contains("alias downed"), "{err}");
+        assert!(err.contains("player_downed"), "{err}");
     }
 }
 
