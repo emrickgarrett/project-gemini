@@ -302,7 +302,8 @@ pub fn scene(
         .find(|model| model.id == gun_id)
         .unwrap_or_else(|| panic!("{gun_id} has no cast record"));
     let gun_view = gun_model.view;
-    let grip = Transform::from_xyz(offset[0] + gun_view[0], offset[1] + gun_view[1], offset[2] + gun_view[2]);
+    let grip = Transform::from_xyz(offset[0] + gun_view[0], offset[1] + gun_view[1], offset[2] + gun_view[2])
+        .with_rotation(Quat::from_rotation_x(gun_model.view_pitch_deg.to_radians()));
     let mut gun_hot_src = materials
         .get(&gun_idle)
         .cloned()

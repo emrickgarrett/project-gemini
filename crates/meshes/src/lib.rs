@@ -105,13 +105,14 @@ pub fn muzzle_local() -> [f32; 3] {
     let gun = cast("vex_gun");
     let tip = muzzle_tip(gun);
     let content = gemini_sim::content::Content::embedded();
-    let view = content
+    let spec = content
         .models
         .iter()
         .find(|model| model.id == "vex_gun")
-        .unwrap_or_else(|| panic!("vex_gun has no cast record"))
-        .view;
-    [view[0] + tip[0], view[1] + tip[1], view[2] + tip[2]]
+        .unwrap_or_else(|| panic!("vex_gun has no cast record"));
+    let (s, c) = spec.view_pitch_deg.to_radians().sin_cos();
+    let pitched = [tip[0], c * tip[1] - s * tip[2], s * tip[1] + c * tip[2]];
+    [spec.view[0] + pitched[0], spec.view[1] + pitched[1], spec.view[2] + pitched[2]]
 }
 
 /// Round muzzle glow, centered on the origin. Scale it by the radius from characters.toml.
@@ -434,7 +435,7 @@ mod tests {
         assert!(near(gland.rest_pos, [-0.01607708, 1.45470980, 1.18440960], 0.02));
         assert!(gland.emissive);
         let core = bug("hive_tyrant").parts.iter().find(|p| p.name == "core").expect("core");
-        assert!(near(core.rest_pos, [0.04576531, 2.95827794, 0.92303598], 0.02));
+        assert!(near(core.rest_pos, [-0.03506386, 2.3284526, 0.77563494], 0.02));
         assert!(core.emissive);
         let armor = bug("hive_tyrant").parts.iter().find(|p| p.name == "armor").expect("armor");
         assert!(matches!(armor.gate, Gate::PhaseMax(1)));

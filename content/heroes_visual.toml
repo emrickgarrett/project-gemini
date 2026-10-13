@@ -224,7 +224,8 @@ size = 0.78
 yaw_deg = 180.0
 at = [0.34, 1.08, 0.26]
 grip = [1.0, 0.0, 0.0]
-view = [0.10, -0.05, -0.22]
+view = [0.10, 0.00, -0.32]
+view_pitch_deg = 12.0
 
 [[model]]
 id = "nyra_body"
@@ -280,6 +281,7 @@ yaw_deg = 180.0
 at = [0.26, 1.02, 0.22]
 grip = [1.0, 0.0, 0.0]
 view = [0.08, -0.04, -0.20]
+view_pitch_deg = 0.0
 
 [[model]]
 id = "brakk_body"
@@ -335,6 +337,7 @@ yaw_deg = 180.0
 at = [0.46, 1.08, 0.28]
 grip = [1.0, 0.0, 0.0]
 view = [0.12, -0.06, -0.24]
+view_pitch_deg = 0.0
 
 [[model]]
 id = "brakk_shield"
@@ -415,3 +418,4 @@ yaw_deg = 180.0
 at = [0.26, 0.98, 0.20]
 grip = [1.0, 0.0, 0.0]
 view = [0.08, -0.04, -0.22]
+view_pitch_deg = 0.0

@@ -1364,6 +1364,9 @@ pub struct CastModel {
     pub at: [f32; 3],
     pub grip: [f32; 3],
     pub view: [f32; 3],
+    /// Pitch of a weapon around its grip, in degrees, before `viewmodel_offset`.
+    /// Positive raises the muzzle. Bodies and bugs stay at 0.
+    pub view_pitch_deg: f32,
     /// Stock panel UV on TEXCOORD_0. `v = 0` is the top row. Weapons only.
     pub stock_uv: Option<[f32; 2]>,
     /// `primary` or `secondary`. Empty when this model has no stock point.
@@ -1870,7 +1873,7 @@ fn load_model_rows(
             keys.push("glow");
         }
         if fit_peek == "weapon" {
-            keys.extend(["hero", "stock_uv", "stock_channel", "rail_uv", "rail_channel"]);
+            keys.extend(["hero", "stock_uv", "stock_channel", "rail_uv", "rail_channel", "view_pitch_deg"]);
         }
         expect_keys(map, &keys, &format!("{what} model"))?;
         let id = vis_str(map, "id", &format!("{what} model"))?.to_string();
@@ -1978,6 +1981,15 @@ fn load_model_rows(
         } else {
             (None, String::new(), None, String::new())
         };
+        let view_pitch_deg = if fit == "weapon" {
+            let pitch = vis_f32(map, "view_pitch_deg", &format!("{what} {labeled}"))?;
+            if !pitch.is_finite() || !(-80.0..=80.0).contains(&pitch) {
+                return Err(format!("{what} {labeled} view_pitch_deg must be finite and in -80..=80"));
+            }
+            pitch
+        } else {
+            0.0
+        };
         models.push(CastModel {
             id,
             hero,
@@ -2004,6 +2016,7 @@ fn load_model_rows(
             at: vis_vec3(map, "at", &format!("{what} model"))?,
             grip: vis_vec3(map, "grip", &format!("{what} model"))?,
             view: vis_vec3(map, "view", &format!("{what} model"))?,
+            view_pitch_deg,
             stock_uv,
             stock_channel,
             rail_uv,

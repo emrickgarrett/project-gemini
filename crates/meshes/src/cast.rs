@@ -216,10 +216,22 @@ fn ensure_shade_hue_free(shade: &Tex, id: &str) -> Result<(), String> {
 
 fn ensure_weighted_channels(mask: &Tex, keys: [&str; 4], id: &str) -> Result<(), String> {
     let names = ["R", "G", "B", "A"];
-    for channel in 0..4 {
-        let used = mask.rgba.chunks_exact(4).any(|px| px[channel] > 0);
-        if used && keys[channel].is_empty() {
-            return Err(format!("{id} mask {} has weight but no palette key", names[channel]));
+    let palette = Content::embedded().palette;
+    for (i, px) in mask.rgba.chunks_exact(4).enumerate() {
+        for channel in 0..4 {
+            if px[channel] == 0 {
+                continue;
+            }
+            let key = keys[channel];
+            let hex = if key.is_empty() { "" } else { palette.hex(key).unwrap_or("") };
+            if hex.trim().trim_start_matches('#').len() < 6 {
+                let x = (i as u32) % mask.w;
+                let y = (i as u32) / mask.w;
+                return Err(format!(
+                    "{id} mask texel ({x},{y}) weights an undefined palette slot {}",
+                    names[channel]
+                ));
+            }
         }
     }
     Ok(())
@@ -1656,10 +1668,14 @@ fn fill_textured(
                     let px = sample4(&mesh.base, uv);
                     [px[0], px[1], px[2]]
                 } else if job.channeled {
-                    // The shade map is the lighting. Emissive stays in the client texture.
+                    // Shade scales the albedo. An emissive slot is added on top so a
+                    // status light reads in the still, the same color the client emits.
                     let shade_srgb = sample(&mesh.shade, uv)[0];
                     let weights = sample4(&mesh.mask, uv);
-                    let albedo = tint_channels(shade_srgb, weights, job.channels, job.emissive, job.shade_mid_lin, false).0;
+                    let (mut albedo, emit) = tint_channels(shade_srgb, weights, job.channels, job.emissive, job.shade_mid_lin, false);
+                    for k in 0..3 {
+                        albedo[k] = (albedo[k] + emit[k]).min(1.0);
+                    }
                     if let Some(channel) = job.overdrive_channel {
                         brighten_channel(albedo, weights, channel, job.overdrive_toward, job.overdrive_gain)
                     } else {
@@ -1907,6 +1923,71 @@ mod tests {
         let decoded = decode_mask(&bytes, "synthetic").unwrap();
         let err = ensure_mask_weight(&decoded, "synthetic").expect_err("decoded hole fails");
         assert!(err.contains("(1,1)"), "{err}");
+    }
+
+    /// The tail cannon floats above the cast. The core glow is the chest gem.
+    /// A magenta mass in the crown band is the core sitting in the spikes.
+    #[test]
+    fn the_tyrant_core_glow_sits_on_the_chest_not_the_crown() {
+        let far = crate::raster_in_arena("hive_tyrant", 1024, 1024);
+        let (crown, chest) = exact_magenta_bands(&far, 1024, 180, 480, 500, 640);
+        assert!(chest > 400, "chest gem glow is missing at 15 m ({chest} px)");
+        assert!(crown < 40, "15 m crown still holds a magenta cloud ({crown} px)");
+        let close = crate::raster_bug("hive_tyrant", 1024, 1024);
+        let (spikes, gem) = exact_magenta_bands(&close, 1024, 320, 480, 500, 640);
+        assert!(gem > 200, "close-up chest glow is missing ({gem} px)");
+        assert!(spikes < 20, "close-up spikes hold a magenta cloud ({spikes} px)");
+    }
+
+    fn exact_magenta_bands(rgb: &[u8], width: u32, crown_y0: u32, crown_y1: u32, chest_y0: u32, chest_y1: u32) -> (u32, u32) {
+        let mut crown = 0u32;
+        let mut chest = 0u32;
+        let height = rgb.len() as u32 / (width * 3);
+        for y in 0..height {
+            for x in 0..width {
+                let i = ((y * width + x) * 3) as usize;
+                if rgb[i] == 255 && rgb[i + 1] == 43 && rgb[i + 2] == 214 {
+                    if y >= crown_y0 && y < crown_y1 {
+                        crown += 1;
+                    } else if y >= chest_y0 && y < chest_y1 {
+                        chest += 1;
+                    }
+                }
+            }
+        }
+        (crown, chest)
+    }
+
+    #[test]
+    fn a_texel_on_an_undefined_palette_slot_fails_the_load() {
+        let accent = Tex { w: 1, h: 1, rgba: vec![0, 0, 255, 0] };
+        let err = ensure_weighted_channels(
+            &accent,
+            ["gear_vex_gun_primary", "gear_vex_gun_secondary", "", ""],
+            "synthetic",
+        )
+        .expect_err("empty accent");
+        assert!(err.contains("(0,0)"), "{err}");
+        assert!(err.contains("undefined"), "{err}");
+        let known = Tex { w: 1, h: 1, rgba: vec![0, 0, 0, 255] };
+        ensure_weighted_channels(
+            &known,
+            ["gear_vex_gun_primary", "gear_vex_gun_secondary", "", "gear_brakk_gun_glow"],
+            "synthetic",
+        )
+        .expect("a defined fourth slot loads");
+        let bogus = Tex { w: 2, h: 1, rgba: vec![0, 0, 0, 0, 0, 0, 0, 40] };
+        let err = ensure_weighted_channels(
+            &bogus,
+            ["gear_vex_gun_primary", "gear_vex_gun_secondary", "", "not_a_palette_key"],
+            "synthetic",
+        )
+        .expect_err("unknown key");
+        assert!(err.contains("(1,0)"), "{err}");
+        assert!(err.contains("undefined"), "{err}");
+        let still = crate::preview::palette_of()("gear_brakk_gun_glow");
+        let authored = Content::embedded().palette.key("gear_brakk_gun_glow");
+        assert_eq!(still, authored, "the still must use the authored green, not a white fallback");
     }
 
     #[test]
@@ -3079,6 +3160,7 @@ mod tests {
             assert_eq!(bad, 0, "{id} has {bad} body pixels away from the glow in a weak-point color");
         }
     }
+
 }
 
 #[cfg(test)]

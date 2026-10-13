@@ -395,20 +395,25 @@ fn paint_view_gun(color: &mut [u8], depth: &mut [f32], frame: &ViewmodelFrame, y
     let content = gemini_sim::content::Content::embedded();
     let hero = content.hero.id.as_str();
     let gun = crate::cast(&format!("{hero}_gun"));
-    let view = content
+    let model = content
         .models
         .iter()
         .find(|model| model.id == gun.id)
-        .unwrap_or_else(|| panic!("{} has no cast record", gun.id))
-        .view;
+        .unwrap_or_else(|| panic!("{} has no cast record", gun.id));
     let shift = frame.offset;
+    let grip = [
+        model.view[0] + shift[0],
+        model.view[1] + shift[1],
+        model.view[2] + shift[2],
+    ];
+    // Mesh origin is the grip. Pitch there, then move to the viewmodel grip.
     let place = crate::Placement {
         pre_yaw: 0.0,
-        pre_shift: [view[0] + shift[0], view[1] + shift[1], view[2] + shift[2]],
+        pre_shift: [0.0, 0.0, 0.0],
         yaw_deg,
-        lean: pitch_deg.to_radians(),
+        lean: (pitch_deg + model.view_pitch_deg).to_radians(),
         pivot: [0.0, 0.0, 0.0],
-        shift: [0.0, 0.0, 0.0],
+        shift: grip,
     };
     let eye = [0.0, 0.0, 0.0];
     let forward = [0.0, 0.0, -1.0];
@@ -1081,7 +1086,7 @@ pub fn palette_of() -> impl Fn(&str) -> [f32; 4] {
                 continue;
             }
             let Some((k, v)) = line.split_once('=') else { continue };
-            let hex = v.trim().trim_matches('"').to_string();
+            let hex = palette_value_hex(v);
             let key = if section == "keys" {
                 k.trim().to_string()
             } else {
@@ -1113,14 +1118,30 @@ fn byte(c: f32) -> u8 {
     (c.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
+/// A `{ hex = "#RRGGBB", ... }` row stores the quoted hex. A bare quoted hex is itself.
+fn palette_value_hex(value: &str) -> String {
+    let value = value.trim();
+    if value.starts_with('{') {
+        let Some(start) = value.find('"') else {
+            return String::new();
+        };
+        let rest = &value[start + 1..];
+        let Some(end) = rest.find('"') else {
+            return String::new();
+        };
+        return rest[..end].to_string();
+    }
+    value.trim_matches('"').to_string()
+}
+
 fn hex_rgb(hex: &str) -> [f32; 4] {
     let hex = hex.trim().trim_start_matches('#');
-    let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(180) as f32 / 255.0;
-    if hex.len() >= 6 {
-        [byte(0), byte(2), byte(4), 1.0]
-    } else {
-        [0.7, 0.5, 0.2, 1.0]
+    let digits = hex.len() >= 6 && hex.as_bytes()[..6].iter().all(|b| b.is_ascii_hexdigit());
+    if !digits {
+        panic!("palette hex \"{hex}\" does not resolve");
     }
+    let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap() as f32 / 255.0;
+    [byte(0), byte(2), byte(4), 1.0]
 }
 
 fn project(

@@ -246,7 +246,7 @@ lod_distance = 62.0
 parts = [
   { name="torso",  part="torso",   shape="capsule", size=[1.2,3.0], offset=[0,3.2,0.5], tilt_deg=-15, color="brute_amber" },
   { name="armor",  part="armor",   shape="box",     size=[2.6,2.4,1.15], offset=[0,3.35,0.85], color="brute_amber", phase_max=1 },
-  { name="core",   part="gem",     shape="sphere",  size=[0.64,0.64,0.64], offset=[0.04576531, 2.95827794, 0.92303598], color="spitter_glow", emissive=true, visual_radius=0.56 },
+  { name="core",   part="gem",     shape="sphere",  size=[0.64,0.64,0.64], offset=[-0.03506386, 2.3284526, 0.77563494], color="spitter_glow", emissive=true, visual_radius=0.56 },
   { name="head",   part="head",    shape="cone",    size=[0.85,1.05], offset=[0,5.05,1.15], color="brute_amber", point="up" },
   { name="crown",  part="crown",   shape="cone",    size=[0.14,1.05], count=6, on="head", color="brute_amber", spread=[1.7, 0.55, 1.15], crown_pitch=0.35 },
   { name="scythe", part="scythe",  shape="cone",    size=[0.36,3.35], offset=[1.55,3.55,0.85], tilt_deg=70, color="brute_amber", mirror=true, aim=[1.25, 0.02, 0.7], seg=0.38, rad=0.62, taper=0.55, blade=1.25, blade_euler=[0.35, 0.0, 0.15], blade_r=[0.85, 0.16], swing_hz=1.4, swing_amp=0.12 },

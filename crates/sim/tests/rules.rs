@@ -985,7 +985,7 @@ fn cast_hit_centers_stay_on_the_moved_anchors() {
     let hive = content.bug(EnemyKind::HiveTyrant);
     let core = hive.hitbox.core.as_ref().expect("hive core");
     assert!(
-        near(core.offset, [0.04576531, 2.95827794, 0.92303598]),
+        near(core.offset, [-0.03506386, 2.3284526, 0.77563494]),
         "hive core {:?}",
         core.offset
     );
@@ -998,6 +998,30 @@ fn cast_hit_centers_stay_on_the_moved_anchors() {
         cannon.offset
     );
     assert!((cannon.radius - 0.83).abs() < 1.0e-4, "cannon radius {}", cannon.radius);
+}
+
+/// Floors are written here. A smaller content value fails. A larger one does not.
+#[test]
+fn hit_radii_do_not_drop_below_their_pins() {
+    use gemini_sim::content::EnemyKind;
+    let content = Content::embedded();
+    let at_least = |got: f32, pin: f32, what: &str| {
+        assert!(got + 1.0e-4 >= pin, "{what} is {got}, below the pinned {pin}");
+    };
+    let abdomen = content.bug(EnemyKind::Swarmer).hitbox.weak().expect("abdomen");
+    at_least(abdomen.radius, 0.15, "swarmer abdomen");
+    let sac = content.bug(EnemyKind::Spitter).hitbox.weak().expect("sac");
+    at_least(sac.radius, 0.36, "spitter sac");
+    let cracks = content.bug(EnemyKind::Brute).hitbox.weak().expect("cracks");
+    at_least(cracks.half_extents[0], 0.75, "brute cracks x");
+    at_least(cracks.half_extents[1], 0.50, "brute cracks y");
+    at_least(cracks.half_extents[2], 0.62, "brute cracks z");
+    let brood = content.bug(EnemyKind::BroodMother);
+    at_least(brood.hitbox.weak().expect("gland").radius, 0.5, "brood gland");
+    at_least(brood.hitbox.pod_radius().expect("pod"), 0.65, "brood pod");
+    let hive = content.bug(EnemyKind::HiveTyrant);
+    at_least(hive.hitbox.core.as_ref().expect("core").radius, 0.70, "hive core");
+    at_least(hive.hitbox.cannon.as_ref().expect("cannon").radius, 0.83, "hive cannon");
 }
 
 #[test]
