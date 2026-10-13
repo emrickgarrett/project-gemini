@@ -32,3 +32,7 @@ path = "src/bin/menushot.rs"
 [[bin]]
 name = "castshot"
 path = "src/bin/castshot.rs"
+
+[[bin]]
+name = "arenashot"
+path = "src/bin/arenashot.rs"

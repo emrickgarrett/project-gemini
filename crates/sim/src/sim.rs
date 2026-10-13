@@ -2987,7 +2987,7 @@ fn step_enemy(
     enemy.pos.x += step.x;
     enemy.pos.z += step.z;
     content.arena.clamp_play(&mut enemy.pos, content.arena.perch_rules.ground_chase_pad);
-    content.arena.shove_bug(&mut enemy.pos);
+    content.arena.shove_bug(&mut enemy.pos, hit_radius_of(content, enemy.kind));
     enemy.pos.y = 0.0;
     false
 }

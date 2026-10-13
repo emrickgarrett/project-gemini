@@ -20,14 +20,14 @@ pub use cast::{
 
 pub use menu_still::{paint_menu, raster_hero_portrait, Hit, MenuShot, PaintPrefs};
 
-pub use arena::{pieces as arena_pieces, review_ground, ArenaPiece};
+pub use arena::{cover_visual, pieces as arena_pieces, scenery_fingerprint, ArenaPiece};
 pub use away_still::{paint_away, AwayShot};
 pub use reveal_still::{paint_reveal, reveal_still_is_flat, still_color_stats};
 
 pub use pose::{pose, root_motion, AnimInput, Pose, Xform};
 pub use preview::{
-    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_embedded, raster_heroes_at_15m, raster_in_arena, raster_model, raster_rail_edge, raster_top,
-    raster_crowd, raster_viewmodel, still,
+    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_arena, raster_arena_crowd, raster_bug, raster_crown, raster_embedded, raster_heroes_at_15m, raster_in_arena, raster_model, raster_rail_edge, raster_top,
+    raster_crowd, raster_view_gun, raster_viewmodel, still,
     still_open, still_top, ViewmodelFrame,
 };
 pub use visual::{bug, catalog, flat_shaded, EnemyVisual, Gate, Joint, Part, ShotCamera};
@@ -934,6 +934,190 @@ mod tests {
         let painted = painted_pixels(&rgb);
         eprintln!("release software frame, 300 swarmers, 960x540: {ms:.1} ms, {painted} painted px");
         assert!(painted > 1000, "the crowd frame is blank ({painted} px)");
+    }
+
+    #[test]
+    fn scenery_matches_its_collider_and_budget() {
+        let content = gemini_sim::content::Content::embedded();
+        let built = crate::arena_pieces(&content);
+        let (hash, tris, bytes) = crate::scenery_fingerprint(&built);
+        eprintln!("scenery mesh {tris} triangles, {bytes} bytes, sha256 {hash}");
+        assert_eq!(hash, content.arena_scene.sha256, "pin this hash: {hash}");
+        assert!(tris <= content.arena_scene.max_triangles, "{tris} triangles over {}", content.arena_scene.max_triangles);
+        assert!(bytes <= content.arena_scene.max_bytes, "{bytes} bytes over {}", content.arena_scene.max_bytes);
+        let slack = content.arena.scenery.bounds_slack;
+        for cover in &content.arena.cover {
+            let mesh = crate::cover_visual(&content, cover);
+            let mut min = [f32::MAX; 3];
+            let mut max = [f32::MIN; 3];
+            for point in &mesh.positions {
+                for axis in 0..3 {
+                    min[axis] = min[axis].min(point[axis]);
+                    max[axis] = max[axis].max(point[axis]);
+                }
+            }
+            let center = [cover.pos.x, cover.pos.y, cover.pos.z];
+            for axis in 0..3 {
+                let half = cover.size[axis] * 0.5;
+                assert!((min[axis] - (center[axis] - half)).abs() <= slack, "{} axis {axis} min", cover.id);
+                assert!((max[axis] - (center[axis] + half)).abs() <= slack, "{} axis {axis} max", cover.id);
+            }
+        }
+        let radius = content.arena.radius;
+        for piece in &built {
+            if piece.palette != "rim_violet" && piece.palette != "rim_violet_hi" {
+                continue;
+            }
+            for point in &piece.mesh.positions {
+                let distance = (point[0] * point[0] + point[2] * point[2]).sqrt();
+                assert!(
+                    distance + 1.0e-3 >= radius,
+                    "rim vertex at {distance:.3} is inside the play radius {radius}"
+                );
+            }
+        }
+    }
+
+    /// Wall clock for one software raster of the arena plus 300 swarmers.
+    /// `cargo test -p gemini-meshes --release -- --ignored --nocapture arena_frame_time`
+    #[test]
+    #[ignore = "one-time release measurement of a software frame with 300 bugs in the arena"]
+    fn arena_frame_time_release_at_three_hundred_enemies() {
+        use std::time::Instant;
+        let cap = gemini_sim::content::Content::embedded().waves.budget.live_enemy_cap as usize;
+        assert_eq!(cap, 300);
+        let start = Instant::now();
+        let rgb = crate::raster_arena_crowd(cap, 960, 540);
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        let painted = painted_pixels(&rgb);
+        eprintln!("release software frame, arena plus 300 swarmers, 960x540: {ms:.1} ms, {painted} painted px");
+        assert!(painted > 1000, "the arena crowd frame is blank ({painted} px)");
+    }
+
+    /// Ramp openings come from `platform.ramps` for both the collider and the drawn rail.
+    #[test]
+    fn rail_mesh_gaps_match_the_collider() {
+        let content = gemini_sim::content::Content::embedded();
+        let built = crate::arena_pieces(&content);
+        let platform = &content.arena.platform;
+        let dress = &content.arena_dressing;
+        let y = platform.height + dress.rail_height * 0.5;
+        let posts = dress.rail_posts;
+        let step = std::f32::consts::TAU / posts as f32;
+        let post_slop = dress.rail_thickness * 0.5 / platform.radius;
+        let beam_reach = dress.rail_thickness / platform.radius;
+        let mut posts_low = Vec::new();
+        let mut all = Vec::new();
+        for piece in &built {
+            if piece.role != "rail" {
+                continue;
+            }
+            for v in &piece.mesh.positions {
+                all.push(*v);
+                if (v[1] - platform.height).abs() < dress.rail_thickness * 0.05 {
+                    posts_low.push(*v);
+                }
+            }
+        }
+        assert!(!posts_low.is_empty(), "railing posts are drawn");
+        for i in 0..posts {
+            let ang = i as f32 * step;
+            let x = platform.center.x + ang.sin() * platform.radius;
+            let z = platform.center.z + ang.cos() * platform.radius;
+            let blocked = content.arena.solid_at(gemini_sim::Vec3::new(x, y, z));
+            let near = posts_low.iter().any(|v| ang_dist(ang_of(v[0], v[2]), ang) < post_slop * 2.0);
+            assert_eq!(near, blocked, "rail post {i} blocked={blocked}");
+        }
+        for v in &all {
+            let ang = ang_of(v[0], v[2]);
+            let solid = (-1..=1).any(|k| {
+                let sample = ang + k as f32 * beam_reach;
+                let x = platform.center.x + sample.sin() * platform.radius;
+                let z = platform.center.z + sample.cos() * platform.radius;
+                content.arena.solid_at(gemini_sim::Vec3::new(x, y, z))
+            });
+            assert!(solid, "rail vertex {v:?} sits in a collider gap");
+        }
+    }
+
+    /// Stairs stay on the ramp footprints. The step ring is inside the deck, so it is not a climb over the rail.
+    #[test]
+    fn stairs_and_the_step_ring_stay_off_the_rail() {
+        let content = gemini_sim::content::Content::embedded();
+        let built = crate::arena_pieces(&content);
+        let platform = &content.arena.platform;
+        let scene = &content.arena_scene;
+        let slack = content.arena.scenery.bounds_slack;
+        let mut stairs = 0u32;
+        for piece in &built {
+            if piece.role != "stairs" {
+                continue;
+            }
+            stairs += 1;
+            for v in &piece.mesh.positions {
+                let on_ramp = platform.ramps.iter().any(|ramp| on_ramp_footprint(v[0], v[2], ramp, slack));
+                assert!(on_ramp, "stair vertex {v:?} is off every ramp");
+            }
+        }
+        assert_eq!(stairs, scene.stair_count * platform.ramps.len() as u32);
+        for piece in &built {
+            if piece.role != "deck" {
+                continue;
+            }
+            for v in &piece.mesh.positions {
+                let distance = (v[0] * v[0] + v[2] * v[2]).sqrt();
+                assert!(
+                    distance <= platform.radius + 1.0e-3,
+                    "deck vertex at {distance:.3} is outside the {} m deck",
+                    platform.radius
+                );
+            }
+        }
+        let step_y = scene.deck_step_height;
+        let z = platform.radius - scene.deck_step_outset * 0.5;
+        assert!(
+            content.arena.solid_at(gemini_sim::Vec3::new(0.0, step_y, z)),
+            "the step ring is a solid deck volume, not a stance"
+        );
+        assert!((content.arena.floor_y(0.0, z) - platform.height).abs() < 1e-3);
+        let z_out = platform.radius + slack;
+        assert!(!content.arena.solid_at(gemini_sim::Vec3::new(0.0, step_y, z_out)));
+        assert!(content.arena.floor_y(0.0, z_out).abs() < 1e-4);
+        let mut pos = gemini_sim::Vec3::new(0.0, platform.height + 0.05, platform.radius + 0.45);
+        let old = gemini_sim::Vec3::new(0.0, platform.height + 0.05, platform.radius - 0.4);
+        content.arena.resolve_player(&mut pos, old, 0.0);
+        let held = (pos.x * pos.x + pos.z * pos.z).sqrt();
+        assert!(held <= platform.radius + 1.0e-3, "the rail let a body out at {held:.3}");
+    }
+
+    fn ang_of(x: f32, z: f32) -> f32 {
+        x.atan2(z).rem_euclid(std::f32::consts::TAU)
+    }
+
+    fn ang_dist(a: f32, b: f32) -> f32 {
+        let mut d = (a - b).abs();
+        if d > std::f32::consts::PI {
+            d = std::f32::consts::TAU - d;
+        }
+        d
+    }
+
+    fn on_ramp_footprint(x: f32, z: f32, ramp: &gemini_sim::content::Ramp, slack: f32) -> bool {
+        let abx = ramp.to.x - ramp.from.x;
+        let abz = ramp.to.z - ramp.from.z;
+        let len2 = abx * abx + abz * abz;
+        if len2 < 1e-4 {
+            return false;
+        }
+        let t = ((x - ramp.from.x) * abx + (z - ramp.from.z) * abz) / len2;
+        if t < -slack || t > 1.0 + slack {
+            return false;
+        }
+        let clamped = t.clamp(0.0, 1.0);
+        let px = ramp.from.x + abx * clamped;
+        let pz = ramp.from.z + abz * clamped;
+        let lateral = ((x - px).powi(2) + (z - pz).powi(2)).sqrt();
+        lateral <= ramp.width * 0.5 + slack
     }
 
     fn mesh_radius(mesh: &MeshData) -> f32 {
