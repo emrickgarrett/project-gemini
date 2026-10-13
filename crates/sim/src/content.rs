@@ -2533,8 +2533,6 @@ fn load_arena_dressing(text: &str) -> Result<(ArenaDressing, crate::scenery::Are
             "trim",
             "boulder",
             "beacon_glow_period",
-            "beacon_glow_min",
-            "beacon_glow_max",
             "prop_mesh",
             "platform_sides",
             "deck_phase_deg",
@@ -4762,6 +4760,8 @@ pub struct Footsteps {
     pub stride: f32,
     pub min_speed: f32,
     pub remote_priority: i32,
+    /// Shared cap for every player step row, own and teammate.
+    pub max_voices: u32,
     pub rows: BTreeMap<String, Vec<String>>,
 }
 
@@ -4809,6 +4809,9 @@ fn validate_arena_audio(arena: &Arena, audio: &AudioTable) -> Result<(), String>
     }
     if !(audio.footstep.min_speed > 0.0) {
         return Err("footstep min_speed must be > 0".into());
+    }
+    if audio.footstep.max_voices == 0 {
+        return Err("footstep max_voices must be > 0".into());
     }
     for kind in &arena.scenery.surface_kinds {
         let Some(rows) = audio.footstep.rows.get(kind) else {

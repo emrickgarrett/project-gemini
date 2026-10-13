@@ -22,8 +22,6 @@ rail_still_inset = 1.40
 
 # Beacon lamps pulse on this period. The beacon_pulse one-shot fires once per cycle of the same key.
 beacon_glow_period = 1.8
-beacon_glow_min = 0.4
-beacon_glow_max = 2.2
 
 floor_sides = 24
 boulder_slices = 7

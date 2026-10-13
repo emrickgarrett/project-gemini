@@ -148,10 +148,8 @@ pub struct ArenaScene {
     pub review_fill: f32,
     pub review_gain: f32,
     pub exposure_ev: f32,
-    /// Seconds for one beacon glow cycle. Audio fires `beacon_pulse` once per this period.
+    /// Seconds for one beacon pulse. Audio fires `beacon_pulse` once per this period.
     pub beacon_glow_period: f32,
-    pub beacon_glow_min: f32,
-    pub beacon_glow_max: f32,
     pub light: SceneLight,
     pub materials: Vec<SceneMaterial>,
     pub floors: Vec<FloorBand>,
@@ -486,8 +484,6 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
         review_gain: content::vis_f32(table, "review_gain", what)?,
         exposure_ev: content::vis_f32(table, "exposure_ev", what)?,
         beacon_glow_period: content::vis_f32(table, "beacon_glow_period", what)?,
-        beacon_glow_min: content::vis_f32(table, "beacon_glow_min", what)?,
-        beacon_glow_max: content::vis_f32(table, "beacon_glow_max", what)?,
         light: load_light(table.get("light").unwrap())?,
         materials: load_named(table.get("material").unwrap(), "material", load_material)?,
         floors: load_named(table.get("floor").unwrap(), "floor", load_floor)?,
@@ -545,9 +541,6 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
     }
     if !(scene.beacon_glow_period > 0.0) {
         return Err("arena_visual.toml beacon_glow_period must be > 0".into());
-    }
-    if !(scene.beacon_glow_max > scene.beacon_glow_min) {
-        return Err("arena_visual.toml beacon_glow_max must be > beacon_glow_min".into());
     }
     if !(scene.cover_chamfer > 0.0)
         || !(scene.trim_height > 0.0)

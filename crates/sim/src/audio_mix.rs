@@ -91,13 +91,27 @@ pub fn select_voices(
     shots.sort_by(|a, b| {
         b.priority
             .cmp(&a.priority)
-            .then_with(|| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal))
+            .then_with(|| b.score.total_cmp(&a.score))
             .then_with(|| a.id.cmp(&b.id))
     });
     let sorted = shots;
     let capped = cap_instances(audio, sorted.clone());
     let warnings: Vec<Voice> = capped.iter().filter(|voice| voice.is_warning).cloned().collect();
-    let rest: Vec<Voice> = capped.into_iter().filter(|voice| !voice.is_warning).collect();
+    let mut step_count = 0u32;
+    let rest: Vec<Voice> = capped
+        .into_iter()
+        .filter(|voice| !voice.is_warning)
+        .filter(|voice| {
+            if !is_player_step(audio, &voice.id) {
+                return true;
+            }
+            if step_count >= audio.footstep.max_voices {
+                return false;
+            }
+            step_count += 1;
+            true
+        })
+        .collect();
     voices.extend(warnings);
     let room = audio.voice_cap.saturating_sub(voices.len());
     voices.extend(rest.into_iter().take(room));
@@ -113,6 +127,14 @@ pub fn select_voices(
         }
     }
     voices
+}
+
+fn is_player_step(audio: &AudioTable, id: &str) -> bool {
+    audio
+        .footstep
+        .rows
+        .values()
+        .any(|ids| ids.iter().any(|row| row == id))
 }
 
 fn cap_instances(audio: &AudioTable, voices: Vec<Voice>) -> Vec<Voice> {
@@ -314,6 +336,13 @@ fn parse_footsteps(value: &toml::Value) -> Result<crate::content::Footsteps, Str
         .get("remote_priority")
         .and_then(|value| value.as_integer())
         .ok_or_else(|| "footstep is missing remote_priority".to_string())? as i32;
+    let max_voices = row
+        .get("max_voices")
+        .and_then(|value| value.as_integer())
+        .ok_or_else(|| "footstep is missing max_voices".to_string())? as u32;
+    if max_voices == 0 {
+        return Err("footstep max_voices must be > 0".into());
+    }
     let rows_table = row
         .get("rows")
         .and_then(|value| value.as_table())
@@ -338,6 +367,7 @@ fn parse_footsteps(value: &toml::Value) -> Result<crate::content::Footsteps, Str
         stride,
         min_speed,
         remote_priority,
+        max_voices,
         rows,
     })
 }
@@ -511,10 +541,13 @@ flat = true
             .max()
             .unwrap();
         let remote = audio.footstep.remote_priority;
+        assert_eq!(audio.footstep.max_voices, 6);
         assert!(warn_min > hit_max, "warnings {warn_min} hits {hit_max}");
         assert!(hit_max > remote, "hits {hit_max} remote {remote}");
         assert!(remote > own_max, "remote {remote} steps {own_max}");
         assert!(own_max > prop_max, "steps {own_max} props {prop_max}");
+        let pulse = audio.sfx.iter().find(|row| row.id == "beacon_pulse").unwrap();
+        assert!((pulse.volume - super::db_to_linear(-16.0)).abs() < 1e-4);
 
         let mut events = Vec::new();
         let mut n = 0u32;
@@ -537,8 +570,16 @@ flat = true
             let row = audio.sfx.iter().find(|row| row.id == id).unwrap();
             push(&mut events, id, row.max_instances.max(1), None, &mut n);
         }
+        let mut wave = 0u32;
+        for row in audio.sfx.iter().filter(|row| {
+            !row.is_warning && !row.critical && row.priority == 70 && row.category == "enemy"
+        }) {
+            push(&mut events, &row.id, row.max_instances.max(1), None, &mut n);
+            wave += 1;
+        }
+        assert!(wave > 0, "a full wave needs non-warning enemy sounds at priority 70");
         let step = audio.footstep.rows.values().next().unwrap()[0].clone();
-        push(&mut events, &step, 8, Some(remote), &mut n);
+        push(&mut events, &step, audio.footstep.max_voices + 2, Some(remote), &mut n);
         for id in audio.sfx.iter().filter(|row| row.id.starts_with("step_")) {
             push(&mut events, &id.id, 1, None, &mut n);
         }
@@ -551,6 +592,29 @@ flat = true
         for row in audio.sfx.iter().filter(|row| row.is_warning) {
             assert!(voices.iter().any(|voice| voice.id == row.id), "stolen {}", row.id);
         }
+        let step_ids: Vec<&str> = audio.footstep.rows.values().flatten().map(|id| id.as_str()).collect();
+        let steps = voices.iter().filter(|voice| step_ids.contains(&voice.id.as_str())).count();
+        assert!(steps <= audio.footstep.max_voices as usize, "steps {steps}");
+        let quiet: Vec<_> = events
+            .iter()
+            .filter(|event| !step_ids.contains(&event.id.as_str()))
+            .cloned()
+            .collect();
+        let without = super::select_voices(&audio, &quiet, crate::math::Vec3::ZERO);
+        for voice in without.iter().filter(|voice| voice.priority == 70) {
+            assert!(
+                voices.iter().any(|kept| kept.id == voice.id && kept.pos == voice.pos),
+                "step pushed out {} at priority 70",
+                voice.id
+            );
+        }
+    }
+
+    #[test]
+    fn footstep_max_voices_is_required() {
+        let text = include_str!("../../../content/audio_mix.toml").replace("max_voices = 6\n", "");
+        let err = load_mix(&text).expect_err("missing max_voices");
+        assert!(err.contains("max_voices"), "{err}");
     }
 }
 

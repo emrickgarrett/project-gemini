@@ -163,7 +163,7 @@ pub struct Player {
     #[serde(default)]
     pub regen_pause_cue: bool,
     /// Content part id under the feet. The client maps it to a step row.
-    #[serde(default)]
+    /// Required in every snapshot. A missing field is a decode error.
     pub under_part: String,
 }
 

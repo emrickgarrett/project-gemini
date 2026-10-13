@@ -3520,6 +3520,34 @@ fn every_surface_resolves_to_a_step_row() {
     assert!(err.contains("3"), "{err}");
 }
 
+#[test]
+fn every_reachable_spot_hits_a_stance() {
+    let content = Content::embedded();
+    let radius = content.arena.radius;
+    let jump = &content.controller.jump;
+    assert!(jump.gravity > 0.0 && jump.jump_velocity > 0.0);
+    let jump_height = jump.jump_velocity * jump.jump_velocity / (2.0 * jump.gravity);
+    let ceiling = content.arena.platform.height + jump_height;
+    let step = 1.0_f32;
+    let n = (radius / step).ceil() as i32;
+    let ny = (ceiling / step).ceil() as i32;
+    for iy in 0..=ny {
+        let y = (iy as f32 * step).min(ceiling);
+        for ix in -n..=n {
+            for iz in -n..=n {
+                let x = ix as f32 * step;
+                let z = iz as f32 * step;
+                if x * x + z * z > radius * radius {
+                    continue;
+                }
+                content
+                    .part_under(gemini_sim::math::Vec3::new(x, y, z))
+                    .unwrap_or_else(|err| panic!("{err}"));
+            }
+        }
+    }
+}
+
 fn sources_ranks<'a>(
     base: &'a gemini_sim::content::Sources<'a>,
     duplicate_ranks: &'a str,

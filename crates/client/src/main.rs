@@ -76,7 +76,6 @@ fn install_match(app: &mut App) {
                     audio::sync_gains,
                     audio::sync_bed,
                     audio::sync_crowd,
-                    world::pulse_beacons,
                     world::sync,
                     world::sync_viewmodel,
                     world::camera,

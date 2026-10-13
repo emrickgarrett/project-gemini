@@ -28,6 +28,7 @@ weakpoint_hit = "weakpoint_hit"
 stride = 1.8
 min_speed = 0.45
 remote_priority = 60
+max_voices = 6
 
 [footstep.rows]
 dirt = ["step_dirt_1", "step_dirt_2", "step_dirt_3", "step_dirt_4"]
@@ -1473,7 +1474,7 @@ flat = false
 
 # One-shot. Fired once per beacon_glow_period. Not a loop.
 [beacon_pulse]
-volume_db = -12.0
+volume_db = -16.0
 pitch_rand_semitones = 0
 max_instances = 4
 loop = false
