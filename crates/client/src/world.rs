@@ -193,44 +193,28 @@ pub fn scene(
     material(&mut bank, &mut materials, content, "arena_dark", false, false);
     material(&mut bank, &mut materials, content, "arena_light", false, false);
 
-    let arena = &content.arena;
-    let ground = upload(
-        &mut meshes,
-        &box_at([0.0, -0.08, 0.0], [arena.size[0], 0.16, arena.size[1]]),
-    );
-    commands.spawn((
-        Mesh3d(ground),
-        MeshMaterial3d(mat_of(&bank, "arena_dark", false, false)),
-        Transform::IDENTITY,
-        PlayPiece,
-    ));
     for piece in gemini_meshes::arena_pieces(content) {
+        if piece.bloom {
+            panic!("scenery material {} sets bloom", piece.palette);
+        }
+        let rgb = content.palette.key(&piece.palette);
+        let handle = materials.add(StandardMaterial {
+            base_color: Color::srgb(rgb[0], rgb[1], rgb[2]),
+            emissive: LinearRgba::BLACK,
+            unlit: !piece.lit,
+            perceptual_roughness: piece.roughness,
+            metallic: piece.metallic,
+            ..default()
+        });
         let mesh = upload(&mut meshes, &piece.mesh);
         commands.spawn((
             Mesh3d(mesh),
-            MeshMaterial3d(mat_of(&bank, &piece.palette, false, false)),
+            MeshMaterial3d(handle),
             Transform::IDENTITY,
             PlayPiece,
         ));
     }
-    for ledge in &arena.ledges {
-        let mesh = upload(&mut meshes, &box_at([ledge.pos.x, ledge.pos.y, ledge.pos.z], [2.4, 0.3, 2.4]));
-        commands.spawn((
-            Mesh3d(mesh),
-            MeshMaterial3d(mat_of(&bank, "arena_light", false, false)),
-            Transform::IDENTITY,
-            PlayPiece,
-        ));
-    }
-    for vent in &arena.vents {
-        let mesh = upload(&mut meshes, &box_at([vent.pos.x, 0.2, vent.pos.z], [1.4, 0.4, 1.4]));
-        commands.spawn((
-            Mesh3d(mesh),
-            MeshMaterial3d(mat_of(&bank, "arena_dark", false, false)),
-            Transform::IDENTITY,
-            PlayPiece,
-        ));
-    }
+    spawn_arena_lights(&mut commands, content);
 
     for mesh in gemini_meshes::casts() {
         let handle = upload_cast(&mut meshes, mesh);
@@ -255,6 +239,7 @@ pub fn scene(
             Camera3d::default(),
             Camera {
                 order: 0,
+                clear_color: ClearColorConfig::Custom(sky_color(content)),
                 ..default()
             },
             RenderLayers::layer(0),
@@ -265,6 +250,7 @@ pub fn scene(
             Bloom::NATURAL,
             Tonemapping::TonyMcMapface,
             ColorGrading::default(),
+            arena_fog(content),
             IsDefaultUiCamera,
             PlayPiece,
         ))
@@ -636,6 +622,8 @@ fn spawn_bug(
         Visibility::Inherited,
         ChildOf(root),
         PlayPiece,
+        bevy::light::NotShadowCaster,
+        bevy::light::NotShadowReceiver,
     ));
     // Glow, dead pods, and bud regrow use the weak-point hit center. The glow is not
     // pulled onto the cast. The shell stays the Meshy mesh.
@@ -688,6 +676,8 @@ fn spawn_bug(
                     hot_on: false,
                 },
                 ChildOf(root),
+                bevy::light::NotShadowCaster,
+                bevy::light::NotShadowReceiver,
             ))
             .id();
         parts.push(entity);
@@ -700,9 +690,66 @@ fn spawn_bug(
             Visibility::Hidden,
             BugLod,
             ChildOf(root),
+            bevy::light::NotShadowCaster,
+            bevy::light::NotShadowReceiver,
         ))
         .id();
     BugLink { root, parts, lod }
+}
+
+fn sky_color(content: &gemini_sim::content::Content) -> Color {
+    let rgb = content.palette.key(&content.arena_scene.light.sky_color);
+    Color::srgb(rgb[0], rgb[1], rgb[2])
+}
+
+fn arena_fog(content: &gemini_sim::content::Content) -> bevy::pbr::DistanceFog {
+    let rgb = content.palette.key(&content.arena_scene.light.fog_color);
+    let rules = &content.arena.scenery;
+    bevy::pbr::DistanceFog {
+        color: Color::srgb(rgb[0], rgb[1], rgb[2]),
+        falloff: bevy::pbr::FogFalloff::Linear {
+            start: rules.fog_start,
+            end: rules.fog_end,
+        },
+        ..default()
+    }
+}
+
+fn light_toward(yaw_deg: f32, pitch_deg: f32) -> bevy::math::Vec3 {
+    let yaw = yaw_deg.to_radians();
+    let pitch = pitch_deg.to_radians();
+    bevy::math::Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos())
+}
+
+fn spawn_arena_lights(commands: &mut Commands, content: &gemini_sim::content::Content) {
+    let light = &content.arena_scene.light;
+    if light.shadow_filter != "gaussian" {
+        panic!("shadow_filter {} is unknown", light.shadow_filter);
+    }
+    let key = content.palette.key(&light.key_color);
+    let fill = content.palette.key(&light.fill_color);
+    let ambient = content.palette.key(&light.ambient_color);
+    let spawn = |commands: &mut Commands, yaw: f32, pitch: f32, illuminance: f32, rgb: [f32; 4], shadows: bool| {
+        let toward = light_toward(yaw, pitch);
+        commands.spawn((
+            bevy::light::DirectionalLight {
+                color: Color::srgb(rgb[0], rgb[1], rgb[2]),
+                illuminance,
+                shadows_enabled: shadows,
+                ..default()
+            },
+            bevy::light::ShadowFilteringMethod::Gaussian,
+            Transform::from_rotation(Quat::from_rotation_arc(bevy::math::Vec3::NEG_Z, -toward)),
+            PlayPiece,
+        ));
+    };
+    spawn(commands, light.key_yaw_deg, light.key_pitch_deg, light.key_illuminance, key, true);
+    spawn(commands, light.fill_yaw_deg, light.fill_pitch_deg, light.fill_illuminance, fill, false);
+    commands.insert_resource(bevy::light::AmbientLight {
+        color: Color::srgb(ambient[0], ambient[1], ambient[2]),
+        brightness: light.ambient_brightness,
+        ..default()
+    });
 }
 
 pub fn grade(
@@ -713,16 +760,18 @@ pub fn grade(
     let hud = &game.content.presentation.hud.away;
     let look = away.view.look.clamp(0.0, 1.0);
     for mut grading in &mut cameras {
+        let exposure = game.content.arena_scene.exposure_ev;
         if look > 0.0 {
             let dim = hud.away_dim * look;
             let desat = hud.away_desaturation * look;
             let factor = (1.0 - dim).clamp(hud.dim_floor, 1.0);
-            grading.global.exposure = factor.log2();
+            grading.global.exposure = exposure + factor.log2();
             grading.global.post_saturation = 1.0 - desat;
             grading.global.temperature = 0.0;
             grading.global.tint = 0.0;
         } else {
             *grading = ColorGrading::default();
+            grading.global.exposure = exposure;
         }
     }
 }

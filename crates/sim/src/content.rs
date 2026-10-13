@@ -43,6 +43,8 @@ pub struct Content {
     pub models: Vec<CastModel>,
     /// Deck, low rim, and the review camera. Not a collider.
     pub arena_dressing: ArenaDressing,
+    /// Lit scenery. Mesh building stays in the mesh crate.
+    pub arena_scene: crate::scenery::ArenaScene,
     /// Mask threshold, rim strength, overdrive emissive, and the side-sheet orbit.
     pub cast: CastLook,
 }
@@ -171,7 +173,7 @@ impl Content {
                 ));
             }
         }
-        let arena_dressing = load_arena_dressing(src.arena_visual)?;
+        let (arena_dressing, arena_scene) = load_arena_dressing(src.arena_visual)?;
         let mut weapons = parse::<WeaponFile>("weapons.toml", src.weapons)?;
         weapons.weapon = guns;
         let audio = crate::audio_mix::load_mix(src.audio).map_err(|err| format!("audio_mix.toml: {err}"))?;
@@ -217,12 +219,24 @@ impl Content {
             src.crate_reveal,
             &heroes,
         )?;
+        let waves: WavesFile = parse("waves.toml", src.waves)?;
+        let combat: Combat = parse("combat.toml", src.combat)?;
         let arena = load_arena(src.arena).map_err(|err| format!("arena_01.toml: {err}"))?;
         require_arena_colors(&palette, &arena).map_err(|err| format!("arena_01.toml: {err}"))?;
+        crate::scenery::validate(
+            &arena,
+            &arena_scene,
+            &palette,
+            controller.camera.eye_height,
+            &waves,
+            &bosses,
+            &combat,
+        )
+        .map_err(|err| format!("arena scenery: {err}"))?;
         validate_stage_offset(&palette, &crate_reveal.layout)?;
         Ok(Self {
             fingerprint,
-            waves: parse("waves.toml", src.waves)?,
+            waves,
             difficulty,
             controller,
             upgrades: parse::<UpgradeFile>("run_upgrades.toml", src.run_upgrades)?.upgrade,
@@ -238,7 +252,7 @@ impl Content {
             warnings,
             arena,
             presentation,
-            combat: parse("combat.toml", src.combat)?,
+            combat,
             palette,
             music: {
                 let loaded = crate::music::load_music(src.music).map_err(|err| format!("music.toml: {err}"))?;
@@ -258,6 +272,7 @@ impl Content {
             heroes_visual,
             models,
             arena_dressing,
+            arena_scene,
             cast,
         })
     }
@@ -2403,7 +2418,7 @@ fn load_glove(table: &toml::map::Map<String, toml::Value>) -> Result<GloveSpec, 
     Ok(glove)
 }
 
-fn load_arena_dressing(text: &str) -> Result<ArenaDressing, String> {
+fn load_arena_dressing(text: &str) -> Result<(ArenaDressing, crate::scenery::ArenaScene), String> {
     let root: toml::Value = toml::from_str(text).map_err(|err| format!("arena_visual.toml: {err}"))?;
     let table = root.as_table().ok_or_else(|| "arena_visual.toml is not a table".to_string())?;
     expect_keys(
@@ -2424,6 +2439,39 @@ fn load_arena_dressing(text: &str) -> Result<ArenaDressing, String> {
             "rail_still_side",
             "rail_still_fov",
             "rail_still_inset",
+            "floor_sides",
+            "boulder_slices",
+            "boulder_stacks",
+            "cover_chamfer",
+            "nest_sides",
+            "flora_sides",
+            "trim_height",
+            "trim_outset",
+            "trim_lift",
+            "panel_length",
+            "panel_thickness",
+            "panel_lift",
+            "panel_count",
+            "vent_size",
+            "vent_center_y",
+            "ledge_size",
+            "ledge_thickness",
+            "max_triangles",
+            "max_bytes",
+            "sha256",
+            "review_ambient",
+            "review_key",
+            "review_fill",
+            "review_gain",
+            "exposure_ev",
+            "light",
+            "material",
+            "floor",
+            "cliff",
+            "prop",
+            "nest",
+            "tower",
+            "camera",
         ],
         "arena_visual.toml",
     )?;
@@ -2476,14 +2524,15 @@ fn load_arena_dressing(text: &str) -> Result<ArenaDressing, String> {
     if !(dress.rail_still_inset > 0.0) {
         return Err("arena_visual.toml rail_still_inset must be > 0".into());
     }
-    Ok(dress)
+    let scene = crate::scenery::load_scene(table)?;
+    Ok((dress, scene))
 }
 
-fn vis_str<'a>(table: &'a toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<&'a str, String> {
+pub(crate) fn vis_str<'a>(table: &'a toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<&'a str, String> {
     table.get(key).and_then(|v| v.as_str()).ok_or_else(|| format!("{what} is missing {key}"))
 }
 
-fn vis_f32(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<f32, String> {
+pub(crate) fn vis_f32(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<f32, String> {
     let value = table.get(key).ok_or_else(|| format!("{what} is missing {key}"))?;
     let n = if let Some(n) = value.as_float() {
         n as f32
@@ -2498,7 +2547,7 @@ fn vis_f32(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -
     Ok(n)
 }
 
-fn vis_u32(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<u32, String> {
+pub(crate) fn vis_u32(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<u32, String> {
     let n = table
         .get(key)
         .and_then(|v| v.as_integer())
@@ -2509,14 +2558,14 @@ fn vis_u32(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -
     Ok(n as u32)
 }
 
-fn vis_bool(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<bool, String> {
+pub(crate) fn vis_bool(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<bool, String> {
     table
         .get(key)
         .and_then(|v| v.as_bool())
         .ok_or_else(|| format!("{what} {key} must be a bool"))
 }
 
-fn vis_vec2(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<[f32; 2], String> {
+pub(crate) fn vis_vec2(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<[f32; 2], String> {
     let arr = table
         .get(key)
         .and_then(|v| v.as_array())
@@ -2540,7 +2589,7 @@ fn vis_vec2(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) 
     Ok(out)
 }
 
-fn vis_vec3(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<[f32; 3], String> {
+pub(crate) fn vis_vec3(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<[f32; 3], String> {
     let arr = table
         .get(key)
         .and_then(|v| v.as_array())
@@ -2706,6 +2755,12 @@ pub struct Arena {
     pub perch_rules: PerchRules,
     pub paint: ArenaPaint,
     pub edge_wash: ArenaEdgeWash,
+    pub scenery: crate::scenery::SceneryRules,
+    pub surfaces: Vec<crate::scenery::Surface>,
+    pub lanes: Vec<crate::scenery::Corridor>,
+    pub routes: Vec<crate::scenery::Corridor>,
+    pub revive_spots: Vec<crate::scenery::ReviveSpot>,
+    pub cover: Vec<crate::scenery::Cover>,
 }
 
 #[derive(Clone, Debug)]
@@ -2887,6 +2942,9 @@ impl Arena {
 
     /// Deck, ramp volume, and the low railing. Shots along the walkable top pass.
     pub fn blocks_shot(&self, p0: Vec3, p1: Vec3) -> bool {
+        if self.cover_blocks_segment(p0, p1) {
+            return true;
+        }
         if !self.inside_play(p1, 0.0) {
             return true;
         }
@@ -2900,19 +2958,20 @@ impl Arena {
         false
     }
 
-    pub fn shove_bug(&self, pos: &mut Vec3) {
+    pub fn shove_bug(&self, pos: &mut Vec3, radius: f32) {
         if pos.y > self.platform.height - 0.5 || self.ramp_height(pos.x, pos.z).is_some() {
+            self.push_cover(pos, radius);
             return;
         }
-        if !self.in_disc(pos.x, pos.z) {
-            return;
+        if self.in_disc(pos.x, pos.z) {
+            let dx = pos.x - self.platform.center.x;
+            let dz = pos.z - self.platform.center.z;
+            let d = (dx * dx + dz * dz).sqrt().max(0.001);
+            let rim = self.platform.radius + 0.05;
+            pos.x = self.platform.center.x + dx / d * rim;
+            pos.z = self.platform.center.z + dz / d * rim;
         }
-        let dx = pos.x - self.platform.center.x;
-        let dz = pos.z - self.platform.center.z;
-        let d = (dx * dx + dz * dz).sqrt().max(0.001);
-        let rim = self.platform.radius + 0.05;
-        pos.x = self.platform.center.x + dx / d * rim;
-        pos.z = self.platform.center.z + dz / d * rim;
+        self.push_cover(pos, radius);
     }
 
     /// Keep the player on the disc, off the railing, and out of the deck volume.
@@ -2920,6 +2979,7 @@ impl Arena {
         self.clamp_play(pos, pad);
         self.hold_railing(pos, old);
         self.push_out_of_deck(pos, old);
+        self.push_cover(pos, pad);
     }
 
     fn hold_railing(&self, pos: &mut Vec3, old: Vec3) {
@@ -3054,6 +3114,12 @@ fn load_arena(text: &str) -> Result<Arena, String> {
             "perch_rules",
             "paint",
             "edge_wash",
+            "scenery",
+            "surface",
+            "lane",
+            "route",
+            "revive_spot",
+            "cover",
         ],
         "arena_01",
     )?;
@@ -3103,6 +3169,7 @@ fn load_arena(text: &str) -> Result<Arena, String> {
     let perch_rules = load_perch_rules(table.get("perch_rules").unwrap())?;
     let paint = load_arena_paint(table.get("paint").unwrap())?;
     let edge_wash = load_edge_wash(table.get("edge_wash").unwrap())?;
+    let play = crate::scenery::load_play(table)?;
     Ok(Arena {
         half_extent: size[0].max(size[1]) * 0.5,
         size,
@@ -3117,6 +3184,12 @@ fn load_arena(text: &str) -> Result<Arena, String> {
         perch_rules,
         paint,
         edge_wash,
+        scenery: play.rules,
+        surfaces: play.surfaces,
+        lanes: play.lanes,
+        routes: play.routes,
+        revive_spots: play.revive_spots,
+        cover: play.cover,
     })
 }
 
@@ -3590,7 +3663,7 @@ fn parse_choose_from(mode: &str) -> Result<u32, String> {
     Ok(count)
 }
 
-fn expect_keys(table: &toml::map::Map<String, toml::Value>, allowed: &[&str], what: &str) -> Result<(), String> {
+pub(crate) fn expect_keys(table: &toml::map::Map<String, toml::Value>, allowed: &[&str], what: &str) -> Result<(), String> {
     for key in table.keys() {
         if !allowed.contains(&key.as_str()) {
             return Err(format!("{what} has unknown key {key}"));
@@ -3613,7 +3686,7 @@ fn req_id(table: &toml::map::Map<String, toml::Value>, what: &str) -> Result<Str
         .ok_or_else(|| format!("{what} is missing id"))
 }
 
-fn num(value: &toml::Value, what: &str) -> Result<f32, String> {
+pub(crate) fn num(value: &toml::Value, what: &str) -> Result<f32, String> {
     match value {
         toml::Value::Float(n) => Ok(*n as f32),
         toml::Value::Integer(n) => Ok(*n as f32),
@@ -3621,7 +3694,7 @@ fn num(value: &toml::Value, what: &str) -> Result<f32, String> {
     }
 }
 
-fn nums2(value: &toml::Value, what: &str) -> Result<[f32; 2], String> {
+pub(crate) fn nums2(value: &toml::Value, what: &str) -> Result<[f32; 2], String> {
     let arr = value.as_array().ok_or_else(|| format!("{what} must be an array"))?;
     if arr.len() != 2 {
         return Err(format!("{what} must have 2 numbers"));
@@ -3629,7 +3702,7 @@ fn nums2(value: &toml::Value, what: &str) -> Result<[f32; 2], String> {
     Ok([num(&arr[0], what)?, num(&arr[1], what)?])
 }
 
-fn nums3(value: &toml::Value, what: &str) -> Result<[f32; 3], String> {
+pub(crate) fn nums3(value: &toml::Value, what: &str) -> Result<[f32; 3], String> {
     let arr = value.as_array().ok_or_else(|| format!("{what} must be an array"))?;
     if arr.len() != 3 {
         return Err(format!("{what} must have 3 numbers"));
@@ -3943,6 +4016,27 @@ pub struct PaletteKeys {
     pub gear_brakk_shield_primary: String,
     pub gear_brakk_shield_secondary: String,
     pub gear_brakk_shield_accent: String,
+    pub dirt_mauve: String,
+    pub dirt_outer: String,
+    pub rim_violet: String,
+    pub rim_violet_hi: String,
+    pub boulder_violet: String,
+    pub platform_pale: String,
+    pub platform_navy: String,
+    pub trim_cyan: String,
+    pub nest_brass: String,
+    pub nest_goo: String,
+    pub beacon_cyan: String,
+    pub rubble_violet: String,
+    pub crack_dark: String,
+    pub vein_resin: String,
+    pub flora_stalk: String,
+    pub flora_bulb: String,
+    pub fog_violet: String,
+    pub sky_haze: String,
+    pub key_warm: String,
+    pub fill_cool: String,
+    pub ambient_haze: String,
 }
 
 impl Palette {
@@ -4001,6 +4095,27 @@ impl Palette {
             "gear_brakk_shield_primary" => self.keys.gear_brakk_shield_primary.as_str(),
             "gear_brakk_shield_secondary" => self.keys.gear_brakk_shield_secondary.as_str(),
             "gear_brakk_shield_accent" => self.keys.gear_brakk_shield_accent.as_str(),
+            "dirt_mauve" => self.keys.dirt_mauve.as_str(),
+            "dirt_outer" => self.keys.dirt_outer.as_str(),
+            "rim_violet" => self.keys.rim_violet.as_str(),
+            "rim_violet_hi" => self.keys.rim_violet_hi.as_str(),
+            "boulder_violet" => self.keys.boulder_violet.as_str(),
+            "platform_pale" => self.keys.platform_pale.as_str(),
+            "platform_navy" => self.keys.platform_navy.as_str(),
+            "trim_cyan" => self.keys.trim_cyan.as_str(),
+            "nest_brass" => self.keys.nest_brass.as_str(),
+            "nest_goo" => self.keys.nest_goo.as_str(),
+            "beacon_cyan" => self.keys.beacon_cyan.as_str(),
+            "rubble_violet" => self.keys.rubble_violet.as_str(),
+            "crack_dark" => self.keys.crack_dark.as_str(),
+            "vein_resin" => self.keys.vein_resin.as_str(),
+            "flora_stalk" => self.keys.flora_stalk.as_str(),
+            "flora_bulb" => self.keys.flora_bulb.as_str(),
+            "fog_violet" => self.keys.fog_violet.as_str(),
+            "sky_haze" => self.keys.sky_haze.as_str(),
+            "key_warm" => self.keys.key_warm.as_str(),
+            "fill_cool" => self.keys.fill_cool.as_str(),
+            "ambient_haze" => self.keys.ambient_haze.as_str(),
             "hero_teal" | "teal" => self.hero.teal.as_str(),
             "hero_cobalt" | "cobalt" => self.hero.cobalt.as_str(),
             "hero_white" | "white" => self.hero.white.as_str(),

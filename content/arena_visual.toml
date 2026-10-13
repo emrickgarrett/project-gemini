@@ -19,3 +19,968 @@ rail_still_up = 0.40
 rail_still_side = 3.20
 rail_still_fov = 72.0
 rail_still_inset = 1.40
+
+floor_sides = 24
+boulder_slices = 7
+boulder_stacks = 3
+cover_chamfer = 0.35
+nest_sides = 6
+flora_sides = 5
+trim_height = 0.16
+trim_outset = 0.22
+trim_lift = 0.04
+panel_length = 2.4
+panel_thickness = 0.08
+panel_lift = 0.03
+panel_count = 8
+vent_size = [1.4, 0.4, 1.4]
+vent_center_y = 0.2
+ledge_size = [2.4, 0.3, 2.4]
+ledge_thickness = 0.12
+max_triangles = 3800
+max_bytes = 410000
+sha256 = "a7c295a25e847cc41ecbaaeae9ae6c71af5eef087db089d8a1c7424c95653b5a"
+review_ambient = 0.38
+review_key = 0.28
+review_fill = 0.12
+review_gain = 3.35
+exposure_ev = 1.0
+
+[light]
+key_color = "key_warm"
+key_illuminance = 14000.0
+key_yaw_deg = -48.0
+key_pitch_deg = 62.0
+fill_color = "fill_cool"
+fill_illuminance = 4200.0
+fill_yaw_deg = 132.0
+fill_pitch_deg = 28.0
+ambient_color = "ambient_haze"
+ambient_brightness = 220.0
+shadow_filter = "gaussian"
+fog_color = "fog_violet"
+sky_color = "sky_haze"
+[[material]]
+id = "dirt"
+color = "dirt_mauve"
+bloom = false
+glow = false
+lit = true
+roughness = 0.92
+metallic = 0.0
+[[material]]
+id = "dirt_outer"
+color = "dirt_outer"
+bloom = false
+glow = false
+lit = true
+roughness = 0.94
+metallic = 0.0
+[[material]]
+id = "rim"
+color = "rim_violet"
+bloom = false
+glow = false
+lit = true
+roughness = 0.88
+metallic = 0.02
+[[material]]
+id = "rim_hi"
+color = "rim_violet_hi"
+bloom = false
+glow = false
+lit = true
+roughness = 0.84
+metallic = 0.02
+[[material]]
+id = "boulder"
+color = "boulder_violet"
+bloom = false
+glow = false
+lit = true
+roughness = 0.9
+metallic = 0.0
+[[material]]
+id = "pale"
+color = "platform_pale"
+bloom = false
+glow = false
+lit = true
+roughness = 0.55
+metallic = 0.15
+[[material]]
+id = "navy"
+color = "platform_navy"
+bloom = false
+glow = false
+lit = true
+roughness = 0.45
+metallic = 0.35
+[[material]]
+id = "trim"
+color = "trim_cyan"
+bloom = false
+glow = true
+lit = false
+roughness = 0.3
+metallic = 0.1
+[[material]]
+id = "brass"
+color = "nest_brass"
+bloom = false
+glow = false
+lit = true
+roughness = 0.5
+metallic = 0.45
+[[material]]
+id = "goo"
+color = "nest_goo"
+bloom = false
+glow = true
+lit = false
+roughness = 0.25
+metallic = 0.0
+[[material]]
+id = "beacon"
+color = "beacon_cyan"
+bloom = false
+glow = true
+lit = false
+roughness = 0.2
+metallic = 0.05
+[[material]]
+id = "rubble"
+color = "rubble_violet"
+bloom = false
+glow = false
+lit = true
+roughness = 0.95
+metallic = 0.0
+[[material]]
+id = "crack"
+color = "crack_dark"
+bloom = false
+glow = false
+lit = true
+roughness = 1.0
+metallic = 0.0
+[[material]]
+id = "vein"
+color = "vein_resin"
+bloom = false
+glow = false
+lit = true
+roughness = 0.7
+metallic = 0.0
+[[material]]
+id = "stalk"
+color = "flora_stalk"
+bloom = false
+glow = false
+lit = true
+roughness = 0.8
+metallic = 0.0
+[[material]]
+id = "bulb"
+color = "flora_bulb"
+bloom = false
+glow = false
+lit = true
+roughness = 0.6
+metallic = 0.0
+
+[[floor]]
+id = "dirt_inner"
+inner = 8.0
+outer = 24.0
+y = 0.0
+material = "dirt"
+
+[[floor]]
+id = "band_outer"
+inner = 24.0
+outer = 40.0
+y = 0.0
+material = "dirt_outer"
+[[cliff]]
+id = "cliff_00"
+angle_deg = 0
+span_deg = 15.0
+inner = 40.25
+outer = 46.2
+inner_height = 4.8
+outer_height = 7.6
+material = "rim_hi"
+[[cliff]]
+id = "cliff_01"
+angle_deg = 15
+span_deg = 15.0
+inner = 40.25
+outer = 47.050000000000004
+inner_height = 8.5
+outer_height = 11.65
+material = "rim"
+[[cliff]]
+id = "cliff_02"
+angle_deg = 30
+span_deg = 15.0
+inner = 40.25
+outer = 47.900000000000006
+inner_height = 9.4
+outer_height = 12.899999999999999
+material = "rim_hi"
+[[cliff]]
+id = "cliff_03"
+angle_deg = 45
+span_deg = 15.0
+inner = 40.25
+outer = 48.75
+inner_height = 7.6
+outer_height = 11.45
+material = "rim"
+[[cliff]]
+id = "cliff_04"
+angle_deg = 60
+span_deg = 15.0
+inner = 40.25
+outer = 49.6
+inner_height = 4.8
+outer_height = 7.6
+material = "rim_hi"
+[[cliff]]
+id = "cliff_05"
+angle_deg = 75
+span_deg = 15.0
+inner = 40.25
+outer = 46.2
+inner_height = 9.4
+outer_height = 12.549999999999999
+material = "rim"
+[[cliff]]
+id = "cliff_06"
+angle_deg = 90
+span_deg = 15.0
+inner = 40.25
+outer = 47.050000000000004
+inner_height = 7.6
+outer_height = 11.099999999999998
+material = "rim_hi"
+[[cliff]]
+id = "cliff_07"
+angle_deg = 105
+span_deg = 15.0
+inner = 40.25
+outer = 47.900000000000006
+inner_height = 8.5
+outer_height = 12.350000000000001
+material = "rim"
+[[cliff]]
+id = "cliff_08"
+angle_deg = 120
+span_deg = 15.0
+inner = 40.25
+outer = 48.75
+inner_height = 4.8
+outer_height = 7.6
+material = "rim_hi"
+[[cliff]]
+id = "cliff_09"
+angle_deg = 135
+span_deg = 15.0
+inner = 40.25
+outer = 49.6
+inner_height = 7.6
+outer_height = 10.749999999999998
+material = "rim"
+[[cliff]]
+id = "cliff_10"
+angle_deg = 150
+span_deg = 15.0
+inner = 40.25
+outer = 46.2
+inner_height = 8.5
+outer_height = 12.0
+material = "rim_hi"
+[[cliff]]
+id = "cliff_11"
+angle_deg = 165
+span_deg = 15.0
+inner = 40.25
+outer = 47.050000000000004
+inner_height = 9.4
+outer_height = 13.25
+material = "rim"
+[[cliff]]
+id = "cliff_12"
+angle_deg = 180
+span_deg = 15.0
+inner = 40.25
+outer = 47.900000000000006
+inner_height = 4.8
+outer_height = 7.6
+material = "rim_hi"
+[[cliff]]
+id = "cliff_13"
+angle_deg = 195
+span_deg = 15.0
+inner = 40.25
+outer = 48.75
+inner_height = 8.5
+outer_height = 11.65
+material = "rim"
+[[cliff]]
+id = "cliff_14"
+angle_deg = 210
+span_deg = 15.0
+inner = 40.25
+outer = 49.6
+inner_height = 9.4
+outer_height = 12.899999999999999
+material = "rim_hi"
+[[cliff]]
+id = "cliff_15"
+angle_deg = 225
+span_deg = 15.0
+inner = 40.25
+outer = 46.2
+inner_height = 7.6
+outer_height = 11.45
+material = "rim"
+[[cliff]]
+id = "cliff_16"
+angle_deg = 240
+span_deg = 15.0
+inner = 40.25
+outer = 47.050000000000004
+inner_height = 4.8
+outer_height = 7.6
+material = "rim_hi"
+[[cliff]]
+id = "cliff_17"
+angle_deg = 255
+span_deg = 15.0
+inner = 40.25
+outer = 47.900000000000006
+inner_height = 9.4
+outer_height = 12.549999999999999
+material = "rim"
+[[cliff]]
+id = "cliff_18"
+angle_deg = 270
+span_deg = 15.0
+inner = 40.25
+outer = 48.75
+inner_height = 7.6
+outer_height = 11.099999999999998
+material = "rim_hi"
+[[cliff]]
+id = "cliff_19"
+angle_deg = 285
+span_deg = 15.0
+inner = 40.25
+outer = 49.6
+inner_height = 8.5
+outer_height = 12.350000000000001
+material = "rim"
+[[cliff]]
+id = "cliff_20"
+angle_deg = 300
+span_deg = 15.0
+inner = 40.25
+outer = 46.2
+inner_height = 4.8
+outer_height = 7.6
+material = "rim_hi"
+[[cliff]]
+id = "cliff_21"
+angle_deg = 315
+span_deg = 15.0
+inner = 40.25
+outer = 47.050000000000004
+inner_height = 7.6
+outer_height = 10.749999999999998
+material = "rim"
+[[cliff]]
+id = "cliff_22"
+angle_deg = 330
+span_deg = 15.0
+inner = 40.25
+outer = 47.900000000000006
+inner_height = 8.5
+outer_height = 12.0
+material = "rim_hi"
+[[cliff]]
+id = "cliff_23"
+angle_deg = 345
+span_deg = 15.0
+inner = 40.25
+outer = 48.75
+inner_height = 9.4
+outer_height = 13.25
+material = "rim"
+[[prop]]
+id = "rubble_0_0"
+kind = "rubble"
+pos = [9.249999999999998, 0.06, 16.021469970012117]
+size = [0.7, 0.12, 0.55]
+yaw_deg = 30
+material = "rubble"
+[[prop]]
+id = "pebble_0_0"
+kind = "pebble"
+pos = [10.849999999999998, 0.05, 18.79275126212232]
+size = [0.36, 0.1, 0.32]
+yaw_deg = 48
+material = "boulder"
+[[prop]]
+id = "rubble_0_1"
+kind = "rubble"
+pos = [13.249999999999998, 0.06, 22.949673200287627]
+size = [0.7, 0.12, 0.55]
+yaw_deg = 30
+material = "rubble"
+[[prop]]
+id = "pebble_0_1"
+kind = "pebble"
+pos = [14.849999999999998, 0.05, 25.72095449239783]
+size = [0.36, 0.1, 0.32]
+yaw_deg = 48
+material = "boulder"
+[[prop]]
+id = "rubble_1_1"
+kind = "rubble"
+pos = [26.5, 0.06, 1.622657008870243e-15]
+size = [0.7, 0.12, 0.55]
+yaw_deg = 90
+material = "rubble"
+[[prop]]
+id = "pebble_1_1"
+kind = "pebble"
+pos = [29.7, 0.05, 1.8186004967338196e-15]
+size = [0.36, 0.1, 0.32]
+yaw_deg = 108
+material = "boulder"
+[[prop]]
+id = "rubble_4_1"
+kind = "rubble"
+pos = [-26.5, 0.06, -4.8679710266107285e-15]
+size = [0.7, 0.12, 0.55]
+yaw_deg = 270
+material = "rubble"
+[[prop]]
+id = "pebble_4_1"
+kind = "pebble"
+pos = [-29.7, 0.05, -5.455801490201458e-15]
+size = [0.36, 0.1, 0.32]
+yaw_deg = 288
+material = "boulder"
+[[prop]]
+id = "rubble_5_0"
+kind = "rubble"
+pos = [-9.250000000000009, 0.06, 16.02146997001211]
+size = [0.7, 0.12, 0.55]
+yaw_deg = 330
+material = "rubble"
+[[prop]]
+id = "pebble_5_0"
+kind = "pebble"
+pos = [-10.850000000000009, 0.05, 18.792751262122312]
+size = [0.36, 0.1, 0.32]
+yaw_deg = 348
+material = "boulder"
+[[prop]]
+id = "rubble_5_1"
+kind = "rubble"
+pos = [-13.250000000000012, 0.06, 22.949673200287616]
+size = [0.7, 0.12, 0.55]
+yaw_deg = 330
+material = "rubble"
+[[prop]]
+id = "pebble_5_1"
+kind = "pebble"
+pos = [-14.850000000000012, 0.05, 25.72095449239782]
+size = [0.36, 0.1, 0.32]
+yaw_deg = 348
+material = "boulder"
+[[prop]]
+id = "crack_vent_1_a"
+kind = "crack"
+pos = [8.346305398188537, 0.02, 33.47520255652188]
+size = [1.4, 0.04, 0.22]
+yaw_deg = 14.0
+material = "crack"
+[[prop]]
+id = "vein_vent_1_a"
+kind = "vein"
+pos = [8.805956999827906, 0.035, 35.31876443644627]
+size = [1.8, 0.06, 0.16]
+yaw_deg = 14.0
+material = "vein"
+[[prop]]
+id = "crack_vent_1_b"
+kind = "crack"
+pos = [-8.346305398188537, 0.02, 33.47520255652188]
+size = [1.4, 0.04, 0.22]
+yaw_deg = -14.0
+material = "crack"
+[[prop]]
+id = "vein_vent_1_b"
+kind = "vein"
+pos = [-8.805956999827906, 0.035, 35.31876443644627]
+size = [1.8, 0.06, 0.16]
+yaw_deg = -14.0
+material = "vein"
+[[prop]]
+id = "crack_vent_2_a"
+kind = "crack"
+pos = [33.163528509872, 0.02, 9.50948877568647]
+size = [1.4, 0.04, 0.22]
+yaw_deg = 74.0
+material = "crack"
+[[prop]]
+id = "vein_vent_2_a"
+kind = "vein"
+pos = [34.98992573215481, 0.035, 10.033199751738769]
+size = [1.8, 0.06, 0.16]
+yaw_deg = 74.0
+material = "vein"
+[[prop]]
+id = "crack_vent_2_b"
+kind = "crack"
+pos = [24.81722311168346, 0.02, 23.965713780835404]
+size = [1.4, 0.04, 0.22]
+yaw_deg = 46.0
+material = "crack"
+[[prop]]
+id = "vein_vent_2_b"
+kind = "vein"
+pos = [26.1839687323269, 0.035, 25.2855646847075]
+size = [1.8, 0.06, 0.16]
+yaw_deg = 46.0
+material = "vein"
+[[prop]]
+id = "crack_vent_3_a"
+kind = "crack"
+pos = [24.81722311168346, 0.02, -23.965713780835408]
+size = [1.4, 0.04, 0.22]
+yaw_deg = 134.0
+material = "crack"
+[[prop]]
+id = "vein_vent_3_a"
+kind = "vein"
+pos = [26.1839687323269, 0.035, -25.285564684707502]
+size = [1.8, 0.06, 0.16]
+yaw_deg = 134.0
+material = "vein"
+[[prop]]
+id = "crack_vent_3_b"
+kind = "crack"
+pos = [33.163528509872, 0.02, -9.509488775686467]
+size = [1.4, 0.04, 0.22]
+yaw_deg = 106.0
+material = "crack"
+[[prop]]
+id = "vein_vent_3_b"
+kind = "vein"
+pos = [34.98992573215481, 0.035, -10.033199751738765]
+size = [1.8, 0.06, 0.16]
+yaw_deg = 106.0
+material = "vein"
+[[prop]]
+id = "crack_vent_5_a"
+kind = "crack"
+pos = [-33.16352850987201, 0.02, -9.509488775686462]
+size = [1.4, 0.04, 0.22]
+yaw_deg = 254.0
+material = "crack"
+[[prop]]
+id = "vein_vent_5_a"
+kind = "vein"
+pos = [-34.98992573215481, 0.035, -10.03319975173876]
+size = [1.8, 0.06, 0.16]
+yaw_deg = 254.0
+material = "vein"
+[[prop]]
+id = "crack_vent_5_b"
+kind = "crack"
+pos = [-24.817223111683465, 0.02, -23.965713780835404]
+size = [1.4, 0.04, 0.22]
+yaw_deg = 226.0
+material = "crack"
+[[prop]]
+id = "vein_vent_5_b"
+kind = "vein"
+pos = [-26.183968732326903, 0.035, -25.2855646847075]
+size = [1.8, 0.06, 0.16]
+yaw_deg = 226.0
+material = "vein"
+[[prop]]
+id = "crack_vent_6_a"
+kind = "crack"
+pos = [-24.817223111683465, 0.02, 23.965713780835404]
+size = [1.4, 0.04, 0.22]
+yaw_deg = 314.0
+material = "crack"
+[[prop]]
+id = "vein_vent_6_a"
+kind = "vein"
+pos = [-26.183968732326903, 0.035, 25.2855646847075]
+size = [1.8, 0.06, 0.16]
+yaw_deg = 314.0
+material = "vein"
+[[prop]]
+id = "crack_vent_6_b"
+kind = "crack"
+pos = [-33.163528509871995, 0.02, 9.50948877568648]
+size = [1.4, 0.04, 0.22]
+yaw_deg = 286.0
+material = "crack"
+[[prop]]
+id = "vein_vent_6_b"
+kind = "vein"
+pos = [-34.9899257321548, 0.035, 10.033199751738778]
+size = [1.8, 0.06, 0.16]
+yaw_deg = 286.0
+material = "vein"
+[[prop]]
+id = "rim_0"
+kind = "rim_rock"
+pos = [6.610722295603108, 1.1, 47.037733265224595]
+size = [1.6, 2.2, 1.4]
+yaw_deg = 8.0
+material = "rim"
+[[prop]]
+id = "stalk_0"
+kind = "flora_stalk"
+pos = [6.234954923010931, 0.7, 44.36400947962235]
+size = [0.28, 1.4, 0.28]
+yaw_deg = 8.0
+material = "stalk"
+[[prop]]
+id = "bulb_0"
+kind = "flora_bulb"
+pos = [6.234954923010931, 1.55, 44.36400947962235]
+size = [0.42, 0.42, 0.42]
+yaw_deg = 8.0
+material = "bulb"
+[[prop]]
+id = "rim_1"
+kind = "rim_rock"
+pos = [22.816317951394293, 1.3, 42.91125301294385]
+size = [1.85, 2.6, 1.5999999999999999]
+yaw_deg = 28.0
+material = "rim"
+[[prop]]
+id = "rim_2"
+kind = "rim_rock"
+pos = [36.9342978262265, 1.5, 33.255791136035256]
+size = [2.1, 3.0, 1.7999999999999998]
+yaw_deg = 48.0
+material = "rim"
+[[prop]]
+id = "stalk_2"
+kind = "flora_stalk"
+pos = [33.29288818138726, 0.7, 29.977051164876848]
+size = [0.28, 1.4, 0.28]
+yaw_deg = 48.0
+material = "stalk"
+[[prop]]
+id = "bulb_2"
+kind = "flora_bulb"
+pos = [33.29288818138726, 1.55, 29.977051164876848]
+size = [0.42, 0.42, 0.42]
+yaw_deg = 48.0
+material = "bulb"
+[[prop]]
+id = "rim_3"
+kind = "rim_rock"
+pos = [44.0412330919224, 1.1, 17.793813187255818]
+size = [2.35, 2.2, 1.4]
+yaw_deg = 68.0
+material = "rim"
+[[prop]]
+id = "rim_4"
+kind = "rim_rock"
+pos = [48.57039419312805, 1.3, 1.6961155397415526]
+size = [1.6, 2.6, 1.5999999999999999]
+yaw_deg = 88.0
+material = "rim"
+[[prop]]
+id = "stalk_4"
+kind = "flora_stalk"
+pos = [44.77270905045549, 0.7, 1.5634974522720484]
+size = [0.28, 1.4, 0.28]
+yaw_deg = 88.0
+material = "stalk"
+[[prop]]
+id = "bulb_4"
+kind = "flora_bulb"
+pos = [44.77270905045549, 1.55, 1.5634974522720484]
+size = [0.42, 0.42, 0.42]
+yaw_deg = 88.0
+material = "bulb"
+[[prop]]
+id = "rim_5"
+kind = "rim_rock"
+pos = [47.26750885986914, 1.5, -15.358144620434883]
+size = [1.85, 3.0, 1.7999999999999998]
+yaw_deg = 108.0
+material = "rim"
+[[prop]]
+id = "rim_6"
+kind = "rim_rock"
+pos = [37.4305107963193, 1.1, -29.24392007796877]
+size = [2.1, 2.2, 1.4]
+yaw_deg = 128.0
+material = "rim"
+[[prop]]
+id = "stalk_6"
+kind = "flora_stalk"
+pos = [35.30288176158114, 0.7, -27.58163409458949]
+size = [0.28, 1.4, 0.28]
+yaw_deg = 128.0
+material = "stalk"
+[[prop]]
+id = "bulb_6"
+kind = "flora_bulb"
+pos = [35.30288176158114, 1.55, -27.58163409458949]
+size = [0.42, 0.42, 0.42]
+yaw_deg = 128.0
+material = "bulb"
+[[prop]]
+id = "rim_7"
+kind = "rim_rock"
+pos = [25.75407624173376, 1.3, -41.215137473202304]
+size = [2.35, 2.6, 1.5999999999999999]
+yaw_deg = 148.0
+material = "rim"
+[[prop]]
+id = "rim_8"
+kind = "rim_rock"
+pos = [10.33321103364264, 1.5, -48.61393575647015]
+size = [1.6, 3.0, 1.7999999999999998]
+yaw_deg = 168.0
+material = "rim"
+[[prop]]
+id = "stalk_8"
+kind = "flora_stalk"
+pos = [9.314443748635616, 0.7, -43.82101251287449]
+size = [0.28, 1.4, 0.28]
+yaw_deg = 168.0
+material = "stalk"
+[[prop]]
+id = "bulb_8"
+kind = "flora_bulb"
+pos = [9.314443748635616, 1.55, -43.82101251287449]
+size = [0.42, 0.42, 0.42]
+yaw_deg = 168.0
+material = "bulb"
+[[prop]]
+id = "rim_9"
+kind = "rim_rock"
+pos = [-6.610722295603113, 1.1, -47.03773326522459]
+size = [1.85, 2.2, 1.4]
+yaw_deg = 188.0
+material = "rim"
+[[prop]]
+id = "rim_10"
+kind = "rim_rock"
+pos = [-22.816317951394296, 1.3, -42.911253012943845]
+size = [2.1, 2.6, 1.5999999999999999]
+yaw_deg = 208.0
+material = "rim"
+[[prop]]
+id = "stalk_10"
+kind = "flora_stalk"
+pos = [-21.03232601280791, 0.7, -39.55605216007992]
+size = [0.28, 1.4, 0.28]
+yaw_deg = 208.0
+material = "stalk"
+[[prop]]
+id = "bulb_10"
+kind = "flora_bulb"
+pos = [-21.03232601280791, 1.55, -39.55605216007992]
+size = [0.42, 0.42, 0.42]
+yaw_deg = 208.0
+material = "bulb"
+[[prop]]
+id = "rim_11"
+kind = "rim_rock"
+pos = [-36.934297826226505, 1.5, -33.25579113603525]
+size = [2.35, 3.0, 1.7999999999999998]
+yaw_deg = 228.0
+material = "rim"
+[[prop]]
+id = "rim_12"
+kind = "rim_rock"
+pos = [-44.0412330919224, 1.1, -17.793813187255832]
+size = [1.6, 2.2, 1.4]
+yaw_deg = 248.0
+material = "rim"
+[[prop]]
+id = "stalk_12"
+kind = "flora_stalk"
+pos = [-41.53783668459207, 0.7, -16.78237538503287]
+size = [0.28, 1.4, 0.28]
+yaw_deg = 248.0
+material = "stalk"
+[[prop]]
+id = "bulb_12"
+kind = "flora_bulb"
+pos = [-41.53783668459207, 1.55, -16.78237538503287]
+size = [0.42, 0.42, 0.42]
+yaw_deg = 248.0
+material = "bulb"
+[[prop]]
+id = "rim_13"
+kind = "rim_rock"
+pos = [-48.57039419312805, 1.3, -1.696115539741537]
+size = [1.85, 2.6, 1.5999999999999999]
+yaw_deg = 268.0
+material = "rim"
+[[prop]]
+id = "rim_14"
+kind = "rim_rock"
+pos = [-47.26750885986914, 1.5, 15.358144620434878]
+size = [2.1, 3.0, 1.7999999999999998]
+yaw_deg = 288.0
+material = "rim"
+[[prop]]
+id = "stalk_14"
+kind = "flora_stalk"
+pos = [-42.60733193002288, 0.7, 13.843961347997634]
+size = [0.28, 1.4, 0.28]
+yaw_deg = 288.0
+material = "stalk"
+[[prop]]
+id = "bulb_14"
+kind = "flora_bulb"
+pos = [-42.60733193002288, 1.55, 13.843961347997634]
+size = [0.42, 0.42, 0.42]
+yaw_deg = 288.0
+material = "bulb"
+[[prop]]
+id = "rim_15"
+kind = "rim_rock"
+pos = [-37.43051079631928, 1.1, 29.24392007796878]
+size = [2.35, 2.2, 1.4]
+yaw_deg = 308.0
+material = "rim"
+[[prop]]
+id = "rim_16"
+kind = "rim_rock"
+pos = [-25.754076241733763, 1.3, 41.215137473202304]
+size = [1.6, 2.6, 1.5999999999999999]
+yaw_deg = 328.0
+material = "rim"
+[[prop]]
+id = "stalk_16"
+kind = "flora_stalk"
+pos = [-23.740383037647582, 0.7, 37.992554707807884]
+size = [0.28, 1.4, 0.28]
+yaw_deg = 328.0
+material = "stalk"
+[[prop]]
+id = "bulb_16"
+kind = "flora_bulb"
+pos = [-23.740383037647582, 1.55, 37.992554707807884]
+size = [0.42, 0.42, 0.42]
+yaw_deg = 328.0
+material = "bulb"
+[[prop]]
+id = "rim_17"
+kind = "rim_rock"
+pos = [-10.333211033642666, 1.5, 48.61393575647014]
+size = [1.85, 3.0, 1.7999999999999998]
+yaw_deg = 348.0
+material = "rim"
+[[nest]]
+id = "nest_vent_1"
+vent = "vent_1"
+outset = 4.8
+size = [4.6, 3.6, 2.4]
+material = "brass"
+goo = "goo"
+goo_scale = [0.62, 0.55, 0.18]
+[[nest]]
+id = "nest_vent_2"
+vent = "vent_2"
+outset = 4.8
+size = [4.6, 3.6, 2.4]
+material = "brass"
+goo = "goo"
+goo_scale = [0.62, 0.55, 0.18]
+[[nest]]
+id = "nest_vent_3"
+vent = "vent_3"
+outset = 4.8
+size = [4.6, 3.6, 2.4]
+material = "brass"
+goo = "goo"
+goo_scale = [0.62, 0.55, 0.18]
+[[nest]]
+id = "nest_vent_4"
+vent = "vent_4"
+outset = 4.8
+size = [4.6, 3.6, 2.4]
+material = "brass"
+goo = "goo"
+goo_scale = [0.62, 0.55, 0.18]
+[[nest]]
+id = "nest_vent_5"
+vent = "vent_5"
+outset = 4.8
+size = [4.6, 3.6, 2.4]
+material = "brass"
+goo = "goo"
+goo_scale = [0.62, 0.55, 0.18]
+[[nest]]
+id = "nest_vent_6"
+vent = "vent_6"
+outset = 4.8
+size = [4.6, 3.6, 2.4]
+material = "brass"
+goo = "goo"
+goo_scale = [0.62, 0.55, 0.18]
+
+[[tower]]
+id = "relay"
+ledge = "tower"
+base = [1.5, 0.7, 1.5]
+mast = [0.42, 3.4, 0.42]
+head = [1.05, 0.5, 1.05]
+beacon = [0.26, 0.26, 0.26]
+material = "navy"
+beacon_material = "beacon"
+
+[[camera]]
+id = "eye"
+eye = [0.0, 5.62, -6.0]
+look = [0.0, 3.2, 22.0]
+fov = 68.0
+width = 1280
+height = 720
+
+[[camera]]
+id = "overhead"
+eye = [0.0, 68.0, 0.4]
+look = [0.0, 0.0, 0.0]
+fov = 46.0
+width = 1280
+height = 720
+
+[[camera]]
+id = "concept"
+eye = [34.0, 24.0, 30.0]
+look = [0.0, 2.0, -2.0]
+fov = 48.0
+width = 1280
+height = 720
+
+[[camera]]
+id = "vex"
+eye = [0.0, 5.62, -0.4]
+look = [0.0, 4.4, 18.0]
+fov = 90.0
+width = 1280
+height = 720

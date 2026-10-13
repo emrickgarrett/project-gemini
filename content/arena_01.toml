@@ -119,3 +119,183 @@ sky = "arena_sky"
 horizon = 0.42
 mix = 0.25
 span = 0.45
+
+# Scenery rules, lanes, and cover. Bounds, spawns, and jetpack ledges stay above.
+
+[scenery]
+min_hue_distance_deg = 24.0
+min_saturation = 0.22
+weakpoint = "spitter_glow"
+overdrive = "hero_vex"
+yellow = "hero_kip"
+actor_base = ["swarmer_amber", "spitter_carapace", "brute_amber", "brood_sac", "hero_vex_primary", "hero_nyra_primary", "hero_brakk_primary", "hero_kip_primary"]
+fog_start = 82.0
+fog_end = 118.0
+fog_max_density = 0.04
+max_fog_at_attack = 0.0
+max_clutter_height = 0.18
+bounds_slack = 0.05
+overlap_epsilon = 0.001
+cover_tie = "x"
+spawn_clearance = 2.5
+clutter_kinds = ["rubble", "pebble", "crack", "vein"]
+outside_kinds = ["rim_rock", "flora_stalk", "flora_bulb"]
+required_cameras = ["eye", "overhead", "concept", "vex"]
+surface_kinds = ["dirt", "metal", "rock", "resin"]
+luma_weights = [0.2126, 0.7152, 0.0722]
+mover_height = 1.62
+cover_solve_passes = 4
+
+[[surface]]
+id = "dirt_floor"
+kind = "dirt"
+
+[[surface]]
+id = "metal_deck"
+kind = "metal"
+
+[[surface]]
+id = "rock_rim"
+kind = "rock"
+
+[[surface]]
+id = "resin_nest"
+kind = "resin"
+
+[[lane]]
+id = "lane_vent_1"
+from = [0.0, 38.0]
+to = [0.0, 10.0]
+half_width = 2.6
+
+[[lane]]
+id = "lane_vent_2"
+from = [32.9, 19.0]
+to = [8.659664031777726, 5.001021781269813]
+half_width = 2.6
+
+[[lane]]
+id = "lane_vent_3"
+from = [32.9, -19.0]
+to = [8.659664031777726, -5.001021781269813]
+half_width = 2.6
+
+[[lane]]
+id = "lane_vent_4"
+from = [0.0, -38.0]
+to = [0.0, -10.0]
+half_width = 2.6
+
+[[lane]]
+id = "lane_vent_5"
+from = [-32.9, -19.0]
+to = [-8.659664031777726, -5.001021781269813]
+half_width = 2.6
+
+[[lane]]
+id = "lane_vent_6"
+from = [-32.9, 19.0]
+to = [-8.659664031777726, 5.001021781269813]
+half_width = 2.6
+
+[[lane]]
+id = "lane_east"
+from = [16.0, 0.0]
+to = [8.0, 0.0]
+half_width = 2.4
+
+[[lane]]
+id = "lane_west"
+from = [-16.0, 0.0]
+to = [-8.0, 0.0]
+half_width = 2.4
+
+[[route]]
+id = "route_vent_1"
+from = [0.0, 38.0]
+to = [0.0, 0.0]
+half_width = 2.6
+
+[[route]]
+id = "route_vent_2"
+from = [32.9, 19.0]
+to = [0.0, 0.0]
+half_width = 2.6
+
+[[route]]
+id = "route_vent_3"
+from = [32.9, -19.0]
+to = [0.0, 0.0]
+half_width = 2.6
+
+[[route]]
+id = "route_vent_4"
+from = [0.0, -38.0]
+to = [0.0, 0.0]
+half_width = 2.6
+
+[[route]]
+id = "route_vent_5"
+from = [-32.9, -19.0]
+to = [0.0, 0.0]
+half_width = 2.6
+
+[[route]]
+id = "route_vent_6"
+from = [-32.9, 19.0]
+to = [0.0, 0.0]
+half_width = 2.6
+
+
+[[revive_spot]]
+id = "spawn_pad"
+pos = [0.0, 0.0]
+radius = 4.0
+
+[[cover]]
+id = "boulder_ne"
+pos = [11.0, 1.2, 19.05]
+size = [3.2, 2.4, 2.8]
+surface = "rock_rim"
+
+[[cover]]
+id = "boulder_ene"
+pos = [21.25, 1.1, 5.69]
+size = [2.8, 2.2, 2.4]
+surface = "rock_rim"
+
+[[cover]]
+id = "boulder_ese"
+pos = [21.25, 1.3, -5.69]
+size = [3.0, 2.6, 2.2]
+surface = "rock_rim"
+
+[[cover]]
+id = "boulder_se"
+pos = [23.14, 1.15, -27.58]
+size = [2.6, 2.3, 3.0]
+surface = "rock_rim"
+
+[[cover]]
+id = "boulder_sw"
+pos = [-23.14, 1.2, -27.58]
+size = [3.2, 2.4, 2.6]
+surface = "rock_rim"
+
+[[cover]]
+id = "boulder_wsw"
+pos = [-21.25, 1.0, -5.69]
+size = [2.4, 2.0, 2.8]
+surface = "rock_rim"
+
+[[cover]]
+id = "boulder_wnw"
+pos = [-21.25, 1.25, 5.69]
+size = [2.8, 2.5, 2.2]
+surface = "rock_rim"
+
+[[cover]]
+id = "boulder_nw"
+pos = [-11.0, 1.1, 19.05]
+size = [3.0, 2.2, 2.6]
+surface = "rock_rim"

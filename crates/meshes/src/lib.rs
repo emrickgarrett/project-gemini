@@ -20,13 +20,13 @@ pub use cast::{
 
 pub use menu_still::{paint_menu, raster_hero_portrait, Hit, MenuShot, PaintPrefs};
 
-pub use arena::{pieces as arena_pieces, review_ground, ArenaPiece};
+pub use arena::{cover_visual, pieces as arena_pieces, review_ground, scenery_fingerprint, ArenaPiece};
 pub use away_still::{paint_away, AwayShot};
 pub use reveal_still::{paint_reveal, reveal_still_is_flat, still_color_stats};
 
 pub use pose::{pose, root_motion, AnimInput, Pose, Xform};
 pub use preview::{
-    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_embedded, raster_heroes_at_15m, raster_in_arena, raster_model, raster_rail_edge, raster_top,
+    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_arena, raster_arena_crowd, raster_bug, raster_crown, raster_embedded, raster_heroes_at_15m, raster_in_arena, raster_model, raster_rail_edge, raster_top,
     raster_crowd, raster_viewmodel, still,
     still_open, still_top, ViewmodelFrame,
 };
@@ -934,6 +934,51 @@ mod tests {
         let painted = painted_pixels(&rgb);
         eprintln!("release software frame, 300 swarmers, 960x540: {ms:.1} ms, {painted} painted px");
         assert!(painted > 1000, "the crowd frame is blank ({painted} px)");
+    }
+
+    #[test]
+    fn scenery_matches_its_collider_and_budget() {
+        let content = gemini_sim::content::Content::embedded();
+        let built = crate::arena_pieces(&content);
+        let (hash, tris, bytes) = crate::scenery_fingerprint(&built);
+        eprintln!("scenery mesh {tris} triangles, {bytes} bytes, sha256 {hash}");
+        assert_eq!(hash, content.arena_scene.sha256, "pin this hash: {hash}");
+        assert!(tris <= content.arena_scene.max_triangles, "{tris} triangles over {}", content.arena_scene.max_triangles);
+        assert!(bytes <= content.arena_scene.max_bytes, "{bytes} bytes over {}", content.arena_scene.max_bytes);
+        let slack = content.arena.scenery.bounds_slack;
+        for cover in &content.arena.cover {
+            let mesh = crate::cover_visual(&content, cover);
+            let mut min = [f32::MAX; 3];
+            let mut max = [f32::MIN; 3];
+            for point in &mesh.positions {
+                for axis in 0..3 {
+                    min[axis] = min[axis].min(point[axis]);
+                    max[axis] = max[axis].max(point[axis]);
+                }
+            }
+            let center = [cover.pos.x, cover.pos.y, cover.pos.z];
+            for axis in 0..3 {
+                let half = cover.size[axis] * 0.5;
+                assert!((min[axis] - (center[axis] - half)).abs() <= slack, "{} axis {axis} min", cover.id);
+                assert!((max[axis] - (center[axis] + half)).abs() <= slack, "{} axis {axis} max", cover.id);
+            }
+        }
+    }
+
+    /// Wall clock for one software raster of the arena plus 300 swarmers.
+    /// `cargo test -p gemini-meshes --release -- --ignored --nocapture arena_frame_time`
+    #[test]
+    #[ignore = "one-time release measurement of a software frame with 300 bugs in the arena"]
+    fn arena_frame_time_release_at_three_hundred_enemies() {
+        use std::time::Instant;
+        let cap = gemini_sim::content::Content::embedded().waves.budget.live_enemy_cap as usize;
+        assert_eq!(cap, 300);
+        let start = Instant::now();
+        let rgb = crate::raster_arena_crowd(cap, 960, 540);
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        let painted = painted_pixels(&rgb);
+        eprintln!("release software frame, arena plus 300 swarmers, 960x540: {ms:.1} ms, {painted} painted px");
+        assert!(painted > 1000, "the arena crowd frame is blank ({painted} px)");
     }
 
     fn mesh_radius(mesh: &MeshData) -> f32 {

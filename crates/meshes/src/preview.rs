@@ -676,7 +676,8 @@ fn draw_scene(
     if !silhouette {
         paint_feedback_parts(&mut color, &mut depth, visual, &posed, palette, &cam, shift, bob, lean);
     }
-    if !silhouette {
+    if !silhouette && !extras.is_empty() {
+        let shade_content = gemini_sim::content::Content::embedded();
         for (mesh, albedo) in extras {
             for tri in mesh.indices.chunks(3) {
                 if tri.len() < 3 {
@@ -686,9 +687,13 @@ fn draw_scene(
                 let ib = tri[1] as usize;
                 let ic = tri[2] as usize;
                 let nw = mesh.normals[ia];
-                let ndot = (nw[0] * key[0] + nw[1] * key[1] + nw[2] * key[2]).clamp(0.0, 1.0);
-                let ndot2 = (nw[0] * fill[0] + nw[1] * fill[1] + nw[2] * fill[2]).clamp(0.0, 1.0);
-                let shade = (0.62 + 0.40 * ndot + 0.22 * ndot2).clamp(0.0, 1.0);
+                let shade = if albedo[3] < 0.75 {
+                    scenery_shade(&shade_content, nw, albedo[3] < 0.25)
+                } else {
+                    let ndot = (nw[0] * key[0] + nw[1] * key[1] + nw[2] * key[2]).clamp(0.0, 1.0);
+                    let ndot2 = (nw[0] * fill[0] + nw[1] * fill[1] + nw[2] * fill[2]).clamp(0.0, 1.0);
+                    0.62 + 0.40 * ndot + 0.22 * ndot2
+                };
                 let rgb = [albedo[0] * shade, albedo[1] * shade, albedo[2] * shade];
                 let Some(a) = project(mesh.positions[ia], eye, right, up, forward, focal, aspect, w, h) else {
                     continue;
@@ -701,6 +706,9 @@ fn draw_scene(
                 };
                 fill_tri(&mut color, &mut depth, w, h, a, b, c, rgb);
             }
+        }
+        if extras.iter().any(|(_, albedo)| albedo[3] < 0.75) {
+            fog_arena(&mut color, &depth, &shade_content);
         }
     }
     color
@@ -829,11 +837,10 @@ pub fn raster_heroes_at_15m(width: u32, height: u32) -> Vec<u8> {
         fill: norm([0.55, 0.35, -0.45]),
     };
     let palette = |name: &str| content.palette.key(name);
-    let ground = crate::review_ground(&content);
-    paint_flat(&mut color, &mut depth, &ground, palette("arena_dark"), &cam);
     for piece in crate::arena_pieces(&content) {
-        paint_flat(&mut color, &mut depth, &piece.mesh, palette(&piece.palette), &cam);
+        paint_scenery(&mut color, &mut depth, &piece, &palette, &cam, &content);
     }
+    fog_arena(&mut color, &depth, &content);
     let spacing = 1.15_f32;
     let ids = ["vex", "nyra", "brakk", "kip"];
     for (i, id) in ids.iter().enumerate() {
@@ -857,9 +864,34 @@ fn paint_named_hero(color: &mut [u8], depth: &mut [f32], cam: &crate::PaintCam, 
     }
 }
 
-fn paint_flat(color: &mut [u8], depth: &mut [f32], mesh: &crate::MeshData, albedo: [f32; 4], cam: &crate::PaintCam) {
-    let key = cam.key;
-    let fill = cam.fill;
+fn scenery_shade(content: &gemini_sim::content::Content, normal: [f32; 3], glow: bool) -> f32 {
+    let scene = &content.arena_scene;
+    if glow {
+        return scene.review_gain;
+    }
+    let key = light_toward(scene.light.key_yaw_deg, scene.light.key_pitch_deg);
+    let fill = light_toward(scene.light.fill_yaw_deg, scene.light.fill_pitch_deg);
+    let ndot = (normal[0] * key[0] + normal[1] * key[1] + normal[2] * key[2]).max(0.0);
+    let ndot2 = (normal[0] * fill[0] + normal[1] * fill[1] + normal[2] * fill[2]).max(0.0);
+    (scene.review_ambient + scene.review_key * ndot + scene.review_fill * ndot2) * scene.review_gain
+}
+
+fn light_toward(yaw_deg: f32, pitch_deg: f32) -> [f32; 3] {
+    let (sy, cy) = yaw_deg.to_radians().sin_cos();
+    let (sp, cp) = pitch_deg.to_radians().sin_cos();
+    norm([sy * cp, sp, cy * cp])
+}
+
+fn paint_scenery(
+    color: &mut [u8],
+    depth: &mut [f32],
+    piece: &crate::ArenaPiece,
+    palette: &dyn Fn(&str) -> [f32; 4],
+    cam: &crate::PaintCam,
+    content: &gemini_sim::content::Content,
+) {
+    let albedo = palette(&piece.palette);
+    let mesh = &piece.mesh;
     for tri in mesh.indices.chunks(3) {
         if tri.len() < 3 {
             continue;
@@ -867,10 +899,7 @@ fn paint_flat(color: &mut [u8], depth: &mut [f32], mesh: &crate::MeshData, albed
         let ia = tri[0] as usize;
         let ib = tri[1] as usize;
         let ic = tri[2] as usize;
-        let nw = mesh.normals[ia];
-        let ndot = (nw[0] * key[0] + nw[1] * key[1] + nw[2] * key[2]).clamp(0.0, 1.0);
-        let ndot2 = (nw[0] * fill[0] + nw[1] * fill[1] + nw[2] * fill[2]).clamp(0.0, 1.0);
-        let shade = (0.62 + 0.40 * ndot + 0.22 * ndot2).clamp(0.0, 1.0);
+        let shade = scenery_shade(content, mesh.normals[ia], piece.glow);
         let rgb = [albedo[0] * shade, albedo[1] * shade, albedo[2] * shade];
         let Some(a) = project(mesh.positions[ia], cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
             continue;
@@ -883,6 +912,63 @@ fn paint_flat(color: &mut [u8], depth: &mut [f32], mesh: &crate::MeshData, albed
         };
         fill_tri(color, depth, cam.w, cam.h, a, b, c, rgb);
     }
+}
+
+fn fog_arena(color: &mut [u8], depth: &[f32], content: &gemini_sim::content::Content) {
+    let rules = &content.arena.scenery;
+    let fog = content.palette.key(&content.arena_scene.light.fog_color);
+    let pixels = color.len() / 3;
+    for index in 0..pixels {
+        let z = depth[index];
+        if !z.is_finite() {
+            continue;
+        }
+        let factor = gemini_sim::scenery::fog_factor(z, rules.fog_start, rules.fog_end);
+        if factor <= 0.0 {
+            continue;
+        }
+        let o = index * 3;
+        color[o] = byte(color[o] as f32 / 255.0 * (1.0 - factor) + fog[0] * factor);
+        color[o + 1] = byte(color[o + 1] as f32 / 255.0 * (1.0 - factor) + fog[1] * factor);
+        color[o + 2] = byte(color[o + 2] as f32 / 255.0 * (1.0 - factor) + fog[2] * factor);
+    }
+}
+
+/// Arena only, from an authored eye. Used for the before/after review stills.
+pub fn raster_arena(eye: [f32; 3], look: [f32; 3], fov_deg: f32, width: u32, height: u32) -> Vec<u8> {
+    use gemini_sim::content::Content;
+    let content = Content::embedded();
+    let sky = content.palette.key(&content.arena_scene.light.sky_color);
+    let bg = [byte(sky[0]), byte(sky[1]), byte(sky[2])];
+    let w = width.max(8);
+    let h = height.max(8);
+    let mut color = Vec::with_capacity((w * h * 3) as usize);
+    for _ in 0..(w * h) {
+        color.extend_from_slice(&bg);
+    }
+    let mut depth = vec![f32::INFINITY; (w * h) as usize];
+    let forward = norm(sub(look, eye));
+    let hint = if forward[1].abs() > 0.92 { [0.0, 0.0, 1.0] } else { [0.0, 1.0, 0.0] };
+    let right = norm(cross(forward, hint));
+    let up = cross(right, forward);
+    let cam = crate::PaintCam {
+        eye,
+        right,
+        up,
+        forward,
+        focal: 1.0 / (fov_deg.to_radians() * 0.5).tan(),
+        aspect: w as f32 / h as f32,
+        w,
+        h,
+        key: norm([-0.2, 0.92, 0.28]),
+        fill: norm([0.55, 0.35, -0.45]),
+    };
+    let palette = |name: &str| content.palette.key(name);
+    for piece in crate::arena_pieces(&content) {
+        paint_scenery(&mut color, &mut depth, &piece, &palette, &cam, &content);
+    }
+    fog_arena(&mut color, &depth, &content);
+    color
 }
 
 /// Eye on the deck at `eye_height`. The look point is `review_distance` meters away.
@@ -926,12 +1012,12 @@ pub fn raster_in_arena(id: &str, width: u32, height: u32) -> Vec<u8> {
     let sky = content.palette.key("arena_sky");
     let bg = [byte(sky[0]), byte(sky[1]), byte(sky[2])];
     let palette = |name: &str| content.palette.key(name);
-    let ground = crate::review_ground(&content);
     let pieces = crate::arena_pieces(&content);
     let mut owned: Vec<(crate::MeshData, [f32; 4])> = Vec::new();
-    owned.push((ground, palette("arena_dark")));
     for piece in &pieces {
-        owned.push((piece.mesh.clone(), palette(&piece.palette)));
+        let mut rgba = palette(&piece.palette);
+        rgba[3] = if piece.glow { 0.0 } else { 0.5 };
+        owned.push((piece.mesh.clone(), rgba));
     }
     let extras: Vec<(&crate::MeshData, [f32; 4])> = owned.iter().map(|(mesh, color)| (mesh, *color)).collect();
     draw_scene(
@@ -979,12 +1065,12 @@ pub fn raster_rail_edge(width: u32, height: u32) -> Vec<u8> {
     let sky = content.palette.key("arena_sky");
     let bg = [byte(sky[0]), byte(sky[1]), byte(sky[2])];
     let palette = |name: &str| content.palette.key(name);
-    let ground = crate::review_ground(&content);
     let pieces = crate::arena_pieces(&content);
     let mut owned: Vec<(crate::MeshData, [f32; 4])> = Vec::new();
-    owned.push((ground, palette("arena_dark")));
     for piece in &pieces {
-        owned.push((piece.mesh.clone(), palette(&piece.palette)));
+        let mut rgba = palette(&piece.palette);
+        rgba[3] = if piece.glow { 0.0 } else { 0.5 };
+        owned.push((piece.mesh.clone(), rgba));
     }
     owned.extend(player_reference(&content, stand));
     let extras: Vec<(&crate::MeshData, [f32; 4])> = owned.iter().map(|(mesh, color)| (mesh, *color)).collect();
@@ -1030,6 +1116,31 @@ fn player_reference(content: &gemini_sim::content::Content, at: [f32; 3]) -> Vec
             (mesh, content.palette.key(key))
         })
         .collect()
+}
+
+/// Arena plus `count` swarmers. The ignored release test times this as a stand-in frame.
+pub fn raster_arena_crowd(count: usize, width: u32, height: u32) -> Vec<u8> {
+    use gemini_sim::content::Content;
+    let content = Content::embedded();
+    let camera = content
+        .arena_scene
+        .cameras
+        .iter()
+        .find(|camera| camera.id == "eye")
+        .unwrap_or_else(|| panic!("missing eye camera"));
+    let mut rgb = raster_arena(camera.eye, camera.look, camera.fov, width, height);
+    let crowd = raster_crowd(count, width, height);
+    let sky = content.palette.key("arena_sky");
+    let bg = [byte(sky[0]), byte(sky[1]), byte(sky[2])];
+    for index in 0..(rgb.len() / 3) {
+        let o = index * 3;
+        if [crowd[o], crowd[o + 1], crowd[o + 2]] != bg {
+            rgb[o] = crowd[o];
+            rgb[o + 1] = crowd[o + 1];
+            rgb[o + 2] = crowd[o + 2];
+        }
+    }
+    rgb
 }
 
 /// One software frame of `count` swarmers on the deck. Used to time a client-style

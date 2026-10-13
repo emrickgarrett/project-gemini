@@ -3288,13 +3288,13 @@ fn hero_portraits_fail_closed() {
     })
     .expect_err("tall curb");
     assert!(err.contains("rail_height"), "{err}");
-    let rocks = format!("{}\n[[rock]]\nat = [18.0, 14.0]\nsize = [1.0, 1.0, 1.0]\n", base.arena_visual);
+    let rocks = format!("{}\nnot_a_key = 1\n", base.arena_visual);
     let err = Content::parse(&gemini_sim::content::Sources {
         arena_visual: &rocks,
         ..sources_with(&base, base.coop)
     })
-    .expect_err("rocks");
-    assert!(err.contains("rock"), "{err}");
+    .expect_err("unknown visual key");
+    assert!(err.contains("not_a_key"), "{err}");
     let spare = base.heroes_visual.replacen("[[mesh]]", "spare = 1\n[[mesh]]", 1);
     let err = Content::parse(&gemini_sim::content::Sources {
         heroes_visual: &spare,
@@ -3309,6 +3309,64 @@ fn hero_portraits_fail_closed() {
     })
     .expect_err("bad color");
     assert!(err.contains("not_a_color"), "{err}");
+}
+
+#[test]
+fn scenery_limits_fail_the_load() {
+    let content = Content::embedded();
+    for kind in ["dirt", "metal", "rock", "resin"] {
+        assert!(content.arena.surfaces.iter().any(|row| row.kind == kind), "missing surface {kind}");
+    }
+    assert!(content.arena_scene.materials.iter().all(|row| !row.bloom));
+    assert!(!content.arena.cover.is_empty());
+    let base = gemini_sim::content::embedded_sources();
+    let visual = |text: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            arena_visual: text,
+            ..sources_with(&base, base.coop)
+        })
+    };
+    let arena = |text: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            arena: text,
+            ..sources_with(&base, base.coop)
+        })
+    };
+    let palette = |text: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            palette: text,
+            ..sources_with(&base, base.coop)
+        })
+    };
+    let missing = base.arena.replacen("fog_start = 82.0\n", "", 1);
+    let err = arena(&missing).expect_err("missing fog_start");
+    assert!(err.contains("fog_start"), "{err}");
+    let bloom = base.arena_visual.replacen("bloom = false", "bloom = true", 1);
+    let err = visual(&bloom).expect_err("bloom");
+    assert!(err.contains("bloom"), "{err}");
+    let hue = base.palette.replacen("nest_brass = \"#2D3222\"", "nest_brass = \"#3A3010\"", 1);
+    let err = palette(&hue).expect_err("hue");
+    assert!(err.contains("hue"), "{err}");
+    let bright = base.palette.replacen("platform_pale = \"#353539\"", "platform_pale = \"#FFFFFF\"", 1);
+    let err = palette(&bright).expect_err("luma");
+    assert!(err.contains("luma"), "{err}");
+    let dense = base.arena.replacen("fog_end = 118.0", "fog_end = 100.0", 1);
+    let err = arena(&dense).expect_err("density");
+    assert!(err.contains("density"), "{err}");
+    let readable = base.arena.replacen("fog_start = 82.0", "fog_start = 10.0", 1);
+    let err = arena(&readable).expect_err("attack fog");
+    assert!(err.contains("max_fog_at_attack"), "{err}");
+    let dim = base.arena.replacen("fog_start = 82.0", "fog_start = 70.0", 1);
+    let err = arena(&dim).expect_err("play fog");
+    assert!(err.contains("play view"), "{err}");
+    let blocked = base.arena.replacen(
+        "id = \"boulder_ne\"\npos = [11.0, 1.2, 19.05]",
+        "id = \"boulder_ne\"\npos = [0.0, 1.2, 24.0]",
+        1,
+    );
+    let err = arena(&blocked).expect_err("cover on a lane");
+    assert!(err.contains("boulder_ne"), "{err}");
+    assert!(err.contains("blocks"), "{err}");
 }
 
 fn sources_ranks<'a>(
