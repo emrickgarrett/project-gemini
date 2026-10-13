@@ -152,18 +152,32 @@ shove_center_epsilon = 0.001
 [[surface]]
 id = "dirt_floor"
 kind = "dirt"
+part = "floor"
 
 [[surface]]
 id = "metal_deck"
 kind = "metal"
+part = "deck"
+
+[[surface]]
+id = "metal_rail"
+kind = "metal"
+part = "rail"
+
+[[surface]]
+id = "metal_stairs"
+kind = "metal"
+part = "stairs"
 
 [[surface]]
 id = "rock_rim"
 kind = "rock"
+part = "rim"
 
 [[surface]]
 id = "resin_nest"
 kind = "resin"
+part = "nest"
 
 [[lane]]
 id = "lane_vent_1"

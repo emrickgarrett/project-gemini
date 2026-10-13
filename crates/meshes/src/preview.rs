@@ -701,7 +701,7 @@ fn draw_scene(
                 let Some(c) = project(mesh.positions[ic], eye, right, up, forward, focal, aspect, w, h) else {
                     continue;
                 };
-                if scenery && !glow && nw[1] > 0.65 {
+                if scenery && !glow && nw[1] > shade_content.arena_scene.shadow_normal_y {
                     let dim = scenery_shade_shadow(&shade_content, nw);
                     let ratio = if shade > 1.0e-4 { dim / shade } else { 1.0 };
                     fill_shadow_tri(
@@ -928,6 +928,9 @@ struct ShadowWorld {
     platform_radius: f32,
     platform_height: f32,
     platform_center: [f32; 2],
+    min_t: f32,
+    max_t: f32,
+    self_pad: f32,
 }
 
 impl ShadowWorld {
@@ -959,13 +962,16 @@ impl ShadowWorld {
             platform_radius: content.arena.platform.radius,
             platform_height: content.arena.platform.height,
             platform_center: [content.arena.platform.center.x, content.arena.platform.center.z],
+            min_t: scene.shadow_min_t,
+            max_t: scene.shadow_max_t,
+            self_pad: scene.shadow_self_pad,
         }
     }
 
     fn occluded(&self, origin: [f32; 3]) -> bool {
         let dir = self.dir;
         for (min, max) in &self.boxes {
-            if ray_enters(origin, dir, *min, *max) {
+            if ray_enters(origin, dir, *min, *max, self.min_t, self.max_t) {
                 return true;
             }
         }
@@ -975,13 +981,15 @@ impl ShadowWorld {
             self.platform_center,
             self.platform_radius,
             self.platform_height,
+            self.min_t,
+            self.self_pad,
         )
     }
 }
 
-fn ray_enters(origin: [f32; 3], dir: [f32; 3], min: [f32; 3], max: [f32; 3]) -> bool {
+fn ray_enters(origin: [f32; 3], dir: [f32; 3], min: [f32; 3], max: [f32; 3], min_t: f32, max_t: f32) -> bool {
     let mut tmin = 0.0_f32;
-    let mut tmax = 80.0_f32;
+    let mut tmax = max_t;
     for axis in 0..3 {
         if dir[axis].abs() < 1.0e-6 {
             if origin[axis] < min[axis] || origin[axis] > max[axis] {
@@ -1001,14 +1009,22 @@ fn ray_enters(origin: [f32; 3], dir: [f32; 3], min: [f32; 3], max: [f32; 3]) -> 
             return false;
         }
     }
-    tmin >= 0.35 && tmax >= tmin
+    tmin >= min_t && tmax >= tmin
 }
 
-fn ray_platform(origin: [f32; 3], dir: [f32; 3], center: [f32; 2], radius: f32, height: f32) -> bool {
+fn ray_platform(
+    origin: [f32; 3],
+    dir: [f32; 3],
+    center: [f32; 2],
+    radius: f32,
+    height: f32,
+    min_t: f32,
+    self_pad: f32,
+) -> bool {
     let x = origin[0] - center[0];
     let z = origin[2] - center[1];
     let r2 = x * x + z * z;
-    if r2 <= radius * radius && origin[1] >= -0.05 && origin[1] <= height + 0.05 {
+    if r2 <= radius * radius && origin[1] >= -self_pad && origin[1] <= height + self_pad {
         return false;
     }
     let (dx, dz) = (dir[0], dir[2]);
@@ -1021,7 +1037,7 @@ fn ray_platform(origin: [f32; 3], dir: [f32; 3], center: [f32; 2], radius: f32, 
             let root = disc.sqrt();
             let inv = 0.5 / a;
             for t in [(-b - root) * inv, (-b + root) * inv] {
-                if t < 0.35 {
+                if t < min_t {
                     continue;
                 }
                 let y = origin[1] + t * dir[1];
@@ -1033,7 +1049,7 @@ fn ray_platform(origin: [f32; 3], dir: [f32; 3], center: [f32; 2], radius: f32, 
     }
     if dir[1].abs() > 1.0e-6 {
         let t = (height - origin[1]) / dir[1];
-        if t >= 0.35 {
+        if t >= min_t {
             let hx = x + t * dx;
             let hz = z + t * dz;
             if hx * hx + hz * hz <= radius * radius {
@@ -1080,7 +1096,7 @@ fn paint_scenery(
         let Some(c) = project(mesh.positions[ic], cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
             continue;
         };
-        if !piece.glow && normal[1] > 0.65 {
+        if !piece.glow && normal[1] > content.arena_scene.shadow_normal_y {
             let dim = scenery_shade_shadow(content, normal);
             let ratio = if shade > 1.0e-4 { dim / shade } else { 1.0 };
             fill_shadow_tri(

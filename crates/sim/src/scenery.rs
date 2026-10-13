@@ -47,6 +47,7 @@ pub struct SceneryRules {
 pub struct Surface {
     pub id: String,
     pub kind: String,
+    pub part: String,
 }
 
 #[derive(Clone, Debug)]
@@ -125,10 +126,17 @@ pub struct ArenaScene {
     pub rim_fill: f32,
     pub rim_inner_scale: f32,
     pub rim_stagger_deg: f32,
+    pub rim_min_arc_deg: f32,
     pub chunk_size: [f32; 3],
     pub nest_lift: f32,
     pub nest_gap_deg: f32,
+    pub nest_ribs: u32,
+    pub nest_rib_scale: f32,
     pub review_shadow: f32,
+    pub shadow_normal_y: f32,
+    pub shadow_min_t: f32,
+    pub shadow_max_t: f32,
+    pub shadow_self_pad: f32,
     pub max_triangles: u32,
     pub max_bytes: u32,
     pub sha256: String,
@@ -314,6 +322,21 @@ pub fn load_play(table: &toml::map::Map<String, toml::Value>) -> Result<Play, St
                 row.id, row.kind
             ));
         }
+        if row.part.is_empty() {
+            return Err(format!("surface {} part is empty", row.id));
+        }
+    }
+    for (part, kind) in [
+        ("floor", "dirt"),
+        ("deck", "metal"),
+        ("rail", "metal"),
+        ("stairs", "metal"),
+        ("rim", "rock"),
+        ("nest", "resin"),
+    ] {
+        if !surfaces.iter().any(|row| row.part == part && row.kind == kind) {
+            return Err(format!("surface part \"{part}\" needs kind \"{kind}\""));
+        }
     }
     for row in &cover {
         if !surfaces.iter().any(|surface| surface.id == row.surface) {
@@ -389,10 +412,17 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
         rim_fill: content::vis_f32(table, "rim_fill", what)?,
         rim_inner_scale: content::vis_f32(table, "rim_inner_scale", what)?,
         rim_stagger_deg: content::vis_f32(table, "rim_stagger_deg", what)?,
+        rim_min_arc_deg: content::vis_f32(table, "rim_min_arc_deg", what)?,
         chunk_size: content::vis_vec3(table, "chunk_size", what)?,
         nest_lift: content::vis_f32(table, "nest_lift", what)?,
         nest_gap_deg: content::vis_f32(table, "nest_gap_deg", what)?,
+        nest_ribs: content::vis_u32(table, "nest_ribs", what)?,
+        nest_rib_scale: content::vis_f32(table, "nest_rib_scale", what)?,
         review_shadow: content::vis_f32(table, "review_shadow", what)?,
+        shadow_normal_y: content::vis_f32(table, "shadow_normal_y", what)?,
+        shadow_min_t: content::vis_f32(table, "shadow_min_t", what)?,
+        shadow_max_t: content::vis_f32(table, "shadow_max_t", what)?,
+        shadow_self_pad: content::vis_f32(table, "shadow_self_pad", what)?,
         max_triangles: content::vis_u32(table, "max_triangles", what)?,
         max_bytes: content::vis_u32(table, "max_bytes", what)?,
         sha256: content::vis_str(table, "sha256", what)?.to_ascii_lowercase(),
@@ -430,6 +460,7 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
         || scene.platform_sides < scene.min_slice_count
         || scene.rim_rows < 1
         || scene.rim_boulders < 1
+        || scene.nest_ribs < 1
         || scene.stair_count < 1
     {
         return Err("arena_visual.toml tessellation counts are out of range".into());
@@ -442,10 +473,16 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
         || !(scene.rim_fill > 0.0 && scene.rim_fill <= 1.0)
         || !(scene.rim_inner_scale > 0.0 && scene.rim_inner_scale <= 1.0)
         || scene.rim_stagger_deg < 0.0
+        || !(scene.rim_min_arc_deg > 0.0 && scene.rim_min_arc_deg < 180.0)
         || scene.chunk_size.iter().any(|n| !(*n > 0.0))
         || !(scene.nest_lift > 0.0)
         || !(scene.nest_gap_deg > 0.0)
+        || !(scene.nest_rib_scale > 0.0 && scene.nest_rib_scale < 0.5)
         || !(scene.review_shadow > 0.0 && scene.review_shadow < 1.0)
+        || !(scene.shadow_normal_y > 0.0 && scene.shadow_normal_y < 1.0)
+        || !(scene.shadow_min_t > 0.0)
+        || !(scene.shadow_max_t > scene.shadow_min_t)
+        || !(scene.shadow_self_pad > 0.0)
     {
         return Err("arena_visual.toml deck, rim, and shadow sizes are out of range".into());
     }
@@ -629,6 +666,14 @@ pub fn validate(
                 material.id, material.color
             ));
         }
+        if material.glow && material.color == "nest_goo" {
+            let shown = painted * scene.review_gain;
+            if shown >= actor_luma {
+                return Err(format!(
+                    "nest goo review brightness {shown} is not below the darkest actor base {actor_luma}"
+                ));
+            }
+        }
         let (hue, sat) = hue_sat(rgb);
         if sat >= rules.min_saturation {
             for (index, forbidden) in forbidden_hue.iter().enumerate() {
@@ -705,6 +750,9 @@ pub fn validate(
     }
     if scene.deck_step_height >= arena.platform.height {
         return Err("deck_step_height must stay under the platform height".into());
+    }
+    if scene.deck_step_outset >= arena.platform.radius {
+        return Err("deck_step_outset must stay inside the deck radius".into());
     }
     cover_walkable_dirt(arena, scene)?;
     for cliff in &scene.cliffs {
@@ -1503,10 +1551,11 @@ fn load_prop_mesh(table: &toml::map::Map<String, toml::Value>) -> Result<PropMes
 }
 
 fn load_surface(table: &toml::map::Map<String, toml::Value>) -> Result<Surface, String> {
-    content::expect_keys(table, &["id", "kind"], "surface")?;
+    content::expect_keys(table, &["id", "kind", "part"], "surface")?;
     Ok(Surface {
         id: req_id(table, "surface")?,
         kind: req_name(table, "kind")?,
+        part: req_name(table, "part")?,
     })
 }
 

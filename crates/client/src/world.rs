@@ -194,14 +194,16 @@ pub fn scene(
     material(&mut bank, &mut materials, content, "arena_light", false, false);
 
     for piece in gemini_meshes::arena_pieces(content) {
-        if piece.bloom {
-            panic!("scenery material {} sets bloom", piece.palette);
-        }
+        let shade = shade_for_scenery(piece.lit, piece.bloom);
         let rgb = content.palette.key(&piece.palette);
         let handle = materials.add(StandardMaterial {
             base_color: Color::srgb(rgb[0], rgb[1], rgb[2]),
-            emissive: LinearRgba::BLACK,
-            unlit: !piece.lit,
+            emissive: LinearRgba::rgb(
+                rgb[0] * shade.emissive_scale,
+                rgb[1] * shade.emissive_scale,
+                rgb[2] * shade.emissive_scale,
+            ),
+            unlit: shade.unlit,
             perceptual_roughness: piece.roughness,
             metallic: piece.metallic,
             ..default()
@@ -882,14 +884,50 @@ fn cast_material(
     let (w, h, albedo, emit) = gemini_meshes::bake_textures(mesh, &palette);
     let albedo_image = rgba_image(w, h, albedo);
     let emit_image = rgba_image(w, h, emit);
+    let actor = shade_for_actor_emissive(true, false);
     materials.add(StandardMaterial {
         base_color_texture: Some(images.add(albedo_image)),
         emissive_texture: Some(images.add(emit_image)),
         emissive: LinearRgba::rgb(1.0, 1.0, 1.0),
+        unlit: actor.unlit,
         perceptual_roughness: 1.0,
         metallic: 0.0,
         ..default()
     })
+}
+
+struct ShadeSplit {
+    unlit: bool,
+    emissive_scale: f32,
+    bloom: bool,
+}
+
+/// Scene key, fill, and ambient shade scenery. Scenery never carries bloom or an emissive.
+fn shade_for_scenery(lit: bool, bloom: bool) -> ShadeSplit {
+    if bloom {
+        panic!("scenery bloom must stay off actor emissives");
+    }
+    ShadeSplit {
+        unlit: !lit,
+        emissive_scale: 0.0,
+        bloom: false,
+    }
+}
+
+/// Actor weak points stay unlit, so the new arena lights never tint their emissive.
+fn shade_for_actor_emissive(emissive: bool, hot: bool) -> ShadeSplit {
+    let scale = if hot {
+        6.0
+    } else if emissive {
+        2.4
+    } else {
+        0.0
+    };
+    ShadeSplit {
+        unlit: true,
+        emissive_scale: scale,
+        bloom: emissive || hot,
+    }
 }
 
 fn rgba_image(width: u32, height: u32, data: Vec<u8>) -> Image {
@@ -930,11 +968,15 @@ fn material(
         return handle.clone();
     }
     let rgb = content.palette.key(key);
-    let mul = if hot { 6.0 } else if emissive { 2.4 } else { 0.0 };
+    let shade = shade_for_actor_emissive(emissive, hot);
     let handle = materials.add(StandardMaterial {
         base_color: Color::srgb(rgb[0], rgb[1], rgb[2]),
-        emissive: LinearRgba::rgb(rgb[0] * mul, rgb[1] * mul, rgb[2] * mul),
-        unlit: true,
+        emissive: LinearRgba::rgb(
+            rgb[0] * shade.emissive_scale,
+            rgb[1] * shade.emissive_scale,
+            rgb[2] * shade.emissive_scale,
+        ),
+        unlit: shade.unlit,
         ..default()
     });
     bank.mats.insert(id, handle.clone());
@@ -1014,5 +1056,34 @@ mod tests {
     #[should_panic(expected = "hatch_telegraph must be > 0")]
     fn zero_hatch_telegraph_is_a_hard_failure() {
         hatch_fraction(0.0, 0.4);
+    }
+
+    #[test]
+    fn scenery_lights_stay_off_actor_emissives() {
+        let lit = super::shade_for_scenery(true, false);
+        assert!(!lit.unlit, "lit scenery takes the arena key and ambient");
+        assert_eq!(lit.emissive_scale, 0.0);
+        assert!(!lit.bloom);
+        let glow = super::shade_for_scenery(false, false);
+        assert!(glow.unlit);
+        assert_eq!(glow.emissive_scale, 0.0);
+        assert!(!glow.bloom);
+        let actor = super::shade_for_actor_emissive(true, false);
+        assert!(actor.unlit);
+        assert!(actor.emissive_scale > 0.0);
+        assert!(actor.bloom);
+        let hot = super::shade_for_actor_emissive(true, true);
+        assert!(hot.unlit && hot.bloom);
+        assert!(hot.emissive_scale > actor.emissive_scale);
+        let plain = super::shade_for_actor_emissive(false, false);
+        assert!(plain.unlit);
+        assert_eq!(plain.emissive_scale, 0.0);
+        assert!(!plain.bloom);
+    }
+
+    #[test]
+    #[should_panic(expected = "scenery bloom must stay off actor emissives")]
+    fn scenery_bloom_is_a_hard_failure() {
+        super::shade_for_scenery(true, true);
     }
 }

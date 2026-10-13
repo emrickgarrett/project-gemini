@@ -17,6 +17,7 @@ pub struct ArenaPiece {
     pub roughness: f32,
     pub metallic: f32,
     pub bloom: bool,
+    pub role: &'static str,
 }
 
 pub fn pieces(content: &Content) -> Vec<ArenaPiece> {
@@ -42,6 +43,7 @@ pub fn pieces(content: &Content) -> Vec<ArenaPiece> {
     }
 
     out.extend(deck_pieces(content));
+    out.extend(railing(content));
     out.extend(stairs(content));
     for ramp in &platform.ramps {
         out.push(piece(
@@ -69,9 +71,10 @@ pub fn pieces(content: &Content) -> Vec<ArenaPiece> {
         out.push(piece(mesh, mat(scene_materials(content), &scene.navy)));
     }
     for cliff in &scene.cliffs {
-        out.push(piece(
+        out.push(tagged(
             rim_pile(content, cliff),
             mat(scene_materials(content), &cliff.material),
+            "rim",
         ));
     }
     for cover in &content.arena.cover {
@@ -94,20 +97,11 @@ pub fn pieces(content: &Content) -> Vec<ArenaPiece> {
             scene.nest_lift,
         );
         let yaw = vent.bearing_deg.to_radians();
-        let mut shell = MeshData::new();
-        geom::box_mesh(&mut shell, [0.0, 0.0, 0.0], nest.size, INK);
+        let mut shell = hive_pod(content, nest);
         geom::rotate_y(&mut shell, yaw);
         geom::translate(&mut shell, center);
         out.push(piece(shell, mat(scene_materials(content), &nest.material)));
-        let goo_size = [
-            nest.size[0] * nest.goo_scale[0],
-            nest.size[1] * nest.goo_scale[1],
-            nest.size[2] * nest.goo_scale[2],
-        ];
-        // Local -Z faces the arena. Sit the goo on that face.
-        let local_z = -nest.size[2] * 0.5 + goo_size[2] * 0.5;
-        let mut goo = MeshData::new();
-        geom::box_mesh(&mut goo, [0.0, 0.0, local_z], goo_size, INK);
+        let mut goo = hive_goo(content, nest);
         geom::rotate_y(&mut goo, yaw);
         geom::translate(&mut goo, center);
         out.push(piece(goo, mat(scene_materials(content), &nest.goo)));
@@ -181,6 +175,10 @@ fn mat<'a>(materials: &'a [SceneMaterial], id: &str) -> &'a SceneMaterial {
 }
 
 fn piece(mesh: MeshData, material: &SceneMaterial) -> ArenaPiece {
+    tagged(mesh, material, "scenery")
+}
+
+fn tagged(mesh: MeshData, material: &SceneMaterial, role: &'static str) -> ArenaPiece {
     ArenaPiece {
         mesh,
         palette: material.color.clone(),
@@ -189,6 +187,7 @@ fn piece(mesh: MeshData, material: &SceneMaterial) -> ArenaPiece {
         roughness: material.roughness,
         metallic: material.metallic,
         bloom: material.bloom,
+        role,
     }
 }
 
@@ -200,43 +199,50 @@ fn deck_pieces(content: &Content) -> Vec<ArenaPiece> {
     let trim = mat(scene_materials(content), &scene.trim);
     let center = [platform.center.x, platform.center.z];
     let sides = scene.platform_sides;
+    let outer_r = platform.radius;
+    let inner_r = platform.radius - scene.deck_step_outset;
+    let mut skirt = MeshData::new();
     let mut wall = MeshData::new();
-    let mut step = MeshData::new();
+    let mut edge = MeshData::new();
     let mut top = MeshData::new();
     let mut trim_mesh = MeshData::new();
     let top_y = platform.height;
     let step_y = scene.deck_step_height;
     for i in 0..sides {
-        let a = gon_vertex(scene, i, platform.radius, top_y, center);
-        let b = gon_vertex(scene, i + 1, platform.radius, top_y, center);
-        let a0 = [a[0], 0.0, a[2]];
-        let b0 = [b[0], 0.0, b[2]];
-        geom::add_quad(&mut wall, a, a0, b0, b, INK);
-        geom::add_face(&mut top, [center[0], top_y, center[1]], a, b, INK);
+        let outer_a = gon_vertex(scene, i, outer_r, step_y, center);
+        let outer_b = gon_vertex(scene, i + 1, outer_r, step_y, center);
+        let inner_top_a = gon_vertex(scene, i, inner_r, top_y, center);
+        let inner_top_b = gon_vertex(scene, i + 1, inner_r, top_y, center);
+        geom::add_face(&mut top, [center[0], top_y, center[1]], inner_top_a, inner_top_b, INK);
         if side_is_open(content, i) {
             continue;
         }
-        let outer = platform.radius + scene.deck_step_outset;
-        let c = gon_vertex(scene, i, outer, step_y, center);
-        let d = gon_vertex(scene, i + 1, outer, step_y, center);
-        let c0 = [c[0], 0.0, c[2]];
-        let d0 = [d[0], 0.0, d[2]];
-        let a_step = gon_vertex(scene, i, platform.radius, step_y, center);
-        let b_step = gon_vertex(scene, i + 1, platform.radius, step_y, center);
-        geom::add_quad(&mut step, c, c0, d0, d, INK);
-        geom::add_quad(&mut step, a_step, c, d, b_step, INK);
+        let outer_0a = [outer_a[0], 0.0, outer_a[2]];
+        let outer_0b = [outer_b[0], 0.0, outer_b[2]];
+        geom::add_quad(&mut skirt, outer_a, outer_0a, outer_0b, outer_b, INK);
+        let shelf_a = gon_vertex(scene, i, inner_r, step_y, center);
+        let shelf_b = gon_vertex(scene, i + 1, inner_r, step_y, center);
+        geom::add_quad(&mut edge, shelf_a, outer_a, outer_b, shelf_b, INK);
+        let wall_a = gon_vertex(scene, i, inner_r, top_y, center);
+        let wall_b = gon_vertex(scene, i + 1, inner_r, top_y, center);
+        geom::add_quad(&mut wall, wall_a, shelf_a, shelf_b, wall_b, INK);
+        geom::add_quad(&mut edge, wall_a, wall_b, outer_b, outer_a, INK);
         let mid = [
-            (a[0] + b[0]) * 0.5,
+            (inner_top_a[0] + inner_top_b[0]) * 0.5,
             top_y + scene.trim_lift + scene.trim_height * 0.5,
-            (a[2] + b[2]) * 0.5,
+            (inner_top_a[2] + inner_top_b[2]) * 0.5,
         ];
-        let edge = [b[0] - a[0], 0.0, b[2] - a[2]];
-        let edge_len = (edge[0] * edge[0] + edge[2] * edge[2]).sqrt().max(1e-4);
+        let span = [
+            inner_top_b[0] - inner_top_a[0],
+            0.0,
+            inner_top_b[2] - inner_top_a[2],
+        ];
+        let span_len = (span[0] * span[0] + span[2] * span[2]).sqrt().max(1e-4);
         let along = [
-            edge[0] / edge_len * scene.panel_length * 0.5,
-            edge[2] / edge_len * scene.panel_length * 0.5,
+            span[0] / span_len * scene.panel_length * 0.5,
+            span[2] / span_len * scene.panel_length * 0.5,
         ];
-        let out_n = [edge[2] / edge_len, 0.0, -edge[0] / edge_len];
+        let out_n = [span[2] / span_len, 0.0, -span[0] / span_len];
         let lift = scene.trim_outset * 0.5;
         let p0 = [mid[0] - along[0] + out_n[0] * lift, mid[1], mid[2] - along[1] + out_n[2] * lift];
         let p1 = [mid[0] + along[0] + out_n[0] * lift, mid[1], mid[2] + along[1] + out_n[2] * lift];
@@ -252,11 +258,111 @@ fn deck_pieces(content: &Content) -> Vec<ArenaPiece> {
         );
     }
     vec![
-        piece(wall, navy),
-        piece(step, navy),
-        piece(top, pale),
-        piece(trim_mesh, trim),
+        tagged(skirt, navy, "deck"),
+        tagged(wall, navy, "deck"),
+        tagged(edge, navy, "deck"),
+        tagged(top, pale, "deck"),
+        tagged(trim_mesh, trim, "deck"),
     ]
+}
+
+/// Posts and a beam at `railing_height`. Ramp openings come from the same `solid_at` test as the collider.
+fn railing(content: &Content) -> Vec<ArenaPiece> {
+    let dress = &content.arena_dressing;
+    let platform = &content.arena.platform;
+    let navy = mat(scene_materials(content), &content.arena_scene.navy);
+    let mut posts = MeshData::new();
+    let mut beam = MeshData::new();
+    let y = platform.height + dress.rail_height * 0.5;
+    let radius = platform.radius;
+    for i in 0..dress.rail_posts {
+        let ang = i as f32 / dress.rail_posts as f32 * std::f32::consts::TAU;
+        let (s, c) = ang.sin_cos();
+        let x = platform.center.x + s * radius;
+        let z = platform.center.z + c * radius;
+        if !rail_blocked(content, x, z) {
+            continue;
+        }
+        let mut post = MeshData::new();
+        geom::box_mesh(
+            &mut post,
+            [0.0, 0.0, 0.0],
+            [dress.rail_thickness, dress.rail_height, dress.rail_thickness],
+            INK,
+        );
+        geom::rotate_y(&mut post, ang);
+        geom::translate(&mut post, [x, y, z]);
+        append_mesh(&mut posts, &post);
+    }
+    let step = dress.rail_thickness / radius;
+    for i in 0..dress.deck_sides {
+        let a0 = i as f32 / dress.deck_sides as f32 * std::f32::consts::TAU;
+        let a1 = (i + 1) as f32 / dress.deck_sides as f32 * std::f32::consts::TAU;
+        for (lo, hi) in rail_runs(content, a0, a1, step, radius) {
+            let mid = (lo + hi) * 0.5;
+            let span = radius * (hi - lo);
+            if span < dress.rail_thickness {
+                continue;
+            }
+            let (s, c) = mid.sin_cos();
+            let x = platform.center.x + s * radius;
+            let z = platform.center.z + c * radius;
+            let mut bar = MeshData::new();
+            geom::box_mesh(
+                &mut bar,
+                [0.0, dress.rail_height * 0.5 - dress.rail_thickness * 0.5, 0.0],
+                [span, dress.rail_thickness, dress.rail_thickness],
+                INK,
+            );
+            geom::rotate_y(&mut bar, mid);
+            geom::translate(&mut bar, [x, platform.height, z]);
+            append_mesh(&mut beam, &bar);
+        }
+    }
+    vec![
+        tagged(posts, navy, "rail"),
+        tagged(beam, navy, "rail"),
+    ]
+}
+
+fn rail_blocked(content: &Content, x: f32, z: f32) -> bool {
+    let platform = &content.arena.platform;
+    let y = platform.height + content.arena_dressing.rail_height * 0.5;
+    content.arena.solid_at(gemini_sim::Vec3::new(x, y, z))
+}
+
+/// Solid stretches of one deck side, sampled one rail thickness apart, so a beam stops at a ramp gap.
+fn rail_runs(content: &Content, a0: f32, a1: f32, step: f32, radius: f32) -> Vec<(f32, f32)> {
+    let platform = &content.arena.platform;
+    let mut runs = Vec::new();
+    let mut run_lo: Option<f32> = None;
+    let mut prev = a0;
+    let mut ang = a0;
+    loop {
+        let (s, c) = ang.sin_cos();
+        let x = platform.center.x + s * radius;
+        let z = platform.center.z + c * radius;
+        if rail_blocked(content, x, z) {
+            if run_lo.is_none() {
+                run_lo = Some(ang);
+            }
+            prev = ang;
+        } else if let Some(lo) = run_lo.take() {
+            if prev > lo {
+                runs.push((lo, prev));
+            }
+        }
+        if ang >= a1 - 1.0e-4 {
+            break;
+        }
+        ang = (ang + step).min(a1);
+    }
+    if let Some(lo) = run_lo {
+        if prev > lo {
+            runs.push((lo, prev));
+        }
+    }
+    runs
 }
 
 fn stairs(content: &Content) -> Vec<ArenaPiece> {
@@ -265,30 +371,38 @@ fn stairs(content: &Content) -> Vec<ArenaPiece> {
     let material = mat(scene_materials(content), &scene.navy);
     let mut out = Vec::new();
     for ramp in &platform.ramps {
+        let dx = ramp.to.x - ramp.from.x;
+        let dz = ramp.to.z - ramp.from.z;
+        let len = (dx * dx + dz * dz).sqrt();
+        if len <= scene.stair_tread {
+            continue;
+        }
+        let yaw = (-dz).atan2(dx);
         for step in 0..scene.stair_count {
             let t = (step as f32 + 0.5) / scene.stair_count as f32;
-            let x = ramp.from.x + (ramp.to.x - ramp.from.x) * t;
-            let z = ramp.from.z + (ramp.to.z - ramp.from.z) * t;
+            let x = ramp.from.x + dx * t;
+            let z = ramp.from.z + dz * t;
             let y = platform.height * (1.0 - t) + scene.stair_thickness * 0.5;
             let mut mesh = MeshData::new();
             geom::box_mesh(
                 &mut mesh,
-                [x, y, z],
+                [0.0, 0.0, 0.0],
                 [scene.stair_tread, scene.stair_thickness, ramp.width],
                 INK,
             );
-            out.push(piece(mesh, material));
+            geom::rotate_y(&mut mesh, yaw);
+            geom::translate(&mut mesh, [x, y, z]);
+            out.push(tagged(mesh, material, "stairs"));
         }
     }
     out
 }
 
-fn gon_vertex(scene: &gemini_sim::scenery::ArenaScene, index: u32, apothem: f32, y: f32, center: [f32; 2]) -> [f32; 3] {
+fn gon_vertex(scene: &gemini_sim::scenery::ArenaScene, index: u32, radius: f32, y: f32, center: [f32; 2]) -> [f32; 3] {
     let step = std::f32::consts::TAU / scene.platform_sides as f32;
     let ang = scene.deck_phase_deg.to_radians() + index as f32 * step;
-    let rad = apothem / (step * 0.5).cos();
     let (s, c) = ang.sin_cos();
-    [center[0] + s * rad, y, center[1] + c * rad]
+    [center[0] + s * radius, y, center[1] + c * radius]
 }
 
 fn side_is_open(content: &Content, index: u32) -> bool {
@@ -302,10 +416,22 @@ fn side_is_open(content: &Content, index: u32) -> bool {
         }
         d < scene.deck_open_deg
     };
-    if open(90.0) || open(270.0) {
+    if content
+        .arena
+        .platform
+        .ramps
+        .iter()
+        .any(|ramp| open(ramp_bearing(ramp)))
+    {
         return true;
     }
     content.arena.vents.iter().any(|vent| open(vent.bearing_deg))
+}
+
+fn ramp_bearing(ramp: &Ramp) -> f32 {
+    let dx = ramp.to.x - ramp.from.x;
+    let dz = ramp.to.z - ramp.from.z;
+    dx.atan2(dz).to_degrees().rem_euclid(360.0)
 }
 
 fn panels(content: &Content) -> Vec<ArenaPiece> {
@@ -385,7 +511,7 @@ fn pile_arc(
 ) {
     let scene = &content.arena_scene;
     let span = end - start;
-    if span < 2.0 {
+    if span < scene.rim_min_arc_deg {
         return;
     }
     let rows = scene.rim_rows;
@@ -397,11 +523,12 @@ fn pile_arc(
         let mid = start + slot * (i as f32 + 0.5);
         for row in 0..rows {
             let center_r = cliff.inner + radial * (row as f32) / rows as f32 + depth * 0.5;
-            let height = if row + 1 == rows {
+            let crest = if row + 1 == rows {
                 cliff.outer_height
             } else {
-                cliff.inner_height * scene.rim_inner_scale
+                cliff.inner_height
             };
+            let height = crest * scene.rim_inner_scale;
             let stagger = if (row + i) % 2 == 0 {
                 scene.rim_stagger_deg
             } else {
@@ -409,7 +536,11 @@ fn pile_arc(
             };
             let ang = (mid + stagger).to_radians();
             let width = center_r * slot.to_radians() * scene.rim_fill;
-            place_rock(mesh, ang, center_r, [width, height, depth]);
+            let run = cliff.outer - cliff.inner;
+            let rise = cliff.outer_height - cliff.inner_height;
+            let tilt = -(rise / run).atan();
+            let lift = row as f32 * cliff.inner_height * scene.rim_inner_scale / rows as f32;
+            place_rock(mesh, ang, center_r, [width, height, depth], tilt, lift, scene);
         }
     }
     let chunk = scene.chunk_size;
@@ -419,6 +550,9 @@ fn pile_arc(
         (mid + scene.rim_stagger_deg).to_radians(),
         cliff.inner + chunk[2] * 0.5,
         chunk,
+        0.0,
+        0.0,
+        scene,
     );
 }
 
@@ -459,17 +593,87 @@ fn cut_span(start: f32, end: f32, bearing: f32, gap: f32) -> Vec<(f32, f32)> {
     spans
 }
 
-fn place_rock(mesh: &mut MeshData, ang: f32, radius: f32, size: [f32; 3]) {
+fn place_rock(
+    mesh: &mut MeshData,
+    ang: f32,
+    radius: f32,
+    size: [f32; 3],
+    tilt: f32,
+    lift: f32,
+    scene: &gemini_sim::scenery::ArenaScene,
+) {
     let mut rock = MeshData::new();
-    geom::box_mesh(&mut rock, [0.0, size[1] * 0.5, 0.0], size, INK);
+    let radii = [size[0] * 0.5, size[1] * 0.5, size[2] * 0.5];
+    geom::gem(
+        &mut rock,
+        [0.0, 0.0, 0.0],
+        radii,
+        scene.boulder_slices,
+        scene.boulder_stacks,
+        INK,
+    );
+    geom::rotate_x(&mut rock, tilt);
     geom::rotate_y(&mut rock, ang);
     let (s, c) = ang.sin_cos();
-    geom::translate(&mut rock, [s * radius, 0.0, c * radius]);
+    // The lean pulls the crest inward. Shift the mound out by that amount so it stays outside the floor.
+    let shove = tilt.abs().sin() * size[1] * 0.5;
+    let placed = radius + shove;
+    geom::translate(&mut rock, [s * placed, lift + size[1] * 0.5, c * placed]);
+    append_mesh(mesh, &rock);
+}
+
+fn append_mesh(mesh: &mut MeshData, extra: &MeshData) {
     let shift = mesh.positions.len() as u32;
-    mesh.positions.extend(rock.positions);
-    mesh.normals.extend(rock.normals);
+    mesh.positions.extend(extra.positions.iter().copied());
+    mesh.normals.extend(extra.normals.iter().copied());
+    mesh.colors.extend(extra.colors.iter().copied());
     mesh.indices
-        .extend(rock.indices.into_iter().map(|index| index + shift));
+        .extend(extra.indices.iter().map(|index| index + shift));
+}
+
+fn hive_pod(content: &Content, nest: &gemini_sim::scenery::Nest) -> MeshData {
+    let scene = &content.arena_scene;
+    let mut mesh = MeshData::new();
+    let radii = [nest.size[0] * 0.5, nest.size[1] * 0.5, nest.size[2] * 0.5];
+    geom::gem(&mut mesh, [0.0, 0.0, 0.0], radii, scene.nest_sides, scene.nest_ribs, INK);
+    for rib in 0..scene.nest_ribs {
+        let t = (rib as f32 + 1.0) / (scene.nest_ribs as f32 + 1.0);
+        let y = (t - 0.5) * nest.size[1] * (1.0 - scene.nest_rib_scale);
+        let mut band = MeshData::new();
+        geom::box_mesh(
+            &mut band,
+            [0.0, y, 0.0],
+            [
+                nest.size[0] * (1.0 + scene.nest_rib_scale),
+                nest.size[1] * scene.nest_rib_scale,
+                nest.size[2] * (1.0 - scene.nest_rib_scale),
+            ],
+            INK,
+        );
+        append_mesh(&mut mesh, &band);
+    }
+    mesh
+}
+
+fn hive_goo(content: &Content, nest: &gemini_sim::scenery::Nest) -> MeshData {
+    let scene = &content.arena_scene;
+    let mut mesh = MeshData::new();
+    let radii = [
+        nest.size[0] * nest.goo_scale[0] * 0.5,
+        nest.size[1] * nest.goo_scale[1] * 0.5,
+        nest.size[2] * nest.goo_scale[2] * 0.5,
+    ];
+    let front = -nest.size[2] * 0.5;
+    let local_z = front + radii[2] * (1.0 + nest.goo_scale[2]);
+    geom::gem(
+        &mut mesh,
+        [0.0, 0.0, local_z],
+        radii,
+        scene.nest_sides,
+        scene.nest_ribs,
+        INK,
+    );
+    mesh
 }
 
 fn relay(content: &Content, tower: &gemini_sim::scenery::Tower) -> Vec<ArenaPiece> {
@@ -481,7 +685,7 @@ fn relay(content: &Content, tower: &gemini_sim::scenery::Tower) -> Vec<ArenaPiec
         .unwrap_or_else(|| panic!("tower {} ledge", tower.id));
     let material = mat(scene_materials(content), &tower.material);
     let beacon = mat(scene_materials(content), &tower.beacon_material);
-    let mut y = ledge.pos.y;
+    let mut y = ledge.pos.y - content.arena_scene.ledge_thickness;
     let mut out = Vec::new();
     for (size, glow) in [
         (tower.base, false),

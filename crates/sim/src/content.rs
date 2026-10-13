@@ -223,6 +223,11 @@ impl Content {
         let combat: Combat = parse("combat.toml", src.combat)?;
         let arena = load_arena(src.arena).map_err(|err| format!("arena_01.toml: {err}"))?;
         require_arena_colors(&palette, &arena).map_err(|err| format!("arena_01.toml: {err}"))?;
+        if (arena_dressing.rail_height - arena.platform.railing_height).abs() > arena.scenery.overlap_epsilon {
+            return Err(
+                "arena_visual.toml rail_height must match platform.railing_height".into(),
+            );
+        }
         crate::scenery::validate(
             &arena,
             &arena_scene,
@@ -2489,10 +2494,17 @@ fn load_arena_dressing(text: &str) -> Result<(ArenaDressing, crate::scenery::Are
             "rim_fill",
             "rim_inner_scale",
             "rim_stagger_deg",
+            "rim_min_arc_deg",
             "chunk_size",
             "nest_lift",
             "nest_gap_deg",
+            "nest_ribs",
+            "nest_rib_scale",
             "review_shadow",
+            "shadow_normal_y",
+            "shadow_min_t",
+            "shadow_max_t",
+            "shadow_self_pad",
             "max_triangles",
             "max_bytes",
             "sha256",
@@ -2536,9 +2548,8 @@ fn load_arena_dressing(text: &str) -> Result<(ArenaDressing, crate::scenery::Are
     if !(dress.rail_thickness > 0.0 && dress.rail_thickness <= 1.0) {
         return Err("arena_visual.toml rail_thickness must be in (0, 1]".into());
     }
-    // Knee or below. The 0.6 collision band stays in arena_01.toml.
-    if !(dress.rail_height > 0.0 && dress.rail_height <= 0.5) {
-        return Err("arena_visual.toml rail_height must be in (0, 0.5]".into());
+    if !(dress.rail_height > 0.0) {
+        return Err("arena_visual.toml rail_height must be > 0".into());
     }
     if !(dress.ramp_gap_dot > 0.0 && dress.ramp_gap_dot < 1.0) {
         return Err("arena_visual.toml ramp_gap_dot must be in (0, 1)".into());
@@ -3119,7 +3130,7 @@ impl Arena {
         (dx * dx + dz * dz).sqrt()
     }
 
-    fn solid_at(&self, p: Vec3) -> bool {
+    pub fn solid_at(&self, p: Vec3) -> bool {
         if let Some(height) = self.ramp_height(p.x, p.z) {
             if p.y >= -0.2 && p.y < height - 0.15 {
                 return true;

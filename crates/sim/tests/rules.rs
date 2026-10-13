@@ -3275,13 +3275,13 @@ fn hero_portraits_fail_closed() {
     assert!(err.contains("does not resolve"), "{err}");
 
     let dress = &content.arena_dressing;
-    assert!((dress.rail_height - 0.45).abs() < 1e-4);
-    assert!(dress.rail_height <= 0.5);
+    assert!((dress.rail_height - content.arena.platform.railing_height).abs() < 1e-4);
+    assert!((dress.rail_height - 0.6).abs() < 1e-4);
     assert!((dress.ramp_gap_dot - 0.86).abs() < 1e-4);
     assert!((dress.review_distance - 15.0).abs() < 1e-4);
     assert!((dress.review_look_height - 0.45).abs() < 1e-4);
     assert!((dress.review_ground_y - 0.02).abs() < 1e-4);
-    let tall = base.arena_visual.replacen("rail_height = 0.45", "rail_height = 0.8", 1);
+    let tall = base.arena_visual.replacen("rail_height = 0.6", "rail_height = 0.8", 1);
     let err = Content::parse(&gemini_sim::content::Sources {
         arena_visual: &tall,
         ..sources_with(&base, base.coop)
@@ -3317,6 +3317,19 @@ fn scenery_limits_fail_the_load() {
     for kind in ["dirt", "metal", "rock", "resin"] {
         assert!(content.arena.surfaces.iter().any(|row| row.kind == kind), "missing surface {kind}");
     }
+    for (part, kind) in [
+        ("floor", "dirt"),
+        ("deck", "metal"),
+        ("rail", "metal"),
+        ("stairs", "metal"),
+        ("rim", "rock"),
+        ("nest", "resin"),
+    ] {
+        assert!(
+            content.arena.surfaces.iter().any(|row| row.part == part && row.kind == kind),
+            "missing surface {part}/{kind}"
+        );
+    }
     assert!(content.arena_scene.materials.iter().all(|row| !row.bloom));
     assert!(!content.arena.cover.is_empty());
     let base = gemini_sim::content::embedded_sources();
@@ -3347,7 +3360,7 @@ fn scenery_limits_fail_the_load() {
     let hue = base.palette.replacen("nest_brass = \"#2D3222\"", "nest_brass = \"#3A3010\"", 1);
     let err = palette(&hue).expect_err("hue");
     assert!(err.contains("hue"), "{err}");
-    let bright = base.palette.replacen("platform_pale = \"#353539\"", "platform_pale = \"#FFFFFF\"", 1);
+    let bright = base.palette.replacen("platform_pale = \"#383632\"", "platform_pale = \"#FFFFFF\"", 1);
     let err = palette(&bright).expect_err("luma");
     assert!(err.contains("luma"), "{err}");
     let dense = base.arena.replacen("fog_end = 118.0", "fog_end = 100.0", 1);

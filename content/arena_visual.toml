@@ -1,13 +1,13 @@
 # Arena meshes. Collision stays in arena_01.toml. These numbers are visual only.
-# rail_height is a curb, knee or below, so it does not read as the 0.6 collision wall.
-# The rail still stands on the deck at player eye height. angle 0 is +X. 90 is north, off the ramps.
+# rail_height matches platform.railing_height. Ramp gaps come from platform.ramps.
+# angle 0 is +Z. East and west ramps are 90 and 270.
 # inset is how far inside the rim the eye stands. side is arc length along that ring to the scale figure.
 # back is how far past the rim the look sits (negative stays on the deck). up is look height above the deck.
 
 deck_sides = 24
 rail_posts = 48
 rail_thickness = 0.36
-rail_height = 0.45
+rail_height = 0.6
 ramp_gap_dot = 0.86
 review_stand_gap = 6.0
 review_distance = 15.0
@@ -36,7 +36,7 @@ panel_lift = 0.03
 panel_count = 8
 vent_size = [1.4, 0.4, 1.4]
 vent_center_y = 0.2
-ledge_size = [2.4, 0.3, 2.4]
+ledge_size = [2.4, 0.62, 2.4]
 ledge_thickness = 0.12
 ledge_skirt_scale = 0.82
 bulb_chamfer_scale = 0.2
@@ -65,17 +65,24 @@ stair_count = 5
 stair_tread = 0.85
 stair_thickness = 0.1
 rim_rows = 2
-rim_boulders = 3
-rim_fill = 0.86
-rim_inner_scale = 0.7
+rim_boulders = 2
+rim_fill = 1.0
+rim_inner_scale = 0.32
 rim_stagger_deg = 0.8
+rim_min_arc_deg = 2.0
 chunk_size = [1.6, 0.85, 1.3]
 nest_lift = 2.05
 nest_gap_deg = 7.0
+nest_ribs = 4
+nest_rib_scale = 0.08
 review_shadow = 0.22
-max_triangles = 5400
-max_bytes = 590000
-sha256 = "456b6e2b6c58dabdc4a5963632eb08490ea390f373f03aa9598e2ae86acd6a2c"
+shadow_normal_y = 0.65
+shadow_min_t = 0.35
+shadow_max_t = 80.0
+shadow_self_pad = 0.05
+max_triangles = 10200
+max_bytes = 1120000
+sha256 = "682e5b46e68ae8183fde4813fe1030ad09ec91799b90a03cf35a4cb6b6053fa4"
 review_ambient = 0.38
 review_key = 0.28
 review_fill = 0.12
@@ -713,8 +720,8 @@ material = "vein"
 [[prop]]
 id = "rim_0"
 kind = "rim_rock"
-pos = [6.610722295603108, 1.1, 47.037733265224595]
-size = [1.6, 2.2, 1.4]
+pos = [6.6107223, 0.385, 47.037733]
+size = [1.6, 0.77, 1.4]
 yaw_deg = 8.0
 material = "rim"
 [[prop]]
@@ -734,15 +741,15 @@ material = "bulb"
 [[prop]]
 id = "rim_1"
 kind = "rim_rock"
-pos = [22.816317951394293, 1.3, 42.91125301294385]
-size = [1.85, 2.6, 1.5999999999999999]
+pos = [22.816318, 0.44, 42.911253]
+size = [1.85, 0.88, 1.6]
 yaw_deg = 28.0
 material = "rim"
 [[prop]]
 id = "rim_2"
 kind = "rim_rock"
-pos = [36.9342978262265, 1.5, 33.255791136035256]
-size = [2.1, 3.0, 1.7999999999999998]
+pos = [36.934298, 0.495, 33.255791]
+size = [2.1, 0.99, 1.8]
 yaw_deg = 48.0
 material = "rim"
 [[prop]]
@@ -762,15 +769,15 @@ material = "bulb"
 [[prop]]
 id = "rim_3"
 kind = "rim_rock"
-pos = [44.0412330919224, 1.1, 17.793813187255818]
-size = [2.35, 2.2, 1.4]
+pos = [44.041233, 0.385, 17.793813]
+size = [2.35, 0.77, 1.4]
 yaw_deg = 68.0
 material = "rim"
 [[prop]]
 id = "rim_4"
 kind = "rim_rock"
-pos = [48.57039419312805, 1.3, 1.6961155397415526]
-size = [1.6, 2.6, 1.5999999999999999]
+pos = [48.570394, 0.44, 1.6961155]
+size = [1.6, 0.88, 1.6]
 yaw_deg = 88.0
 material = "rim"
 [[prop]]
@@ -790,15 +797,15 @@ material = "bulb"
 [[prop]]
 id = "rim_5"
 kind = "rim_rock"
-pos = [47.26750885986914, 1.5, -15.358144620434883]
-size = [1.85, 3.0, 1.7999999999999998]
+pos = [47.267509, 0.495, -15.358145]
+size = [1.85, 0.99, 1.8]
 yaw_deg = 108.0
 material = "rim"
 [[prop]]
 id = "rim_6"
 kind = "rim_rock"
-pos = [37.4305107963193, 1.1, -29.24392007796877]
-size = [2.1, 2.2, 1.4]
+pos = [37.430511, 0.385, -29.24392]
+size = [2.1, 0.77, 1.4]
 yaw_deg = 128.0
 material = "rim"
 [[prop]]
@@ -818,15 +825,15 @@ material = "bulb"
 [[prop]]
 id = "rim_7"
 kind = "rim_rock"
-pos = [25.75407624173376, 1.3, -41.215137473202304]
-size = [2.35, 2.6, 1.5999999999999999]
+pos = [25.754076, 0.44, -41.215137]
+size = [2.35, 0.88, 1.6]
 yaw_deg = 148.0
 material = "rim"
 [[prop]]
 id = "rim_8"
 kind = "rim_rock"
-pos = [10.33321103364264, 1.5, -48.61393575647015]
-size = [1.6, 3.0, 1.7999999999999998]
+pos = [10.333211, 0.44, -48.613936]
+size = [1.6, 0.88, 1.8]
 yaw_deg = 168.0
 material = "rim"
 [[prop]]
@@ -846,15 +853,15 @@ material = "bulb"
 [[prop]]
 id = "rim_9"
 kind = "rim_rock"
-pos = [-6.610722295603113, 1.1, -47.03773326522459]
-size = [1.85, 2.2, 1.4]
+pos = [-6.6107223, 0.385, -47.037733]
+size = [1.85, 0.77, 1.4]
 yaw_deg = 188.0
 material = "rim"
 [[prop]]
 id = "rim_10"
 kind = "rim_rock"
-pos = [-22.816317951394296, 1.3, -42.911253012943845]
-size = [2.1, 2.6, 1.5999999999999999]
+pos = [-22.816318, 0.44, -42.911253]
+size = [2.1, 0.88, 1.6]
 yaw_deg = 208.0
 material = "rim"
 [[prop]]
@@ -874,15 +881,15 @@ material = "bulb"
 [[prop]]
 id = "rim_11"
 kind = "rim_rock"
-pos = [-36.934297826226505, 1.5, -33.25579113603525]
-size = [2.35, 3.0, 1.7999999999999998]
+pos = [-36.934298, 0.495, -33.255791]
+size = [2.35, 0.99, 1.8]
 yaw_deg = 228.0
 material = "rim"
 [[prop]]
 id = "rim_12"
 kind = "rim_rock"
-pos = [-44.0412330919224, 1.1, -17.793813187255832]
-size = [1.6, 2.2, 1.4]
+pos = [-44.041233, 0.385, -17.793813]
+size = [1.6, 0.77, 1.4]
 yaw_deg = 248.0
 material = "rim"
 [[prop]]
@@ -902,15 +909,15 @@ material = "bulb"
 [[prop]]
 id = "rim_13"
 kind = "rim_rock"
-pos = [-48.57039419312805, 1.3, -1.696115539741537]
-size = [1.85, 2.6, 1.5999999999999999]
+pos = [-48.570394, 0.44, -1.6961155]
+size = [1.85, 0.88, 1.6]
 yaw_deg = 268.0
 material = "rim"
 [[prop]]
 id = "rim_14"
 kind = "rim_rock"
-pos = [-47.26750885986914, 1.5, 15.358144620434878]
-size = [2.1, 3.0, 1.7999999999999998]
+pos = [-47.267509, 0.495, 15.358145]
+size = [2.1, 0.99, 1.8]
 yaw_deg = 288.0
 material = "rim"
 [[prop]]
@@ -930,15 +937,15 @@ material = "bulb"
 [[prop]]
 id = "rim_15"
 kind = "rim_rock"
-pos = [-37.43051079631928, 1.1, 29.24392007796878]
-size = [2.35, 2.2, 1.4]
+pos = [-37.430511, 0.385, 29.24392]
+size = [2.35, 0.77, 1.4]
 yaw_deg = 308.0
 material = "rim"
 [[prop]]
 id = "rim_16"
 kind = "rim_rock"
-pos = [-25.754076241733763, 1.3, 41.215137473202304]
-size = [1.6, 2.6, 1.5999999999999999]
+pos = [-25.754076, 0.44, 41.215137]
+size = [1.6, 0.88, 1.6]
 yaw_deg = 328.0
 material = "rim"
 [[prop]]
@@ -958,8 +965,8 @@ material = "bulb"
 [[prop]]
 id = "rim_17"
 kind = "rim_rock"
-pos = [-10.333211033642666, 1.5, 48.61393575647014]
-size = [1.85, 3.0, 1.7999999999999998]
+pos = [-10.333211, 0.495, 48.613936]
+size = [1.85, 0.99, 1.8]
 yaw_deg = 348.0
 material = "rim"
 [[prop]]
@@ -1011,7 +1018,7 @@ outset = 3.35
 size = [4.6, 3.6, 2.4]
 material = "brass"
 goo = "goo"
-goo_scale = [0.62, 0.55, 0.18]
+goo_scale = [0.34, 0.28, 0.46]
 [[nest]]
 id = "nest_vent_2"
 vent = "vent_2"
@@ -1019,7 +1026,7 @@ outset = 3.35
 size = [4.6, 3.6, 2.4]
 material = "brass"
 goo = "goo"
-goo_scale = [0.62, 0.55, 0.18]
+goo_scale = [0.34, 0.28, 0.46]
 [[nest]]
 id = "nest_vent_3"
 vent = "vent_3"
@@ -1027,7 +1034,7 @@ outset = 3.35
 size = [4.6, 3.6, 2.4]
 material = "brass"
 goo = "goo"
-goo_scale = [0.62, 0.55, 0.18]
+goo_scale = [0.34, 0.28, 0.46]
 [[nest]]
 id = "nest_vent_4"
 vent = "vent_4"
@@ -1035,7 +1042,7 @@ outset = 3.35
 size = [4.6, 3.6, 2.4]
 material = "brass"
 goo = "goo"
-goo_scale = [0.62, 0.55, 0.18]
+goo_scale = [0.34, 0.28, 0.46]
 [[nest]]
 id = "nest_vent_5"
 vent = "vent_5"
@@ -1043,7 +1050,7 @@ outset = 3.35
 size = [4.6, 3.6, 2.4]
 material = "brass"
 goo = "goo"
-goo_scale = [0.62, 0.55, 0.18]
+goo_scale = [0.34, 0.28, 0.46]
 [[nest]]
 id = "nest_vent_6"
 vent = "vent_6"
@@ -1051,12 +1058,12 @@ outset = 3.35
 size = [4.6, 3.6, 2.4]
 material = "brass"
 goo = "goo"
-goo_scale = [0.62, 0.55, 0.18]
+goo_scale = [0.34, 0.28, 0.46]
 
 [[tower]]
 id = "relay"
 ledge = "tower"
-base = [2.4, 0.65, 2.4]
+base = [1.7, 0.42, 1.7]
 mast = [0.5, 3.2, 0.5]
 head = [1.9, 0.35, 1.9]
 beacon = [0.34, 0.34, 0.34]
@@ -1073,9 +1080,9 @@ height = 720
 
 [[camera]]
 id = "overhead"
-eye = [10.0, 32.0, -30.0]
-look = [0.0, 0.0, -4.0]
-fov = 46.0
+eye = [10.0, 148.0, -24.0]
+look = [0.0, 0.0, 4.0]
+fov = 47.0
 width = 1280
 height = 720
 
