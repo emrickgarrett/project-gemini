@@ -151,7 +151,8 @@ thumb_at = [0.07, -0.02, -0.02]
 thumb_pitch = 0.85
 thumb_yaw = 0.9
 
-# Meshy static casts. `file` is under assets/. A missing or unknown file fails at load.
+# Meshy static casts. `file` is under assets/. The load hashes the embedded glb.
+# An unknown id, or a hash that is not the one in content, fails the load.
 # Bodies are the final_rig meshes with skin, joints, and clips removed. UVs and
 # positions are the rigged primitive. The rigged files stay off this branch.
 # Guns and the shield set `grip_root`. The glb must carry that node. There is
@@ -159,7 +160,8 @@ thumb_yaw = 0.9
 # inside 1_100_000 bytes. `size` is the fitted height or gun length.
 # `at` places a body in front of the portrait camera, or a weapon's grip on that body.
 # `view` is the grip in viewmodel space, before characters.toml viewmodel_offset.
-# A grip-rooted gun keeps the rig grip at the origin and the muzzle on -Z.
+# A grip-rooted gun keeps the rig grip at the origin. `yaw_deg` turns the
+# rig muzzle (+Z) onto the shot axis. Guns use 180 so the muzzle lands on -Z.
 # Brakk's shield grip is the handle.
 # Colors are palette.toml keys. Empty `rim` means no rim light.
 # `primary` `secondary` `accent` `fourth` are mask R G B A. They are not the UI

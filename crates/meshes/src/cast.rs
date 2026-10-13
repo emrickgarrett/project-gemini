@@ -1,9 +1,11 @@
-//! Meshy casts. The sim crate lists them. This crate reads the files, checks
-//! budgets, fits each mesh to its hitbox, and tints masked texels from palette keys.
-//! A missing file, an unknown id, or a blown budget fails the load. There is no
+//! Meshy casts. The sim crate lists them. This crate hashes the embedded glb,
+//! checks budgets, fits each mesh to its hitbox, and tints masked texels from palette keys.
+//! A hash mismatch, an unknown id, or a blown budget fails the load. There is no
 //! box-mesh fallback.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use gemini_sim::bugs::{hit_bounds, PartBounds};
@@ -80,14 +82,14 @@ pub fn load_catalog() -> Result<Vec<CastMesh>, String> {
     let content = Content::embedded();
     let mut out = Vec::new();
     for spec in &content.models {
-        let bytes = read_checked_model(spec)?;
-        out.push(fit_model(&bytes, spec, &content)?);
+        let bytes = checked_model_bytes(spec)?;
+        out.push(fit_model(bytes, spec, &content)?);
     }
     Ok(out)
 }
 
-/// Disk read used by the hash check. A missing file fails. There is no skip
-/// when the assets folder is absent.
+/// Disk read for the native test that compares the shipped file to the embedded
+/// copy. The load path does not call this. Wasm has no assets directory.
 pub fn read_model_file(path: &Path) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|_| format!("missing model file {}", path.display()))
 }
@@ -102,24 +104,21 @@ pub fn sha256_hex(data: &[u8]) -> String {
     out
 }
 
+#[cfg(test)]
 fn assets_file(rel: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets").join(rel)
 }
 
-/// Read the shipped glb and reject a missing file or a hash that is not the one in content.
-fn read_checked_model(spec: &CastModel) -> Result<Vec<u8>, String> {
-    let path = assets_file(&spec.file);
-    let bytes = read_model_file(&path)?;
-    let got = sha256_hex(&bytes);
+/// Hash the embedded glb. A mismatch fails the load. This does not read the disk,
+/// so the browser can load the casts.
+fn checked_model_bytes(spec: &CastModel) -> Result<&'static [u8], String> {
+    let bytes = model_bytes(&spec.id)?;
+    let got = sha256_hex(bytes);
     if got != spec.sha256 {
         return Err(format!(
             "{} mesh sha256 {got} does not match content {}",
             spec.id, spec.sha256
         ));
-    }
-    let embedded = model_bytes(&spec.id)?;
-    if embedded != bytes.as_slice() {
-        return Err(format!("{} embedded bytes differ from {}", spec.id, path.display()));
     }
     Ok(bytes)
 }
@@ -414,8 +413,8 @@ fn fit_weapon(mesh: &mut RawMesh, spec: &CastModel) -> Result<(), String> {
         return Err(format!("{} is a weapon without a grip root", spec.id));
     }
     // The rig root already parks the grip at the origin with the muzzle on +Z.
-    // The shot axis is -Z, so turn the muzzle around and scale the length.
-    yaw_positions(&mut mesh.positions, &mut mesh.normals, 180.0);
+    // `yaw_deg` turns that muzzle onto the shot axis. Guns use 180 so it lands on -Z.
+    yaw_positions(&mut mesh.positions, &mut mesh.normals, spec.yaw_deg);
     let (mn, mx) = bounds(&mesh.positions);
     let len = mx[2] - mn[2];
     if len <= 1e-6 {
@@ -1627,12 +1626,36 @@ mod tests {
         assert_eq!(sha256_hex(bytes), spec.sha256);
         let mut bad = spec.clone();
         bad.sha256 = "0".repeat(64);
-        let err = read_checked_model(&bad).expect_err("bad sha");
+        let err = match checked_model_bytes(&bad) {
+            Err(err) => err,
+            Ok(_) => panic!("bad sha"),
+        };
         assert!(err.contains("vex_gun") && err.contains("sha256"), "{err}");
-        let mut gone = spec;
-        gone.file = "models/not_a_model.glb".into();
-        let missing = read_checked_model(&gone).expect_err("missing file");
-        assert!(missing.contains("missing"), "{missing}");
+        // The browser hashes the embedded bytes only. The disk match stays here.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let disk = read_model_file(&assets_file(&spec.file)).expect("shipped file");
+            assert_eq!(disk, bytes, "disk bytes differ from the embedded glb");
+            let missing = read_model_file(&assets_file("models/not_a_model.glb")).expect_err("missing file");
+            assert!(missing.contains("missing"), "{missing}");
+        }
+    }
+
+    #[test]
+    fn weapon_yaw_comes_from_content() {
+        let spec = model_spec("vex_gun");
+        assert!((spec.yaw_deg - 180.0).abs() < 1.0e-3, "vex_gun yaw_deg {}", spec.yaw_deg);
+        let bytes = model_bytes("vex_gun").unwrap();
+        let mut turned = decode_glb(bytes, &spec).unwrap_or_else(|err| panic!("{err}"));
+        fit_weapon(&mut turned, &spec).unwrap_or_else(|err| panic!("{err}"));
+        let (mn, _) = bounds(&turned.positions);
+        assert!(mn[2] < -0.2, "content yaw points the muzzle down -z, min {}", mn[2]);
+        let mut flat = spec;
+        flat.yaw_deg = 0.0;
+        let mut straight = decode_glb(bytes, &flat).unwrap_or_else(|err| panic!("{err}"));
+        fit_weapon(&mut straight, &flat).unwrap_or_else(|err| panic!("{err}"));
+        let (_, mx) = bounds(&straight.positions);
+        assert!(mx[2] > 0.2, "yaw 0 leaves the rig muzzle on +z, max {}", mx[2]);
     }
 
     /// TEXCOORD_0 and POSITION bytes from the final_rig body, before skin and clips were removed.
