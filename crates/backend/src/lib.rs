@@ -283,13 +283,21 @@ impl Account {
     }
 
     fn roll(&mut self, content: &Content, banner: &str, spent: f32) -> Result<Pull, PullError> {
-        let mut pity = self.begin_banner(content, banner);
-        let pity_legendary_before = pity.since_legendary;
-        let pity_epic_before = pity.since_epic;
-        let rarity = roll_rarity(&mut pity, &mut self.rng, content);
-        let fakeout = roll_fakeout(&mut self.rng, content, &rarity);
         let max_rank = content.duplicate.max_rank;
         let powered = self.rank < max_rank;
+        if !powered {
+            for tier in TIERS {
+                if content.cosmetics.shards_for(tier).is_err() {
+                    return Err(PullError::Shards);
+                }
+            }
+        }
+        let mut rng = self.rng.clone();
+        let mut pity = self.pity_for(content, banner);
+        let pity_legendary_before = pity.since_legendary;
+        let pity_epic_before = pity.since_epic;
+        let rarity = roll_rarity(&mut pity, &mut rng, content);
+        let fakeout = roll_fakeout(&mut rng, content, &rarity);
         let shards = if powered {
             0
         } else {
@@ -298,6 +306,8 @@ impl Account {
                 Err(_) => return Err(PullError::Shards),
             }
         };
+        self.rng = rng;
+        self.active_banner = Some(banner.to_string());
         self.pity.insert(banner.to_string(), pity.clone());
         if powered {
             self.rank += 1;
@@ -327,18 +337,16 @@ impl Account {
         Ok(pull)
     }
 
-    /// When pity carries, the banner being pulled inherits the counter from the banner just left.
-    fn begin_banner(&mut self, content: &Content, banner: &str) -> Pity {
+    /// Starting pity for this pull. Carried counters are copied here and written back only if the roll lands.
+    fn pity_for(&self, content: &Content, banner: &str) -> Pity {
         if content.banners.pity.carries_between_banners {
-            if let Some(prev) = self.active_banner.clone() {
+            if let Some(prev) = &self.active_banner {
                 if prev != banner {
-                    let carried = self.pity.get(&prev).cloned().unwrap_or_default();
-                    self.pity.insert(banner.to_string(), carried);
+                    return self.pity.get(prev).cloned().unwrap_or_default();
                 }
             }
         }
-        self.active_banner = Some(banner.to_string());
-        self.pity.entry(banner.to_string()).or_default().clone()
+        self.pity.get(banner).cloned().unwrap_or_default()
     }
 }
 
@@ -751,6 +759,25 @@ mod tests {
             assert!(!text.contains("gemini-backend"), "{rel} depends on gemini-backend");
             assert!(!text.contains("crates/backend") && !text.contains("../backend"), "{rel} paths at backend");
         }
+    }
+
+    #[test]
+    fn a_missing_shard_cost_does_not_move_pity_or_the_rng() {
+        let mut content = Content::embedded();
+        content.cosmetics.forget_shard_row("legendary").unwrap();
+        let mut account = Account::from_seed(7);
+        account.rank = content.duplicate.max_rank;
+        account.credits = content.banners.cost.single as f32 * 3.0;
+        account.pity.insert("featured".into(), Pity { since_legendary: 40, since_epic: 9 });
+        account.active_banner = Some("featured".into());
+        let before = account.to_bytes().unwrap();
+        let err = account.pull(&content, "standard").unwrap_err();
+        assert!(matches!(err, PullError::Shards), "{err}");
+        assert_eq!(account.to_bytes().unwrap(), before, "a shard fault must not save a new pity or rng state");
+        assert_eq!(account.since_legendary("featured"), 40);
+        assert_eq!(account.since_legendary("standard"), 0, "pity must not carry onto the banner");
+        assert!(account.audit.is_empty());
+        assert_eq!(account.credits(), content.banners.cost.single as f32 * 3.0);
     }
 
     #[test]

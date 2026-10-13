@@ -73,11 +73,16 @@ pub fn exchange(request: &[u8]) -> Result<Vec<u8>, ExchangeError> {
 }
 
 pub fn exchange_at(path: &Path, request: &[u8]) -> Result<Vec<u8>, ExchangeError> {
+    exchange_with(path, &Content::embedded(), request)
+}
+
+fn exchange_with(path: &Path, content: &Content, request: &[u8]) -> Result<Vec<u8>, ExchangeError> {
     let packet = Packet::decode(request).map_err(|err| ExchangeError::Failed(format!("crate pull request is not a proto packet: {err}")))?;
-    let content = Content::embedded();
-    let mut account = load_or_create(path, &content)?;
-    let reply = answer(&mut account, &content, &packet)?;
-    write_account(path, &account)?;
+    let mut account = load_or_create(path, content)?;
+    let reply = answer(&mut account, content, &packet)?;
+    if !matches!(&reply, Packet::CratePullReply(body) if matches!(body.fault, Some(CratePullFault::Shards))) {
+        write_account(path, &account)?;
+    }
     reply.encode().map_err(|err| ExchangeError::Failed(format!("could not encode the crate pull reply: {err}")))
 }
 
@@ -287,6 +292,25 @@ mod tests {
         assert!(reply.rarity.is_none());
         let still = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
         assert!((still.credits() - have).abs() < 1e-3);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_shards_fault_does_not_rewrite_the_save() {
+        let dir = scratch("shards");
+        let path = dir.join("account.bin");
+        let mut content = Content::embedded();
+        content.cosmetics.forget_shard_row("common").unwrap();
+        let mut account = Account::open(&content);
+        account.rank = content.duplicate.max_rank;
+        write_account(&path, &account).unwrap();
+        let before = fs::read(&path).unwrap();
+        let banner = content.banners.id.clone();
+        let reply = Packet::decode(&exchange_with(&path, &content, &request(&banner)).unwrap()).unwrap();
+        let Packet::CratePullReply(reply) = reply else { panic!("reply") };
+        assert!(matches!(reply.fault, Some(CratePullFault::Shards)), "{reply:?}");
+        assert!(reply.rarity.is_none());
+        assert_eq!(fs::read(&path).unwrap(), before, "a shard fault must leave the save where it was");
         let _ = fs::remove_dir_all(&dir);
     }
 }

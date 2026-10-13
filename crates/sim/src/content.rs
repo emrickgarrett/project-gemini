@@ -923,17 +923,39 @@ pub struct ShardCost {
     pub rare: u32,
     pub epic: u32,
     pub legendary: u32,
+    missing: u8,
 }
 
 impl Cosmetics {
+    /// Drops one tier's shard row. A later max-rank pull faults before the roll.
+    pub fn forget_shard_row(&mut self, rarity: &str) -> Result<(), String> {
+        let bit = shard_bit(rarity)?;
+        self.shard_cost.missing |= bit;
+        Ok(())
+    }
+
     pub fn shards_for(&self, rarity: &str) -> Result<u32, String> {
-        match rarity {
-            "common" => Ok(self.shard_cost.common),
-            "rare" => Ok(self.shard_cost.rare),
-            "epic" => Ok(self.shard_cost.epic),
-            "legendary" => Ok(self.shard_cost.legendary),
-            other => Err(format!("unknown rarity \"{other}\"")),
+        let (bit, cost) = match rarity {
+            "common" => (1u8, self.shard_cost.common),
+            "rare" => (2, self.shard_cost.rare),
+            "epic" => (4, self.shard_cost.epic),
+            "legendary" => (8, self.shard_cost.legendary),
+            other => return Err(format!("unknown rarity \"{other}\"")),
+        };
+        if self.shard_cost.missing & bit != 0 {
+            return Err(format!("cosmetics.toml shard_cost is missing {rarity}"));
         }
+        Ok(cost)
+    }
+}
+
+fn shard_bit(rarity: &str) -> Result<u8, String> {
+    match rarity {
+        "common" => Ok(1),
+        "rare" => Ok(2),
+        "epic" => Ok(4),
+        "legendary" => Ok(8),
+        other => Err(format!("unknown rarity \"{other}\"")),
     }
 }
 
@@ -2718,6 +2740,7 @@ fn load_cosmetics(text: &str) -> Result<Cosmetics, String> {
             rare: shard("rare")?,
             epic: shard("epic")?,
             legendary: shard("legendary")?,
+            missing: 0,
         },
     })
 }
