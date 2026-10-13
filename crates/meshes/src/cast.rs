@@ -1743,6 +1743,7 @@ fn fill_textured(
                         albedo[k] = linear_to_srgb(summed).clamp(0.0, 1.0);
                     }
                     if let Some(channel) = job.overdrive_channel {
+                        // `albedo` is sRGB. The channel mix decodes, blends, and encodes.
                         brighten_channel(albedo, weights, channel, job.overdrive_toward, job.overdrive_gain)
                     } else {
                         albedo
@@ -1794,6 +1795,7 @@ fn edge(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> f32 {
 
 /// Replace the named channel with `toward * gain`, the same product the client
 /// puts on the emissive color. The still has no bloom, so the product clamps.
+/// `albedo`, `toward`, and the result are sRGB. The mix is in linear light.
 fn brighten_channel(albedo: [f32; 3], weights: [f32; 4], channel: usize, toward: [f32; 3], gain: [f32; 3]) -> [f32; 3] {
     let w = weights[channel].clamp(0.0, 1.0);
     if w <= 0.0 {
@@ -1804,11 +1806,13 @@ fn brighten_channel(albedo: [f32; 3], weights: [f32; 4], channel: usize, toward:
         (toward[1] * gain[1]).min(1.0),
         (toward[2] * gain[2]).min(1.0),
     ];
-    [
-        albedo[0] + (hot[0] - albedo[0]) * w,
-        albedo[1] + (hot[1] - albedo[1]) * w,
-        albedo[2] + (hot[2] - albedo[2]) * w,
-    ]
+    let mut out = [0.0_f32; 3];
+    for k in 0..3 {
+        let base = srgb_to_linear(albedo[k]);
+        let glow = srgb_to_linear(hot[k]);
+        out[k] = linear_to_srgb(base + (glow - base) * w).clamp(0.0, 1.0);
+    }
+    out
 }
 
 fn norm(v: [f32; 3]) -> [f32; 3] {
@@ -3106,6 +3110,23 @@ mod tests {
             (toward[2] * gain[2]).min(1.0),
         ];
         assert!((hot[0] - expect[0]).abs() < 1.0e-4 && (hot[1] - expect[1]).abs() < 1.0e-4 && (hot[2] - expect[2]).abs() < 1.0e-4, "still uses toward * gain {hot:?}");
+        let half = brighten_channel(albedo, [0.0, 0.0, 0.5, 0.0], 2, toward, gain);
+        let mut half_expect = [0.0_f32; 3];
+        let mut srgb_lerp = [0.0_f32; 3];
+        for k in 0..3 {
+            let base = srgb_to_linear(albedo[k]);
+            let glow = srgb_to_linear(expect[k]);
+            half_expect[k] = linear_to_srgb(base + (glow - base) * 0.5);
+            srgb_lerp[k] = albedo[k] + (expect[k] - albedo[k]) * 0.5;
+        }
+        assert!(
+            half.iter().zip(half_expect).all(|(a, b)| (a - b).abs() < 1.0e-4),
+            "partial weight mixes in linear {half:?} vs {half_expect:?}"
+        );
+        assert!(
+            half.iter().zip(srgb_lerp).any(|(a, b)| (a - b).abs() > 1.0e-3),
+            "linear mix matched an sRGB lerp {half:?}"
+        );
         let other = brighten_channel(albedo, [1.0, 0.0, 0.0, 0.0], 2, toward, gain);
         assert_eq!(other, albedo);
         let (w, h, emit) = bake_overdrive_emissive(cast("vex_gun"), "accent");
