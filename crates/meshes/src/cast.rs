@@ -1462,6 +1462,7 @@ pub fn body_pivot(content: &Content, hero_id: &str) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gemini_sim::bugs::PartBounds;
 
     /// 5 cm. The fit test's bar for a hit center off the cast.
     const HIT_SURFACE_GAP_M: f32 = 0.05;
