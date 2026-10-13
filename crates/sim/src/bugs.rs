@@ -269,6 +269,73 @@ pub fn bind_weak_anchors(book: &mut BugBook) -> Result<(), String> {
     Ok(())
 }
 
+/// A glow's place is its weak-point hit center. Eyes are markers, not weak points.
+/// The head is never a glow. A glow with no hit center fails the load.
+pub fn require_glow_hit_centers(book: &BugBook) -> Result<(), String> {
+    for (bug, row) in book.rows() {
+        for part in &row.visual.parts {
+            if part.name == "head" && (part.emissive || part.visual_radius > 0.0) {
+                return Err(format!("{bug} head has no glow"));
+            }
+            if part.visual_radius <= 0.0 || part.name == "eyes" {
+                continue;
+            }
+            if part.name == "pod" {
+                if row.hitbox.pod.is_none() {
+                    return Err(format!("{bug} pod glow has no weak point"));
+                }
+                continue;
+            }
+            let Some(center) = hit_center_named(row, &part.name) else {
+                return Err(format!("{bug} {} glow has no weak point", part.name));
+            };
+            // The cannon sits on the tail chain. Its visual offset is not the world center.
+            if part.at.as_deref() == Some("tail_end") {
+                continue;
+            }
+            if part.offset != center {
+                return Err(format!(
+                    "{bug} {} glow is not on its hit center",
+                    part.name
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The tail glow is the authored cannon radius. Past `tail_glow_radius`, the load fails.
+pub fn require_tail_glow_radius(book: &BugBook, cap: f32) -> Result<(), String> {
+    if !(cap > 0.0) {
+        return Err("tail glow radius is not positive".into());
+    }
+    for (bug, row) in book.rows() {
+        for part in &row.visual.parts {
+            if part.name == "cannon" && part.visual_radius > cap {
+                return Err(format!(
+                    "{bug} cannon glow radius {:.3} exceeds tail_glow_radius {cap:.3}",
+                    part.visual_radius
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn hit_center_named(row: &BugRow, name: &str) -> Option<[f32; 3]> {
+    for (_, shape) in row.hitbox.anchored() {
+        let hit_name = if !shape.name.is_empty() {
+            shape.name.as_str()
+        } else {
+            shape.anchor.as_str()
+        };
+        if hit_name == name {
+            return Some(shape.offset);
+        }
+    }
+    None
+}
+
 /// Every leg names `layout`. Radial legs also name hip scale, plant scale, and phase.
 pub fn require_leg_layout(book: &BugBook) -> Result<(), String> {
     for (id, row) in book.rows() {

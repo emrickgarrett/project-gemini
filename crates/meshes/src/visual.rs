@@ -142,6 +142,7 @@ fn sculpt(id: &str, row: &Row) -> Result<EnemyVisual, String> {
     let mut parts = Vec::new();
     let mut shell = None;
     place_parts(&mut parts, id, row, &dens, height, &mut shell)?;
+    place_glows_on_hit_centers(id, &mut parts)?;
 
     let lod_parts = {
         let low = dens_of(&row.visual.lod)?;
@@ -153,6 +154,7 @@ fn sculpt(id: &str, row: &Row) -> Result<EnemyVisual, String> {
             }
             place_one(&mut low_parts, id, spec, &low, &row.visual.parts, height, &mut ignored)?;
         }
+        place_glows_on_hit_centers(id, &mut low_parts)?;
         low_parts
     };
     let mut baked = EnemyVisual {
@@ -207,6 +209,36 @@ fn sculpt(id: &str, row: &Row) -> Result<EnemyVisual, String> {
     baked.parts = parts;
     baked.lod = lod;
     Ok(baked)
+}
+
+/// Glow origins are the weak-point hit centers. A parented cannon keeps its
+/// tail-local offset; that chain is the same center. Eyes stay on their own mark.
+fn place_glows_on_hit_centers(id: &str, parts: &mut [Part]) -> Result<(), String> {
+    let content = gemini_sim::content::Content::embedded();
+    let Some((_, row)) = content.bugs.rows().into_iter().find(|(bug, _)| *bug == id) else {
+        return Err(format!("{id} has no hitbox"));
+    };
+    for (_, shape) in row.hitbox.anchored() {
+        if shape.anchor == gemini_sim::bugs::PROCEDURAL_TAIL_ANCHOR {
+            continue;
+        }
+        let name = if shape.name.is_empty() {
+            shape.anchor.as_str()
+        } else {
+            shape.name.as_str()
+        };
+        if let Some(part) = parts.iter_mut().find(|part| part.name == name && part.parent.is_none()) {
+            part.rest_pos = shape.offset;
+        }
+    }
+    for (index, place) in row.hitbox.pods.iter().enumerate() {
+        let name = format!("pod{index}");
+        let Some(part) = parts.iter_mut().find(|part| part.name == name) else {
+            return Err(format!("{id} {name} glow has no weak point"));
+        };
+        part.rest_pos = place.offset;
+    }
+    Ok(())
 }
 
 fn place_parts(
@@ -1436,11 +1468,12 @@ fn glow_radius(id: &str, spec: &VPart) -> Result<f32, String> {
     }
     if spec.part == "cannon" {
         let cap = gemini_sim::content::Content::embedded().cast.tail_glow_radius;
-        if !(cap > 0.0) {
-            return Err(format!("{id} tail glow cap is not positive"));
+        if spec.visual_radius > cap {
+            return Err(format!(
+                "{id} {} glow radius {:.3} exceeds tail_glow_radius {cap:.3}",
+                spec.name, spec.visual_radius
+            ));
         }
-        // The authored visual radius is the hit-zone glow. The tail tip is thinner.
-        return Ok(spec.visual_radius.min(cap));
     }
     Ok(spec.visual_radius)
 }

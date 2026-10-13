@@ -246,12 +246,12 @@ lod_distance = 62.0
 parts = [
   { name="torso",  part="torso",   shape="capsule", size=[1.2,3.0], offset=[0,3.2,0.5], tilt_deg=-15, color="brute_amber" },
   { name="armor",  part="armor",   shape="box",     size=[2.6,2.4,1.15], offset=[0,3.35,0.85], color="brute_amber", phase_max=1 },
-  { name="core",   part="gem",     shape="sphere",  size=[0.64,0.64,0.64], offset=[-0.00914036, 3.35820866, 0.86390787], color="spitter_glow", emissive=true, visual_radius=0.56 },
+  { name="core",   part="gem",     shape="sphere",  size=[0.64,0.64,0.64], offset=[0.04576531, 2.95827794, 0.92303598], color="spitter_glow", emissive=true, visual_radius=0.56 },
   { name="head",   part="head",    shape="cone",    size=[0.85,1.05], offset=[0,5.05,1.15], color="brute_amber", point="up" },
   { name="crown",  part="crown",   shape="cone",    size=[0.14,1.05], count=6, on="head", color="brute_amber", spread=[1.7, 0.55, 1.15], crown_pitch=0.35 },
   { name="scythe", part="scythe",  shape="cone",    size=[0.36,3.35], offset=[1.55,3.55,0.85], tilt_deg=70, color="brute_amber", mirror=true, aim=[1.25, 0.02, 0.7], seg=0.38, rad=0.62, taper=0.55, blade=1.25, blade_euler=[0.35, 0.0, 0.15], blade_r=[0.85, 0.16], swing_hz=1.4, swing_amp=0.12 },
   { name="tail",   part="tail",    shape="capsule", size=[0.4,1.0], count=7, chain=true, offset=[0,2.0,-1.5], curl_deg=200, base_pitch=2.05, curl_share=0.70, joint_span=0.82, segment_scale=0.90, tip_gap=0.02, segment_cap=12, sway_rate=1.6, sway_spread=0.4, sway_amp=0.06, color="brute_amber" },
-  { name="cannon", part="cannon",  shape="sphere",  size=[0.7,0.7,0.7], at="tail_end", color="spitter_glow", emissive=true, phase_max=1, visual_radius=0.64 },
+  { name="cannon", part="cannon",  shape="sphere",  size=[0.7,0.7,0.7], at="tail_end", color="spitter_glow", emissive=true, phase_max=1, visual_radius=0.40 },
   { name="leg",    part="leg",     shape="capsule", size=[0.44,2.6], count=6, ring_radius=3.35, color="brute_amber", layout="radial", hip_scale=0.95, plant_scale=1.55, ring_phase=0.35, hip=0.42, femur=0.46, femur_lod=0.92, tibia=0.40, foot=0.16 },
 ]
 anim = { bob=[0.1, 0.6], leg_swing=12, gait="alternate", frenzy_speed=1.4, phase_burst="armor_shards" }

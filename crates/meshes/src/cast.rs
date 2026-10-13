@@ -248,6 +248,12 @@ pub fn check_budget(id: &str, tris: usize, file_len: usize, tri_budget: u32, byt
 fn fit_model(bytes: &[u8], spec: &CastModel, content: &Content) -> Result<CastMesh, String> {
     check_budget(&spec.id, 0, bytes.len(), spec.triangles, spec.bytes)?;
     let mut decoded = decode_glb(bytes, spec)?;
+    // Island coverage uses every authored triangle. Needle slivers are dropped
+    // from the draw afterwards; they still own the texels the mask was painted from.
+    if matches!(spec.fit.as_str(), "weapon" | "shield") {
+        decoded.mask = decode_mask(mask_png(&spec.id)?, &spec.id)?;
+        require_island_coverage(&decoded, &spec.id, content.cast.min_island_coverage)?;
+    }
     drop_needles(&mut decoded, content.cast.needle_extent, content.cast.needle_area);
     check_budget(&spec.id, decoded.tris, bytes.len(), spec.triangles, spec.bytes)?;
     match spec.fit.as_str() {
@@ -364,6 +370,8 @@ fn fit_hitbox(mesh: &mut RawMesh, spec: &CastModel, content: &Content) -> Result
         // about half full, which is how the tyrant shrank under main's figure.
         scale[i] = hs[i] / ms[i];
     }
+    // Before any vertex moves. After the stretch, every axis fills the box.
+    require_axis_scale(&spec.id, scale, content.cast.axis_scale_limit)?;
     let mc = mid(mn, mx);
     let hc = mid(hit.min, hit.max);
     for p in &mut mesh.positions {
@@ -378,6 +386,372 @@ fn fit_hitbox(mesh: &mut RawMesh, spec: &CastModel, content: &Content) -> Result
     let (mn, mx) = bounds(&mesh.positions);
     require_hitbox_fill(&spec.id, sub(mx, mn), hs, content.cast.hitbox_fill)?;
     Ok(())
+}
+
+/// `scale` is hitbox extent / unscaled mesh extent. Fail when max/min is over the limit.
+fn require_axis_scale(id: &str, scale: [f32; 3], limit: f32) -> Result<(), String> {
+    let mut max_s = scale[0];
+    let mut min_s = scale[0];
+    for axis in scale {
+        if !(axis > 0.0) {
+            return Err(format!("{id} axis scale {axis} is not positive"));
+        }
+        max_s = max_s.max(axis);
+        min_s = min_s.min(axis);
+    }
+    let ratio = max_s / min_s;
+    if ratio > limit {
+        return Err(format!(
+            "{id} axis scale max/min is {ratio:.3}, limit {limit:.3}"
+        ));
+    }
+    Ok(())
+}
+
+/// Each UV island's texels must agree with the mask channel of the face that covers them.
+/// The raster is Pillow's filled polygon at 4× (coordinates truncate toward zero, `v = 0`
+/// is the top row, then the center of each 4×4 block). A point-in-triangle test does not
+/// match the masks, so it cannot be the load check.
+fn require_island_coverage(mesh: &RawMesh, id: &str, min_cov: f32) -> Result<(), String> {
+    let nfaces = mesh.indices.len() / 3;
+    if nfaces == 0 {
+        return Err(format!("{id} has no triangles for island coverage"));
+    }
+    let mut parent: Vec<u32> = (0..nfaces as u32).collect();
+    fn find(parent: &mut [u32], mut i: u32) -> u32 {
+        while parent[i as usize] != i {
+            parent[i as usize] = parent[parent[i as usize] as usize];
+            i = parent[i as usize];
+        }
+        i
+    }
+    fn unite(parent: &mut [u32], a: u32, b: u32) {
+        let a = find(parent, a);
+        let b = find(parent, b);
+        if a != b {
+            parent[b as usize] = a;
+        }
+    }
+    let mut owner = vec![u32::MAX; mesh.positions.len()];
+    for (fi, tri) in mesh.indices.chunks(3).enumerate() {
+        if tri.len() < 3 {
+            continue;
+        }
+        for &vert in tri {
+            let slot = vert as usize;
+            if slot >= owner.len() || slot >= mesh.uvs.len() {
+                return Err(format!("{id} index {vert} is outside the mesh"));
+            }
+            if owner[slot] == u32::MAX {
+                owner[slot] = fi as u32;
+            } else {
+                unite(&mut parent, owner[slot], fi as u32);
+            }
+        }
+    }
+    let w = mesh.mask.w;
+    let h = mesh.mask.h;
+    if w < 2 || h < 2 {
+        return Err(format!("{id} mask is too small for island coverage"));
+    }
+    const SS: i32 = 4;
+    let Some(pw) = (w as i32).checked_mul(SS) else {
+        return Err(format!("{id} mask is too wide for island coverage"));
+    };
+    let Some(ph) = (h as i32).checked_mul(SS) else {
+        return Err(format!("{id} mask is too tall for island coverage"));
+    };
+    let mut face_id = vec![-1i32; pw as usize * ph as usize];
+    for (fi, tri) in mesh.indices.chunks(3).enumerate() {
+        if tri.len() < 3 {
+            continue;
+        }
+        let mut pts = [[0i32; 2]; 3];
+        for (k, &vert) in tri.iter().enumerate() {
+            let uv = mesh.uvs[vert as usize];
+            // Pillow casts the float coordinate with a truncating `(int)`.
+            let x = (uv[0] as f64) * (w as f64) * (SS as f64);
+            let y = (uv[1] as f64) * (h as f64) * (SS as f64);
+            pts[k] = [x as i32, y as i32];
+        }
+        fill_triangle(&mut face_id, pw, ph, pts, fi as i32);
+    }
+    let mut face_counts = vec![[0u32; 4]; nfaces];
+    let mut face_covered = vec![0u32; nfaces];
+    for ty in 0..h as i32 {
+        for tx in 0..w as i32 {
+            let sx = tx * SS + SS / 2;
+            let sy = ty * SS + SS / 2;
+            let fi = face_id[(sy as usize) * (pw as usize) + sx as usize];
+            if fi < 0 {
+                continue;
+            }
+            let fi = fi as usize;
+            face_covered[fi] += 1;
+            if let Some(channel) = texel_channel(&mesh.mask, tx, ty) {
+                face_counts[fi][channel] += 1;
+            }
+        }
+    }
+    let mut face_major = vec![0usize; nfaces];
+    for fi in 0..nfaces {
+        let mut best = 0u32;
+        let mut which = 0usize;
+        for (channel, count) in face_counts[fi].iter().enumerate() {
+            if *count > best {
+                best = *count;
+                which = channel;
+            }
+        }
+        face_major[fi] = which;
+    }
+    let mut island_hit = std::collections::HashMap::<u32, u32>::new();
+    let mut island_covered = std::collections::HashMap::<u32, u32>::new();
+    for ty in 0..h as i32 {
+        for tx in 0..w as i32 {
+            let sx = tx * SS + SS / 2;
+            let sy = ty * SS + SS / 2;
+            let fi = face_id[(sy as usize) * (pw as usize) + sx as usize];
+            if fi < 0 {
+                continue;
+            }
+            let fi = fi as usize;
+            let root = find(&mut parent, fi as u32);
+            *island_covered.entry(root).or_insert(0) += 1;
+            let channel = texel_channel(&mesh.mask, tx, ty);
+            let painted = face_counts[fi].iter().any(|count| *count > 0);
+            if painted && channel == Some(face_major[fi]) {
+                *island_hit.entry(root).or_insert(0) += 1;
+            }
+        }
+    }
+    if island_covered.is_empty() {
+        return Err(format!("{id} island coverage rasterized no texels"));
+    }
+    let mut worst = 1.0_f32;
+    let mut worst_id = 0u32;
+    for (island, count) in &island_covered {
+        if *count == 0 {
+            continue;
+        }
+        let hit = island_hit.get(island).copied().unwrap_or(0);
+        let frac = hit as f32 / *count as f32;
+        if frac < worst {
+            worst = frac;
+            worst_id = *island;
+        }
+    }
+    if worst < min_cov {
+        let hit = island_hit.get(&worst_id).copied().unwrap_or(0);
+        let count = island_covered.get(&worst_id).copied().unwrap_or(0);
+        return Err(format!(
+            "{id} island {worst_id} coverage is {worst:.3} ({hit}/{count}), need {min_cov:.2}"
+        ));
+    }
+    Ok(())
+}
+
+fn texel_channel(tex: &Tex, x: i32, y: i32) -> Option<usize> {
+    let i = ((y as u32 * tex.w + x as u32) * 4) as usize;
+    let bytes = [
+        tex.rgba[i],
+        tex.rgba[i + 1],
+        tex.rgba[i + 2],
+        tex.rgba[i + 3],
+    ];
+    let mut best = 0u8;
+    let mut index = 0usize;
+    let mut ties = 0u8;
+    for (channel, value) in bytes.iter().enumerate() {
+        if *value > best {
+            best = *value;
+            index = channel;
+            ties = 1;
+        } else if *value == best {
+            ties += 1;
+        }
+    }
+    if best >= 180 && ties == 1 {
+        Some(index)
+    } else {
+        None
+    }
+}
+
+/// Pillow `ImagingDrawPolygon` fill for one triangle. Later faces overwrite earlier ones.
+fn fill_triangle(buf: &mut [i32], width: i32, height: i32, pts: [[i32; 2]; 3], ink: i32) {
+    let xy = [
+        pts[0][0], pts[0][1], pts[1][0], pts[1][1], pts[2][0], pts[2][1],
+    ];
+    let count = 3usize;
+    let mut edges: Vec<ScanEdge> = Vec::with_capacity(3);
+    let mut i = 0usize;
+    while i < count - 1 {
+        let x0 = xy[i * 2];
+        let y0 = xy[i * 2 + 1];
+        let x1 = xy[i * 2 + 2];
+        let y1 = xy[i * 2 + 3];
+        if y0 == y1 && i != 0 && y0 == xy[i * 2 - 1] {
+            let last = edges.last_mut().expect("a horizontal run follows an edge");
+            if x1 > x0 && x0 > xy[i * 2 - 2] {
+                last.xmax = x1;
+                i += 1;
+                continue;
+            } else if x1 < x0 && x0 < xy[i * 2 - 2] {
+                last.xmin = x1;
+                i += 1;
+                continue;
+            }
+        }
+        edges.push(scan_edge(x0, y0, x1, y1));
+        i += 1;
+    }
+    if xy[i * 2] != xy[0] || xy[i * 2 + 1] != xy[1] {
+        edges.push(scan_edge(xy[i * 2], xy[i * 2 + 1], xy[0], xy[1]));
+    }
+    fill_polygon(buf, width, height, &edges, ink);
+}
+
+struct ScanEdge {
+    x0: i32,
+    y0: i32,
+    xmin: i32,
+    xmax: i32,
+    ymin: i32,
+    ymax: i32,
+    dx: f32,
+}
+
+fn scan_edge(x0: i32, y0: i32, x1: i32, y1: i32) -> ScanEdge {
+    let (xmin, xmax) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
+    let (ymin, ymax) = if y0 <= y1 { (y0, y1) } else { (y1, y0) };
+    let dx = if y0 == y1 {
+        0.0
+    } else {
+        (x1 - x0) as f32 / (y1 - y0) as f32
+    };
+    ScanEdge { x0, y0, xmin, xmax, ymin, ymax, dx }
+}
+
+fn fill_polygon(buf: &mut [i32], width: i32, height: i32, edges: &[ScanEdge], ink: i32) {
+    if edges.is_empty() {
+        return;
+    }
+    let mut ymin = height - 1;
+    let mut ymax = 0;
+    let mut active = Vec::new();
+    for edge in edges {
+        if ymin > edge.ymin {
+            ymin = edge.ymin;
+        }
+        if ymax < edge.ymax {
+            ymax = edge.ymax;
+        }
+        if edge.ymin == edge.ymax {
+            hline(buf, width, height, edge.xmin, edge.ymin, edge.xmax, ink);
+            continue;
+        }
+        active.push(edge);
+    }
+    if ymin < 0 {
+        ymin = 0;
+    }
+    if ymax > height {
+        ymax = height;
+    }
+    let mut y = ymin;
+    while y <= ymax {
+        let mut xx = Vec::new();
+        for (i, current) in active.iter().enumerate() {
+            if y < current.ymin || y > current.ymax {
+                continue;
+            }
+            xx.push((y - current.y0) as f32 * current.dx + current.x0 as f32);
+            if y == current.ymax && y < ymax {
+                let dup = *xx.last().expect("intersection");
+                xx.push(dup);
+            } else if (y == current.ymin || y == current.ymax) && current.dx != 0.0 {
+                let here = *xx.last().expect("intersection");
+                for other in active.iter().take(i) {
+                    if (y != other.ymin && y != other.ymax) || other.dx == 0.0 {
+                        continue;
+                    }
+                    let other_x = (y - other.y0) as f32 * other.dx + other.x0 as f32;
+                    if here.round() != other_x.round() {
+                        continue;
+                    }
+                    let offset = if y == current.ymax { -1 } else { 1 };
+                    let adjacent =
+                        (y + offset - current.y0) as f32 * current.dx + current.x0 as f32;
+                    if y + offset < other.ymin || y + offset > other.ymax {
+                        continue;
+                    }
+                    let adjacent_other =
+                        (y + offset - other.y0) as f32 * other.dx + other.x0 as f32;
+                    let last = xx.last_mut().expect("intersection");
+                    if *last > adjacent + 1.0 && *last > adjacent_other + 1.0 {
+                        *last = adjacent.max(adjacent_other).round() + 1.0;
+                    } else if *last < adjacent - 1.0 && *last < adjacent_other - 1.0 {
+                        *last = adjacent.min(adjacent_other).round() - 1.0;
+                    }
+                    break;
+                }
+            }
+        }
+        xx.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mut i = 1;
+        while i < xx.len() {
+            hline(
+                buf,
+                width,
+                height,
+                round_up_pix(xx[i - 1]),
+                y,
+                round_down_pix(xx[i]),
+                ink,
+            );
+            i += 2;
+        }
+        y += 1;
+    }
+}
+
+fn hline(buf: &mut [i32], width: i32, height: i32, mut x0: i32, y: i32, mut x1: i32, ink: i32) {
+    if y < 0 || y >= height {
+        return;
+    }
+    if x0 < 0 {
+        x0 = 0;
+    } else if x0 >= width {
+        return;
+    }
+    if x1 < 0 {
+        return;
+    } else if x1 >= width {
+        x1 = width - 1;
+    }
+    let row = (y as usize) * (width as usize);
+    while x0 <= x1 {
+        buf[row + x0 as usize] = ink;
+        x0 += 1;
+    }
+}
+
+/// Pillow `ROUND_UP` / `ROUND_DOWN`: half away from zero, via `floor(f + 0.5)` and `ceil(f - 0.5)`.
+fn round_up_pix(f: f32) -> i32 {
+    if f >= 0.0 {
+        (f + 0.5).floor() as i32
+    } else {
+        -((f.abs() + 0.5).floor() as i32)
+    }
+}
+
+fn round_down_pix(f: f32) -> i32 {
+    if f >= 0.0 {
+        (f - 0.5).ceil() as i32
+    } else {
+        -((f.abs() - 0.5).ceil() as i32)
+    }
 }
 
 /// Each axis of the fitted mesh has to land on the body hitbox, within `tol`.
@@ -583,22 +957,6 @@ fn closest_on_triangle(p: [f32; 3], a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f
         a[1] + ab[1] * v + ac[1] * w,
         a[2] + ab[2] * v + ac[2] * w,
     ]
-}
-
-/// Pull a floating glow center onto the cast surface.
-/// A center already within `radius` stays put, so a snapped hit does not move.
-/// One that floats clear of the surface lands on the closest point, the same
-/// way the other hit zones sit on the mesh. Stopping at a tangent leaves sky
-/// under the sphere.
-pub fn seat_glow(positions: &[[f32; 3]], indices: &[u32], center: [f32; 3], radius: f32) -> [f32; 3] {
-    if radius <= 0.0 || positions.is_empty() || indices.is_empty() {
-        return center;
-    }
-    let (closest, gap) = closest_on_mesh(positions, indices, center);
-    if gap <= radius || gap < 1.0e-5 {
-        return center;
-    }
-    closest
 }
 
 fn decode_glb(bytes: &[u8], spec: &CastModel) -> Result<RawMesh, String> {
@@ -921,7 +1279,7 @@ struct PaintTint {
 }
 
 fn paint_tint(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> PaintTint {
-    let (_base_light, rim_strength, shade_mid_lin, rim_fill) = tint_look();
+    let (rim_strength, shade_mid_lin, rim_fill) = tint_look();
     let rgb = |key: &str| -> [f32; 3] {
         if key.is_empty() {
             [0.0, 0.0, 0.0]
@@ -1221,11 +1579,11 @@ fn paint_tris(
     }
 }
 
-fn tint_look() -> (f32, f32, f32, f32) {
-    static CELL: OnceLock<(f32, f32, f32, f32)> = OnceLock::new();
+fn tint_look() -> (f32, f32, f32) {
+    static CELL: OnceLock<(f32, f32, f32)> = OnceLock::new();
     *CELL.get_or_init(|| {
         let look = &Content::embedded().cast;
-        (look.base_light, look.rim_strength, look.shade_mid_lin, look.rim_fill)
+        (look.rim_strength, look.shade_mid_lin, look.rim_fill)
     })
 }
 
@@ -1966,10 +2324,20 @@ mod tests {
         let authored = content_visual_radius(id, name);
         assert!(authored > 0.0, "{id} {name} glow is missing visual_radius");
         let fit_r = glow_fit_radius(shape);
-        assert!(
-            authored + 1.0e-3 >= 0.70 * fit_r,
-            "{id} {slot} visual radius {authored:.3} is under 70% of the hit radius {fit_r:.3}"
-        );
+        if shape.anchor == gemini_sim::bugs::PROCEDURAL_TAIL_ANCHOR {
+            // The tail glow authors `tail_glow_radius`. That cap is smaller than
+            // 70% of the cannon hit sphere, and the other glows still fill 70%.
+            let cap = Content::embedded().cast.tail_glow_radius;
+            assert!(
+                (authored - cap).abs() < 1.0e-4,
+                "{id} {slot} visual radius {authored:.3} is not tail_glow_radius {cap:.3}"
+            );
+        } else {
+            assert!(
+                authored + 1.0e-3 >= 0.70 * fit_r,
+                "{id} {slot} visual radius {authored:.3} is under 70% of the hit radius {fit_r:.3}"
+            );
+        }
         assert!(
             authored <= fit_r + 1.0e-3,
             "{id} {slot} visual radius {authored:.3} is larger than the hit radius {fit_r:.3}"
@@ -2123,7 +2491,7 @@ mod tests {
             .find(|line| line.starts_with("shade_mid_lin"))
             .expect("shade_mid_lin");
         let shade_mid: f32 = shade_line.split('=').nth(1).unwrap().trim().parse().unwrap();
-        assert!((look.base_light - 0.5).abs() < 1.0e-6);
+        assert!(!text.contains("base_light"), "base_light is not a cast key");
         assert!((look.shade_mid_lin - shade_mid).abs() < 1.0e-6);
         assert!(!text.contains("base_gray"), "base_gray is not a cast key");
         assert!((look.rim_strength - 1.0).abs() < 1.0e-6);
@@ -2224,61 +2592,58 @@ mod tests {
         }
     }
 
-    /// Painted stock and rail texels, read off Gorkasso's masks and then frozen.
-    /// Stock is the centroid of the largest secondary island. Rail is the centroid
-    /// of the largest accent island. Brakk's mask has no accent, so it has no rail
-    /// point. Mesh vertices that read the texel have to sit on that panel: the
-    /// stock is the rear quarter of the gun, the rail is the top of the barrel.
-    /// These coordinates are not moved when a mesh misses them.
+    /// Stock and rail UVs live on the weapon rows. The sample is an interior texel
+    /// of the painted face, so the face that covers it is the panel. The stock face
+    /// is the rear quarter. The rail face is the top of the barrel. The shield has neither.
     #[test]
     fn gun_rail_and_stock_sample_the_painted_panels() {
-        // (id, stock uv, rail uv). Pixel on the 512² mask is uv * 511.
-        // vex stock (375, 362), rail (101, 108)
-        // nyra stock (62, 252), rail (381, 275)
-        // kip stock (219, 405), rail (65, 443)
-        // brakk stock (440, 439); no accent island
-        let panels: &[(&str, [f32; 2], Option<[f32; 2]>)] = &[
-            ("vex_gun", [0.7339, 0.7084], Some([0.1977, 0.2114])),
-            ("nyra_gun", [0.1213, 0.4932], Some([0.7456, 0.5382])),
-            ("kip_gun", [0.4286, 0.7926], Some([0.1272, 0.8669])),
-            ("brakk_gun", [0.8611, 0.8591], None),
-        ];
         let content = Content::embedded();
         let guns: Vec<_> = content.models.iter().filter(|model| model.fit == "weapon").collect();
-        assert_eq!(guns.len(), panels.len(), "every gun has a frozen panel texel");
-        for (id, stock_uv, rail_uv) in panels {
-            let spec = guns.iter().find(|model| model.id == *id).expect(id);
+        assert_eq!(guns.len(), 4, "every gun has a stock and a rail");
+        for spec in guns {
+            let id = spec.id.as_str();
+            let stock_uv = spec.stock_uv.expect("weapon stock uv");
+            let rail_uv = spec.rail_uv.expect("weapon rail uv");
+            let stock_channel = gemini_sim::content::channel_index(&spec.stock_channel)
+                .unwrap_or_else(|| panic!("{id} stock channel"));
+            let rail_channel = gemini_sim::content::channel_index(&spec.rail_channel)
+                .unwrap_or_else(|| panic!("{id} rail channel"));
             let mesh = cast(id);
             let (mn, mx) = bounds(&mesh.positions);
             let len = mx[2] - mn[2];
             let height = mx[1] - mn[1];
             assert!(len > 0.2 && height > 0.05, "{id} has no barrel");
-            assert_channel(&mesh.mask, *stock_uv, 1, id, "stock");
-            let stock_hits = readers(&mesh, *stock_uv);
-            assert!(stock_hits.len() >= 4, "{id} stock texel has no nearby vertices");
+            assert_channel(&mesh.mask, stock_uv, stock_channel, id, "stock");
+            let (stock_point, stock_hits) = painted_face(mesh, stock_uv)
+                .unwrap_or_else(|| panic!("{id} stock uv is not on a face"));
             let rear = stock_hits.iter().filter(|p| (p[2] - mn[2]) / len >= 0.75).count();
             let share = rear * 100 / stock_hits.len();
             assert!(
                 share >= 55,
-                "{id} stock texel sits on {share}% of {} nearby vertices, need the rear quarter",
+                "{id} stock face sits on {share}% of {} vertices, need the rear quarter",
                 stock_hits.len()
             );
-            if spec.accent.is_empty() {
-                assert!(rail_uv.is_none(), "{id} has no accent, so it has no rail texel");
-                continue;
-            }
-            let rail_uv = rail_uv.expect("accent gun");
-            assert_channel(&mesh.mask, rail_uv, 2, id, "rail");
-            let rail_hits = readers(&mesh, rail_uv);
-            assert!(rail_hits.len() >= 4, "{id} rail texel has no nearby vertices");
+            assert!(
+                (stock_point[2] - mn[2]) / len >= 0.75,
+                "{id} stock texel is not in the rear quarter"
+            );
+            assert_channel(&mesh.mask, rail_uv, rail_channel, id, "rail");
+            let (rail_point, rail_hits) = painted_face(mesh, rail_uv)
+                .unwrap_or_else(|| panic!("{id} rail uv is not on a face"));
             let top = rail_hits.iter().filter(|p| (p[1] - mn[1]) / height >= 0.72).count();
             let share = top * 100 / rail_hits.len();
             assert!(
                 share >= 55,
-                "{id} rail texel sits on {share}% of {} nearby vertices, need the top of the barrel",
+                "{id} rail face sits on {share}% of {} vertices, need the top of the barrel",
                 rail_hits.len()
             );
+            assert!(
+                (rail_point[1] - mn[1]) / height >= 0.72,
+                "{id} rail texel is not on top of the barrel"
+            );
         }
+        let shield = content.models.iter().find(|model| model.id == "brakk_shield").expect("shield");
+        assert!(shield.stock_uv.is_none() && shield.rail_uv.is_none(), "the shield has no stock or rail");
     }
 
     fn assert_channel(mask: &Tex, uv: [f32; 2], channel: usize, id: &str, panel: &str) {
@@ -2296,18 +2661,45 @@ mod tests {
         );
     }
 
-    /// Vertices whose UV is within 0.04 of the frozen texel. That is about 20 px on the 512² mask.
-    fn readers(mesh: &CastMesh, uv: [f32; 2]) -> Vec<[f32; 3]> {
-        mesh.positions
-            .iter()
-            .zip(mesh.uvs.iter())
-            .filter(|(_, t)| {
-                let du = t[0] - uv[0];
-                let dv = t[1] - uv[1];
-                du * du + dv * dv <= 0.04 * 0.04
-            })
-            .map(|(p, _)| *p)
-            .collect()
+    /// The face that covers `uv`, its interpolated position, and that face's vertices.
+    fn painted_face(mesh: &CastMesh, uv: [f32; 2]) -> Option<([f32; 3], Vec<[f32; 3]>)> {
+        for tri in mesh.indices.chunks(3) {
+            if tri.len() < 3 {
+                continue;
+            }
+            let ids = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
+            let a = mesh.uvs[ids[0]];
+            let b = mesh.uvs[ids[1]];
+            let c = mesh.uvs[ids[2]];
+            let v0 = [c[0] - a[0], c[1] - a[1]];
+            let v1 = [b[0] - a[0], b[1] - a[1]];
+            let v2 = [uv[0] - a[0], uv[1] - a[1]];
+            let den = v0[0] * v1[1] - v1[0] * v0[1];
+            if den.abs() < 1.0e-14 {
+                continue;
+            }
+            let w = (v2[0] * v1[1] - v1[0] * v2[1]) / den;
+            let v = (v0[0] * v2[1] - v2[0] * v0[1]) / den;
+            let u = 1.0 - v - w;
+            if u < -1.0e-4 || v < -1.0e-4 || w < -1.0e-4 {
+                continue;
+            }
+            let u = u.max(0.0);
+            let v = v.max(0.0);
+            let w = w.max(0.0);
+            let sum = u + v + w;
+            let (u, v, w) = (u / sum, v / sum, w / sum);
+            let pa = mesh.positions[ids[0]];
+            let pb = mesh.positions[ids[1]];
+            let pc = mesh.positions[ids[2]];
+            let point = [
+                pa[0] * u + pb[0] * v + pc[0] * w,
+                pa[1] * u + pb[1] * v + pc[1] * w,
+                pa[2] * u + pb[2] * v + pc[2] * w,
+            ];
+            return Some((point, vec![pa, pb, pc]));
+        }
+        None
     }
 
     #[test]
@@ -2356,24 +2748,107 @@ mod tests {
     }
 
     #[test]
-    fn a_floating_glow_seats_on_the_cast() {
-        let mesh = cast("hive_tyrant");
-        let on = mesh.positions[0];
-        let stayed = seat_glow(&mesh.positions, &mesh.indices, on, 0.5);
-        assert!(dist(stayed, on) < 1.0e-4, "a center on the surface stays");
+    fn the_cannon_glow_stays_on_its_hit_center() {
+        let content = Content::embedded();
+        let (_, row) = content.bugs.rows().into_iter().find(|(id, _)| *id == "hive_tyrant").unwrap();
+        let hit = row.hitbox.cannon.as_ref().expect("cannon").offset;
         let visual = crate::bug("hive_tyrant");
         let posed = rest_pose(visual);
         let index = visual.parts.iter().position(|part| part.name == "cannon").expect("cannon");
         let center = posed.xforms[index].pos;
-        let cap = Content::embedded().cast.tail_glow_radius;
+        assert!(dist(center, hit) < 1.0e-3, "cannon glow {center:?} is not the hit center {hit:?}");
+        let cap = content.cast.tail_glow_radius;
+        let authored = content_visual_radius("hive_tyrant", "cannon");
         let radius = local_radius(&visual.parts[index].mesh.positions);
-        assert!((radius - cap).abs() < 1.0e-2, "cannon glow {radius:.3} is not the cast.toml cap {cap:.3}");
+        assert!((authored - cap).abs() < 1.0e-4, "cannon visual radius {authored} is not the content cap {cap}");
+        assert!((radius - authored).abs() < 1.0e-2, "cannon mesh {radius:.3} is not the authored radius {authored:.3}");
+        let mesh = cast("hive_tyrant");
         let gap = closest_on_mesh(&mesh.positions, &mesh.indices, center).1;
-        assert!(gap > radius, "hive cannon gap {gap:.3} should float clear of the cast");
-        let seated = seat_glow(&mesh.positions, &mesh.indices, center, radius);
-        let seated_gap = closest_on_mesh(&mesh.positions, &mesh.indices, seated).1;
-        assert!(seated_gap < 1.0e-3, "the cannon center sits on the cast, gap {seated_gap:.4}");
-        assert!(dist(seated, center) > 0.2, "the cannon actually moves onto the cast");
+        assert!(gap > radius, "hive cannon gap {gap:.3} stays on the tail, not the body cast");
+    }
+
+    #[test]
+    fn an_overstretched_axis_scale_fails_before_the_fit() {
+        let content = Content::embedded();
+        let limit = content.cast.axis_scale_limit;
+        let text = include_str!("../../../content/cast.toml");
+        let authored: f32 = text
+            .lines()
+            .find(|line| line.starts_with("axis_scale_limit"))
+            .expect("axis_scale_limit")
+            .split('=')
+            .nth(1)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        assert!((limit - authored).abs() < 1.0e-6);
+        let err = require_axis_scale("synthetic", [limit + 1.0, 1.0, 1.0], limit).expect_err("over the limit");
+        assert!(err.contains("axis scale"), "{err}");
+        require_axis_scale("synthetic", [1.0, 1.0, 1.0], limit).expect("a uniform scale loads");
+        let spec = model_spec("hive_tyrant");
+        let mut thin = RawMesh {
+            positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.1, 0.0], [0.0, 0.0, 1.0]],
+            normals: vec![[0.0, 1.0, 0.0]; 4],
+            uvs: vec![[0.0, 0.0]; 4],
+            indices: vec![0, 1, 2],
+            base: Tex { w: 0, h: 0, rgba: Vec::new() },
+            mask: Tex { w: 0, h: 0, rgba: Vec::new() },
+            tris: 1,
+            gripped: false,
+        };
+        let before = thin.positions.clone();
+        let err = fit_hitbox(&mut thin, &spec, &content).expect_err("a thin cast");
+        assert!(err.contains("axis scale"), "{err}");
+        assert_eq!(thin.positions, before, "the stretch check runs before any vertex moves");
+        let mut matched = RawMesh {
+            positions: vec![[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 4.0]],
+            normals: vec![[0.0, 1.0, 0.0]; 4],
+            uvs: vec![[0.0, 0.0]; 4],
+            indices: vec![0, 1, 2],
+            base: Tex { w: 0, h: 0, rgba: Vec::new() },
+            mask: Tex { w: 0, h: 0, rgba: Vec::new() },
+            tris: 1,
+            gripped: false,
+        };
+        fit_hitbox(&mut matched, &spec, &content).expect("a matched box loads");
+    }
+
+    #[test]
+    fn an_island_under_the_coverage_bar_fails_the_load() {
+        let min_cov = Content::embedded().cast.min_island_coverage;
+        assert!((min_cov - 0.98).abs() < 1.0e-6);
+        let mut rgba = vec![0u8; 8 * 8 * 4];
+        for y in 0..8 {
+            for x in 0..8 {
+                let i = (y * 8 + x) * 4;
+                if x < 4 {
+                    rgba[i] = 255;
+                } else {
+                    rgba[i + 1] = 255;
+                }
+            }
+        }
+        let mesh = RawMesh {
+            positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]],
+            normals: vec![[0.0, 1.0, 0.0]; 4],
+            uvs: vec![[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+            indices: vec![0, 1, 2, 1, 3, 2],
+            base: Tex { w: 0, h: 0, rgba: Vec::new() },
+            mask: Tex { w: 8, h: 8, rgba },
+            tris: 2,
+            gripped: false,
+        };
+        let err = require_island_coverage(&mesh, "synthetic", min_cov).expect_err("a split island");
+        assert!(err.contains("coverage"), "{err}");
+        let mut solid = mesh;
+        for px in solid.mask.rgba.chunks_exact_mut(4) {
+            px[0] = 255;
+            px[1] = 0;
+            px[2] = 0;
+            px[3] = 0;
+        }
+        require_island_coverage(&solid, "synthetic", min_cov).expect("one channel covers the island");
     }
 
     #[test]
@@ -2408,8 +2883,17 @@ mod tests {
             .unwrap();
         assert!((cap - authored).abs() < 1.0e-6);
         let (_, row) = content.bugs.rows().into_iter().find(|(id, _)| *id == "hive_tyrant").unwrap();
-        let hit_r = row.hitbox.cannon.as_ref().expect("cannon").radius;
-        assert!((hit_r - 0.83).abs() < 1.0e-4, "cannon hit radius stays {hit_r}");
+        let cannon_hit = row.hitbox.cannon.as_ref().expect("cannon");
+        let hit_r = cannon_hit.radius;
+        let visual_r = row
+            .visual
+            .parts
+            .iter()
+            .find(|part| part.name == "cannon")
+            .expect("cannon")
+            .visual_radius;
+        assert!(visual_r <= cap + 1.0e-4, "authored glow {visual_r} exceeds tail_glow_radius {cap}");
+        assert!((visual_r - cap).abs() < 1.0e-4, "the cannon authors the content cap");
         let tail_r = row
             .visual
             .parts
@@ -2425,7 +2909,7 @@ mod tests {
         let visual = crate::bug("hive_tyrant");
         let cannon = visual.parts.iter().find(|part| part.name == "cannon").expect("cannon");
         let mesh_r = local_radius(&cannon.mesh.positions);
-        assert!((mesh_r - cap).abs() < 1.0e-2, "cannon mesh {mesh_r} is not the cap");
+        assert!((mesh_r - visual_r).abs() < 1.0e-2, "cannon mesh {mesh_r} is not the authored radius {visual_r}");
         let px = crate::radius_px(cap, content.arena_dressing.review_distance, visual.camera.fov, 720.0);
         assert!(px >= 12.0, "tail glow is {px:.1}px at 15 m");
     }

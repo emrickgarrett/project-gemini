@@ -15,7 +15,7 @@ mod visual;
 
 pub use cast::{
     bake_overdrive_emissive, bake_textures, body_pivot, cast, casts, hero_pieces, hero_placement, load_catalog, model_bytes, muzzle_tip, paint_approved_gun, place_point, read_model_file,
-    seat_glow, CastMesh, PaintCam, Placement,
+    CastMesh, PaintCam, Placement,
 };
 
 pub use menu_still::{paint_menu, raster_hero_portrait, Hit, MenuShot, PaintPrefs};
@@ -434,7 +434,7 @@ mod tests {
         assert!(near(gland.rest_pos, [-0.01607708, 1.45470980, 1.18440960], 0.02));
         assert!(gland.emissive);
         let core = bug("hive_tyrant").parts.iter().find(|p| p.name == "core").expect("core");
-        assert!(near(core.rest_pos, [-0.00914036, 3.35820866, 0.86390787], 0.02));
+        assert!(near(core.rest_pos, [0.04576531, 2.95827794, 0.92303598], 0.02));
         assert!(core.emissive);
         let armor = bug("hive_tyrant").parts.iter().find(|p| p.name == "armor").expect("armor");
         assert!(matches!(armor.gate, Gate::PhaseMax(1)));

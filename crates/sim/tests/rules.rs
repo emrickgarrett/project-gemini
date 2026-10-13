@@ -985,7 +985,7 @@ fn cast_hit_centers_stay_on_the_moved_anchors() {
     let hive = content.bug(EnemyKind::HiveTyrant);
     let core = hive.hitbox.core.as_ref().expect("hive core");
     assert!(
-        near(core.offset, [-0.00914036, 3.35820866, 0.86390787]),
+        near(core.offset, [0.04576531, 2.95827794, 0.92303598]),
         "hive core {:?}",
         core.offset
     );
@@ -1067,6 +1067,29 @@ fn missing_weakpoint_anchor_fails_content_load() {
     assert_ne!(duplicated, bugs, "the duplicate seat must change the table");
     let err = load(&duplicated).expect_err("a duplicated pod seat must fail load");
     assert!(err.contains("duplicated"), "{err}");
+
+    let head = bugs.replacen(
+        "{ name=\"head\",   part=\"head\",    shape=\"cone\",    size=[0.85,1.05], offset=[0,5.05,1.15], color=\"brute_amber\", point=\"up\" }",
+        "{ name=\"head\",   part=\"head\",    shape=\"cone\",    size=[0.85,1.05], offset=[0,5.05,1.15], color=\"brute_amber\", point=\"up\", emissive=true, visual_radius=0.20 }",
+        1,
+    );
+    assert_ne!(head, bugs, "the head glow must change the table");
+    let err = load(&head).expect_err("a head glow must fail load");
+    assert!(err.contains("head has no glow"), "{err}");
+
+    let bare = bugs.replacen("core = { anchor = \"core\", shape = \"sphere\", radius = 0.7 }\n", "", 1);
+    assert_ne!(bare, bugs, "dropping the core hit must change the table");
+    let err = load(&bare).expect_err("a core glow without a weak point must fail load");
+    assert!(err.contains("glow has no weak point"), "{err}");
+
+    let wide = bugs.replacen(
+        "name=\"cannon\", part=\"cannon\",  shape=\"sphere\",  size=[0.7,0.7,0.7], at=\"tail_end\", color=\"spitter_glow\", emissive=true, phase_max=1, visual_radius=0.40",
+        "name=\"cannon\", part=\"cannon\",  shape=\"sphere\",  size=[0.7,0.7,0.7], at=\"tail_end\", color=\"spitter_glow\", emissive=true, phase_max=1, visual_radius=0.90",
+        1,
+    );
+    assert_ne!(wide, bugs, "a wider cannon must change the table");
+    let err = load(&wide).expect_err("a tail glow past the cap must fail load");
+    assert!(err.contains("exceeds tail_glow_radius"), "{err}");
 }
 
 #[test]

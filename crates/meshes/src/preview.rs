@@ -685,7 +685,6 @@ fn paint_feedback_parts(
 ) {
     let (ls, lc) = lean.sin_cos();
     let look = &gemini_sim::content::Content::embedded().cast;
-    let body = crate::cast(&visual.id);
     for (part, xf) in visual.parts.iter().zip(posed.xforms.iter()) {
         if !(part.emissive || part.grows || part.pod_slot.is_some()) || !xf.visible {
             continue;
@@ -697,11 +696,7 @@ fn paint_feedback_parts(
             let scaled = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
             radius = radius.max((scaled[0] * scaled[0] + scaled[1] * scaled[1] + scaled[2] * scaled[2]).sqrt());
         }
-        let origin = if part.emissive {
-            crate::seat_glow(&body.positions, &body.indices, xf.pos, radius)
-        } else {
-            xf.pos
-        };
+        let origin = xf.pos;
         let center = lean_shift(origin, ls, lc, shift, bob);
         for tri in part.mesh.indices.chunks(3) {
             if tri.len() < 3 {

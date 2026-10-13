@@ -11,8 +11,13 @@
 # `shade_mid_lin`). Decoding that again crushes the body to black.
 # `hitbox_fill` is how close each cast axis must sit to its body hitbox.
 # The fit scales from that hitbox. It does not keep a second size in code.
-# `tail_glow_radius` caps the tyrant tail glow. It is the tail-tip radius,
-# stays under the cannon hit radius, and is still readable at 15 m.
+# `axis_scale_limit` is the max allowed max(axis scale) / min(axis scale) on
+# the unscaled mesh. The fit checks that ratio before it stretches any vertex.
+# `tail_glow_radius` is the tyrant tail glow. The cannon authors this radius.
+# A glow radius past it fails the load. There is no silent clamp. It stays
+# under the cannon hit radius and is still readable at 15 m.
+# `min_island_coverage` is the smallest share of a UV island whose mask channel
+# matches the face that covers it. A channel mask under this fails the load.
 # `rim_strength` scales the rim on an unmasked bug texel when a model has a rim key.
 # `rim_fill` is the facing share of that rim. The fresnel takes the rest at the silhouette.
 # Overdrive lights one mask channel on the equipped gun. `overdrive_emissive_channel`
@@ -28,14 +33,17 @@
 # The review orbit is the camera from the approved side_<id>.png sheets
 # (distance is radii, vertical field of view in degrees).
 
-base_light = 0.5
 shade_mid_lin = 0.2623
 # Each fitted axis is within this fraction of the body hitbox. 0.02 rejects
 # a cast that only fills about half the box.
 hitbox_fill = 0.02
-# Tyrant tail tip. The cannon hit radius stays 0.83. This visual is not wider
-# than that zone, and it matches the tail part's radius in bugs.toml.
+# Spitter is the most stretched shipped cast, about 2.01. A thinner mesh fails.
+axis_scale_limit = 2.15
+# Tyrant tail tip. The cannon hit radius stays 0.83. The authored visual
+# radius is this number. A larger one fails the load.
 tail_glow_radius = 0.40
+# Guns and the shield. Each UV island has to agree with its faces at this rate.
+min_island_coverage = 0.98
 rim_strength = 1.0
 rim_fill = 0.30
 overdrive_emissive_channel = "accent"

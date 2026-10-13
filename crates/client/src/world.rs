@@ -42,8 +42,6 @@ pub(crate) struct BugPart {
     rest: Handle<StandardMaterial>,
     hot: Handle<StandardMaterial>,
     hot_on: bool,
-    /// Surface snap from the rest pose. Added to the posed origin; never recomputed.
-    seat: [f32; 3],
 }
 
 #[derive(Component)]
@@ -472,12 +470,7 @@ pub fn sync(
                     .xforms
                     .get(part.index)
                     .unwrap_or_else(|| panic!("bug part {} is outside the pose", part.index));
-                let pos = [
-                    xf.pos[0] + part.seat[0],
-                    xf.pos[1] + part.seat[1],
-                    xf.pos[2] + part.seat[2],
-                ];
-                local.translation = bevy::math::Vec3::new(pos[0], pos[1], pos[2]);
+                local.translation = bevy::math::Vec3::new(xf.pos[0], xf.pos[1], xf.pos[2]);
                 local.rotation = Quat::from_xyzw(xf.rot[0], xf.rot[1], xf.rot[2], xf.rot[3]);
                 local.scale = bevy::math::Vec3::new(xf.scale[0], xf.scale[1], xf.scale[2]);
                 let pod_dead = part
@@ -643,26 +636,9 @@ fn spawn_bug(
         ChildOf(root),
         PlayPiece,
     ));
-    // Glow, dead pods, and bud regrow stay on the cast. Their pose is the hitbox anchor.
-    // The shell stays the Meshy mesh. Only those feedback parts are spawned.
+    // Glow, dead pods, and bud regrow use the weak-point hit center. The glow is not
+    // pulled onto the cast. The shell stays the Meshy mesh.
     let visual = gemini_meshes::bug(name);
-    let rest_pose = pose(
-        visual,
-        AnimInput {
-            time: 0.0,
-            moving: false,
-            charging: false,
-            vulnerable: false,
-            phase: 0,
-            frenzy: false,
-            preview_glow: false,
-            regrow: 0,
-            hatch_pod: 255,
-            hatch_charge: 0.0,
-        },
-        &[],
-    );
-    let body = gemini_meshes::cast(name);
     let colors = &game.content.bug(kind).visual;
     let mut parts = Vec::new();
     for (index, part) in visual.parts.iter().enumerate() {
@@ -695,23 +671,11 @@ fn spawn_bug(
                 .unwrap_or_else(|| panic!("missing pod material {}", part.palette));
             hot = materials.add(src);
         }
-        let seat = if part.emissive {
-            let xf = &rest_pose.xforms[index];
-            let mut radius = 0.0_f32;
-            for p in &part.mesh.positions {
-                let scaled = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
-                radius = radius.max((scaled[0] * scaled[0] + scaled[1] * scaled[1] + scaled[2] * scaled[2]).sqrt());
-            }
-            let seated = gemini_meshes::seat_glow(&body.positions, &body.indices, xf.pos, radius);
-            [seated[0] - xf.pos[0], seated[1] - xf.pos[1], seated[2] - xf.pos[2]]
-        } else {
-            [0.0, 0.0, 0.0]
-        };
         let entity = commands
             .spawn((
                 Mesh3d(mesh),
                 MeshMaterial3d(rest.clone()),
-                Transform::from_xyz(part.rest_pos[0] + seat[0], part.rest_pos[1] + seat[1], part.rest_pos[2] + seat[2]),
+                Transform::from_xyz(part.rest_pos[0], part.rest_pos[1], part.rest_pos[2]),
                 Visibility::Inherited,
                 BugPart {
                     index,
@@ -721,7 +685,6 @@ fn spawn_bug(
                     rest,
                     hot,
                     hot_on: false,
-                    seat,
                 },
                 ChildOf(root),
             ))

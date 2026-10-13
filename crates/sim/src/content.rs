@@ -137,6 +137,7 @@ impl Content {
         ]);
         let mut bugs: crate::bugs::BugBook = parse("bugs.toml", src.bugs)?;
         crate::bugs::bind_weak_anchors(&mut bugs).map_err(|err| format!("bugs.toml: {err}"))?;
+        crate::bugs::require_glow_hit_centers(&bugs).map_err(|err| format!("bugs.toml: {err}"))?;
         crate::bugs::require_leg_layout(&bugs).map_err(|err| format!("bugs.toml: {err}"))?;
         let bosses = load_bosses(src.bosses).map_err(|err| format!("bosses.toml: {err}"))?;
         require_spawn_clearance(&bosses, &bugs).map_err(|err| format!("bosses.toml: {err}"))?;
@@ -159,6 +160,8 @@ impl Content {
         let (mut hero, guns, roster, heroes, warnings) = load_characters(src.hero, &mesh_ids)?;
         require_cast_roster(&models, &heroes, &bugs)?;
         let cast = load_cast_look(include_str!("../../../content/cast.toml"), &palette)?;
+        crate::bugs::require_tail_glow_radius(&bugs, cast.tail_glow_radius)
+            .map_err(|err| format!("bugs.toml: {err}"))?;
         for mesh in &heroes_visual.meshes {
             if !heroes.iter().any(|card| card.portrait.mesh == mesh.id) {
                 return Err(format!(
@@ -1361,19 +1364,29 @@ pub struct CastModel {
     pub at: [f32; 3],
     pub grip: [f32; 3],
     pub view: [f32; 3],
+    /// Stock panel UV on TEXCOORD_0. `v = 0` is the top row. Weapons only.
+    pub stock_uv: Option<[f32; 2]>,
+    /// `primary` or `secondary`. Empty when this model has no stock point.
+    pub stock_channel: String,
+    /// Rail panel UV on TEXCOORD_0. Weapons only.
+    pub rail_uv: Option<[f32; 2]>,
+    /// `primary` or `secondary`. Empty when this model has no rail point.
+    pub rail_channel: String,
 }
 
 /// Tint scalars and the side-sheet camera. Colors stay palette keys.
 #[derive(Clone, Debug)]
 pub struct CastLook {
-    /// Mid-gray a bug body is lifted to, before the base palette key.
-    pub base_light: f32,
     /// Linear divisor for a shade map. Albedo is `(shade / shade_mid_lin) * sum(weight * color)`.
     pub shade_mid_lin: f32,
     /// A fitted cast axis must land within this fraction of its body hitbox.
     pub hitbox_fill: f32,
-    /// Visual radius of the tyrant tail glow. Never wider than the cannon hit.
+    /// Max allowed max(axis scale) / min(axis scale), checked before the fit stretches.
+    pub axis_scale_limit: f32,
+    /// Authored radius of the tyrant tail glow. A larger cannon glow fails the load.
     pub tail_glow_radius: f32,
+    /// Smallest share of a UV island that must match its face's mask channel.
+    pub min_island_coverage: f32,
     pub rim_strength: f32,
     /// Facing share of the rim color on an unmasked bug texel. The fresnel takes the rest.
     pub rim_fill: f32,
@@ -1857,7 +1870,7 @@ fn load_model_rows(
             keys.push("glow");
         }
         if fit_peek == "weapon" {
-            keys.push("hero");
+            keys.extend(["hero", "stock_uv", "stock_channel", "rail_uv", "rail_channel"]);
         }
         expect_keys(map, &keys, &format!("{what} model"))?;
         let id = vis_str(map, "id", &format!("{what} model"))?.to_string();
@@ -1946,6 +1959,25 @@ fn load_model_rows(
         } else {
             String::new()
         };
+        let (stock_uv, stock_channel, rail_uv, rail_channel) = if fit == "weapon" {
+            let stock_uv = vis_vec2(map, "stock_uv", &format!("{what} {id}"))?;
+            let rail_uv = vis_vec2(map, "rail_uv", &format!("{what} {id}"))?;
+            let stock_channel = vis_str(map, "stock_channel", &format!("{what} {id}"))?.to_string();
+            let rail_channel = vis_str(map, "rail_channel", &format!("{what} {id}"))?.to_string();
+            for (name, uv) in [("stock_uv", stock_uv), ("rail_uv", rail_uv)] {
+                if uv.iter().any(|n| !n.is_finite() || !(0.0..=1.0).contains(n)) {
+                    return Err(format!("{what} {id} {name} must be finite and in 0..=1"));
+                }
+            }
+            for (name, channel) in [("stock_channel", &stock_channel), ("rail_channel", &rail_channel)] {
+                if !matches!(channel.as_str(), "primary" | "secondary") {
+                    return Err(format!("{what} {id} {name} \"{channel}\" is unknown"));
+                }
+            }
+            (Some(stock_uv), stock_channel, Some(rail_uv), rail_channel)
+        } else {
+            (None, String::new(), None, String::new())
+        };
         models.push(CastModel {
             id,
             hero,
@@ -1972,6 +2004,10 @@ fn load_model_rows(
             at: vis_vec3(map, "at", &format!("{what} model"))?,
             grip: vis_vec3(map, "grip", &format!("{what} model"))?,
             view: vis_vec3(map, "view", &format!("{what} model"))?,
+            stock_uv,
+            stock_channel,
+            rail_uv,
+            rail_channel,
         });
     }
     Ok(models)
@@ -2015,10 +2051,11 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
     expect_keys(
         table,
         &[
-            "base_light",
             "shade_mid_lin",
             "hitbox_fill",
+            "axis_scale_limit",
             "tail_glow_radius",
+            "min_island_coverage",
             "rim_strength",
             "rim_fill",
             "overdrive_emissive_channel",
@@ -2039,12 +2076,8 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
         ],
         "cast.toml",
     )?;
-    let base_light = vis_f32(table, "base_light", "cast.toml")?;
     let shade_mid_lin = vis_f32(table, "shade_mid_lin", "cast.toml")?;
     let rim_strength = vis_f32(table, "rim_strength", "cast.toml")?;
-    if !(base_light > 0.0 && base_light <= 1.0) {
-        return Err("cast.toml base_light must be > 0 and <= 1".into());
-    }
     if !(shade_mid_lin > 0.0 && shade_mid_lin <= 1.0) {
         return Err("cast.toml shade_mid_lin must be > 0 and <= 1".into());
     }
@@ -2052,9 +2085,17 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
     if !(hitbox_fill >= 0.0 && hitbox_fill < 0.5) {
         return Err("cast.toml hitbox_fill must be >= 0 and < 0.5".into());
     }
+    let axis_scale_limit = vis_f32(table, "axis_scale_limit", "cast.toml")?;
+    if !(axis_scale_limit >= 1.0 && axis_scale_limit <= 3.0) {
+        return Err("cast.toml axis_scale_limit must be >= 1 and <= 3".into());
+    }
     let tail_glow_radius = vis_f32(table, "tail_glow_radius", "cast.toml")?;
     if !(tail_glow_radius > 0.0 && tail_glow_radius < 2.0) {
         return Err("cast.toml tail_glow_radius must be > 0 and < 2".into());
+    }
+    let min_island_coverage = vis_f32(table, "min_island_coverage", "cast.toml")?;
+    if !(min_island_coverage >= 0.98 && min_island_coverage <= 1.0) {
+        return Err("cast.toml min_island_coverage must be >= 0.98 and <= 1".into());
     }
     if !(rim_strength >= 0.0 && rim_strength <= 1.0) {
         return Err("cast.toml rim_strength must be between 0 and 1".into());
@@ -2117,10 +2158,11 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
         return Err("cast.toml review camera is out of range".into());
     }
     Ok(CastLook {
-        base_light,
         shade_mid_lin,
         hitbox_fill,
+        axis_scale_limit,
         tail_glow_radius,
+        min_island_coverage,
         rim_strength,
         rim_fill,
         overdrive_emissive_channel,
@@ -2450,6 +2492,30 @@ fn vis_bool(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) 
         .get(key)
         .and_then(|v| v.as_bool())
         .ok_or_else(|| format!("{what} {key} must be a bool"))
+}
+
+fn vis_vec2(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<[f32; 2], String> {
+    let arr = table
+        .get(key)
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| format!("{what} {key} must be 2 numbers"))?;
+    if arr.len() != 2 {
+        return Err(format!("{what} {key} must be 2 numbers"));
+    }
+    let mut out = [0.0; 2];
+    for (i, slot) in arr.iter().enumerate() {
+        if let Some(n) = slot.as_float() {
+            out[i] = n as f32;
+        } else if let Some(n) = slot.as_integer() {
+            out[i] = n as f32;
+        } else {
+            return Err(format!("{what} {key} must be 2 numbers"));
+        }
+        if !out[i].is_finite() {
+            return Err(format!("{what} {key} is not finite"));
+        }
+    }
+    Ok(out)
 }
 
 fn vis_vec3(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<[f32; 3], String> {
