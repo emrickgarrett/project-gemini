@@ -1,36 +1,62 @@
 //! Crate pulls cross a proto boundary. This module does not roll and does not keep a wallet.
 //! `dev-host` swaps in the local stand-in. A real server replaces that transport only.
 
+use std::fmt;
+
 use gemini_proto::{CratePullReply, CratePullRequest, Packet, PROTOCOL_VERSION};
 
-pub(crate) fn request_bytes(banner: &str) -> Result<Vec<u8>, String> {
+/// Why a pull did not come back as a reply. Flow matches this. It does not search the text.
+#[derive(Debug)]
+pub(crate) enum PullHostError {
+    /// Filled by the dev-host feature when the save cannot be parsed.
+    #[allow(dead_code)]
+    Corrupt(String),
+    /// Filled by the dev-host feature when the save cannot be read.
+    #[allow(dead_code)]
+    Unreadable(String),
+    Unavailable(String),
+}
+
+impl fmt::Display for PullHostError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Corrupt(message) | Self::Unreadable(message) | Self::Unavailable(message) => f.write_str(message),
+        }
+    }
+}
+
+pub(crate) fn request_bytes(banner: &str) -> Result<Vec<u8>, PullHostError> {
     Packet::CratePull(CratePullRequest {
         version: PROTOCOL_VERSION,
         banner: banner.to_string(),
     })
     .encode()
-    .map_err(|err| err.to_string())
+    .map_err(|err| PullHostError::Unavailable(err.to_string()))
 }
 
 /// Encode a pull, hand the bytes to the host, and decode the reply packet.
-pub(crate) fn round_trip(banner: &str) -> Result<CratePullReply, String> {
+pub(crate) fn round_trip(banner: &str) -> Result<CratePullReply, PullHostError> {
     let bytes = request_bytes(banner)?;
     let reply = transport(&bytes)?;
-    match Packet::decode(&reply).map_err(|err| err.to_string())? {
+    match Packet::decode(&reply).map_err(|err| PullHostError::Unavailable(err.to_string()))? {
         Packet::CratePullReply(reply) => Ok(reply),
-        _ => Err("crate host returned an unexpected packet".into()),
+        _ => Err(PullHostError::Unavailable("crate host returned an unexpected packet".into())),
     }
 }
 
 #[cfg(feature = "dev-host")]
-fn transport(bytes: &[u8]) -> Result<Vec<u8>, String> {
-    gemini_server::dev_host::exchange(bytes)
+fn transport(bytes: &[u8]) -> Result<Vec<u8>, PullHostError> {
+    gemini_server::dev_host::exchange(bytes).map_err(|err| match err {
+        gemini_server::dev_host::ExchangeError::Corrupt(message) => PullHostError::Corrupt(message),
+        gemini_server::dev_host::ExchangeError::Unreadable(message) => PullHostError::Unreadable(message),
+        gemini_server::dev_host::ExchangeError::Failed(message) => PullHostError::Unavailable(message),
+    })
 }
 
 #[cfg(not(feature = "dev-host"))]
-fn transport(bytes: &[u8]) -> Result<Vec<u8>, String> {
+fn transport(bytes: &[u8]) -> Result<Vec<u8>, PullHostError> {
     let _ = bytes;
-    Err("no crate host".into())
+    Err(PullHostError::Unavailable("no crate host".into()))
 }
 
 pub(crate) fn boot() {

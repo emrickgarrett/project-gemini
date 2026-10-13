@@ -70,6 +70,11 @@ jobs:
           assert_clean(newest("target/debug/.fingerprint/gemini-client-*/test-bin-gemini-client.json"), "default-features client")
           assert_clean(newest("target/release/.fingerprint/gemini-client-*/bin-gemini-client.json"), "release client")
           PY
+          if cargo check -p gemini-client --release --features dev-host; then
+            echo "release client compiled with dev-host"
+            exit 1
+          fi
+          echo "release dev-host does not compile"
       - name: dev stand-in host
         run: cargo test -p gemini-server --features dev-host --lib -- --test-threads=8
       - name: backend does not build for wasm32

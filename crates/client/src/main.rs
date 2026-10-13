@@ -473,6 +473,18 @@ mod tests {
         assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Menu));
         assert!(app.world().get_resource::<reveal_ui::RevealPlayback>().is_none());
 
+        let shards = gemini_proto::CratePullReply {
+            version: gemini_proto::PROTOCOL_VERSION,
+            rarity: None,
+            fakeout: None,
+            rank: 0,
+            fault: Some(gemini_proto::CratePullFault::Shards),
+        };
+        let (missing, _) = flow::crate_from_reply(&content, &shards);
+        assert!(missing.failed);
+        assert_eq!(missing.reason, content.ui.copy.pull_no_shards);
+        assert_ne!(missing.reason, content.ui.copy.pull_needs_server);
+
         let reply = gemini_proto::CratePullReply {
             version: gemini_proto::PROTOCOL_VERSION,
             rarity: Some("rare".into()),

@@ -64,6 +64,8 @@ pub enum CratePullFault {
     Banner,
     /// The peer speaks this protocol and has no wallet.
     Unavailable,
+    /// The rolled rarity has no shard cost in content.
+    Shards,
 }
 
 /// The host's answer to [`CratePullRequest`]. A later server sends the same bytes.

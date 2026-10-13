@@ -64,6 +64,7 @@ pull_need = "NEED"
 pull_have = "HAVE"
 pull_credits = "CREDITS"
 pull_needs_server = "PULLS RUN ON THE SERVER"
+pull_no_shards = "NO SHARD COST"
 
 [layout]
 title_scale = 6

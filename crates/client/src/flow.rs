@@ -557,15 +557,17 @@ pub(crate) fn apply(
                 }
                 Err(err) => {
                     eprintln!("crate pull failed: {err}");
+                    let reason = match &err {
+                        crate::pull_host::PullHostError::Corrupt(_) | crate::pull_host::PullHostError::Unreadable(_) => {
+                            content.ui.copy.pull_failed.clone()
+                        }
+                        crate::pull_host::PullHostError::Unavailable(_) => content.ui.copy.pull_needs_server.clone(),
+                    };
                     commands.insert_resource(ServerCrate {
                         rarity: None,
                         fakeout: None,
                         failed: true,
-                        reason: if err.contains("corrupt") || err.contains("unreadable") {
-                            content.ui.copy.pull_failed.clone()
-                        } else {
-                            content.ui.copy.pull_needs_server.clone()
-                        },
+                        reason,
                     });
                     audio::ui_cue(&mut commands, &assets, &content, &prefs, error);
                 }
@@ -962,13 +964,25 @@ pub(crate) fn crate_from_reply(content: &Content, reply: &CratePullReply) -> (Se
             },
             None,
         ),
+        Some(CratePullFault::Shards) => (
+            ServerCrate {
+                rarity: None,
+                fakeout: None,
+                failed: true,
+                reason: copy.pull_no_shards.clone(),
+            },
+            None,
+        ),
     }
 }
 
 fn image_from_rgba(rgb: &[u8], alpha: &[u8], width: u32, height: u32) -> Image {
-    let mut rgba = Vec::with_capacity(rgb.len() / 3 * 4);
+    let pixels = (width as usize).saturating_mul(height as usize);
+    assert_eq!(rgb.len(), pixels * 3, "menu image rgb length");
+    assert_eq!(alpha.len(), pixels, "menu alpha mask length");
+    let mut rgba = Vec::with_capacity(pixels * 4);
     for (index, px) in rgb.chunks_exact(3).enumerate() {
-        let cover = alpha.get(index).copied().unwrap_or(255);
+        let cover = alpha[index];
         rgba.extend_from_slice(&[px[0], px[1], px[2], cover]);
     }
     Image::new(

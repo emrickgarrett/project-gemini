@@ -15,6 +15,22 @@ use gemini_sim::Content;
 
 const SAVE_NAME: &str = "gemini-dev-account.bin";
 
+/// A failed stand-in exchange. The client matches the variant. It does not search the text.
+#[derive(Debug)]
+pub enum ExchangeError {
+    Corrupt(String),
+    Unreadable(String),
+    Failed(String),
+}
+
+impl std::fmt::Display for ExchangeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Corrupt(message) | Self::Unreadable(message) | Self::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
 /// Save written in the process working directory. `cargo run` keeps the
 /// directory you launched from, so a run from the repo root writes
 /// `gemini-dev-account.bin` next to `Cargo.toml`.
@@ -23,58 +39,58 @@ pub fn save_path() -> PathBuf {
 }
 
 /// Delete the save. A missing file is already reset. This does not create a new account.
-pub fn reset() -> Result<PathBuf, String> {
+pub fn reset() -> Result<PathBuf, ExchangeError> {
     reset_at(&save_path())
 }
 
-pub fn reset_at(path: &Path) -> Result<PathBuf, String> {
+pub fn reset_at(path: &Path) -> Result<PathBuf, ExchangeError> {
     if path.exists() {
-        fs::remove_file(path).map_err(|err| format!("could not wipe {}: {err}", path.display()))?;
+        fs::remove_file(path).map_err(|err| ExchangeError::Failed(format!("could not wipe {}: {err}", path.display())))?;
     }
     let partial = partial_path(path);
     if partial.exists() {
-        fs::remove_file(&partial).map_err(|err| format!("could not wipe {}: {err}", partial.display()))?;
+        fs::remove_file(&partial).map_err(|err| ExchangeError::Failed(format!("could not wipe {}: {err}", partial.display())))?;
     }
     Ok(path.to_path_buf())
 }
 
 /// Missing file is fine. A present file that cannot be read is an error.
-pub fn require_readable() -> Result<(), String> {
+pub fn require_readable() -> Result<(), ExchangeError> {
     require_readable_at(&save_path())
 }
 
-pub fn require_readable_at(path: &Path) -> Result<(), String> {
+pub fn require_readable_at(path: &Path) -> Result<(), ExchangeError> {
     if !path.exists() {
         return Ok(());
     }
-    let bytes = fs::read(path).map_err(|err| format!("dev account save {} is unreadable: {err}", path.display()))?;
-    Account::from_bytes(&bytes).map(|_| ()).map_err(|err| format!("dev account save {} is corrupt: {err}", path.display()))
+    let bytes = fs::read(path).map_err(|err| unreadable(path, err))?;
+    Account::from_bytes(&bytes).map(|_| ()).map_err(|err| corrupt(path, err))
 }
 
 /// One proto round trip against the on-disk account.
-pub fn exchange(request: &[u8]) -> Result<Vec<u8>, String> {
+pub fn exchange(request: &[u8]) -> Result<Vec<u8>, ExchangeError> {
     exchange_at(&save_path(), request)
 }
 
-pub fn exchange_at(path: &Path, request: &[u8]) -> Result<Vec<u8>, String> {
-    let packet = Packet::decode(request).map_err(|err| format!("crate pull request is not a proto packet: {err}"))?;
+pub fn exchange_at(path: &Path, request: &[u8]) -> Result<Vec<u8>, ExchangeError> {
+    let packet = Packet::decode(request).map_err(|err| ExchangeError::Failed(format!("crate pull request is not a proto packet: {err}")))?;
     let content = Content::embedded();
     let mut account = load_or_create(path, &content)?;
     let reply = answer(&mut account, &content, &packet)?;
     write_account(path, &account)?;
-    reply.encode().map_err(|err| format!("could not encode the crate pull reply: {err}"))
+    reply.encode().map_err(|err| ExchangeError::Failed(format!("could not encode the crate pull reply: {err}")))
 }
 
 /// Apply one already-decoded packet. Callers on a socket use this after `Packet::decode`.
-pub fn answer(account: &mut Account, content: &Content, packet: &Packet) -> Result<Packet, String> {
+pub fn answer(account: &mut Account, content: &Content, packet: &Packet) -> Result<Packet, ExchangeError> {
     let Packet::CratePull(request) = packet else {
-        return Err("the stand-in only answers a crate pull packet".into());
+        return Err(ExchangeError::Failed("the stand-in only answers a crate pull packet".into()));
     };
     if request.version != PROTOCOL_VERSION {
-        return Err(format!(
+        return Err(ExchangeError::Failed(format!(
             "crate pull version {} does not match {PROTOCOL_VERSION}",
             request.version
-        ));
+        )));
     }
     let reply = match account.pull(content, &request.banner) {
         Ok(pull) => CratePullReply {
@@ -98,7 +114,13 @@ pub fn answer(account: &mut Account, content: &Content, packet: &Packet) -> Resu
             rank: account_rank(account),
             fault: Some(CratePullFault::Banner),
         },
-        Err(PullError::Shards) => return Err("rolled rarity has no shard cost".into()),
+        Err(PullError::Shards) => CratePullReply {
+            version: PROTOCOL_VERSION,
+            rarity: None,
+            fakeout: None,
+            rank: account_rank(account),
+            fault: Some(CratePullFault::Shards),
+        },
     };
     Ok(Packet::CratePullReply(reply))
 }
@@ -107,26 +129,34 @@ fn account_rank(account: &Account) -> u32 {
     account.rank
 }
 
-fn load_or_create(path: &Path, content: &Content) -> Result<Account, String> {
+fn load_or_create(path: &Path, content: &Content) -> Result<Account, ExchangeError> {
     if path.exists() {
-        let bytes = fs::read(path).map_err(|err| format!("dev account save {} is unreadable: {err}", path.display()))?;
-        return Account::from_bytes(&bytes).map_err(|err| format!("dev account save {} is corrupt: {err}", path.display()));
+        let bytes = fs::read(path).map_err(|err| unreadable(path, err))?;
+        return Account::from_bytes(&bytes).map_err(|err| corrupt(path, err));
     }
     let partial = partial_path(path);
     if partial.exists() {
-        let bytes = fs::read(&partial).map_err(|err| format!("dev account save {} is unreadable: {err}", partial.display()))?;
-        let account = Account::from_bytes(&bytes).map_err(|err| format!("dev account save {} is corrupt: {err}", partial.display()))?;
+        let bytes = fs::read(&partial).map_err(|err| unreadable(&partial, err))?;
+        let account = Account::from_bytes(&bytes).map_err(|err| corrupt(&partial, err))?;
         write_account(path, &account)?;
         return Ok(account);
     }
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent).map_err(|err| format!("could not create {}: {err}", parent.display()))?;
+            fs::create_dir_all(parent).map_err(|err| ExchangeError::Failed(format!("could not create {}: {err}", parent.display())))?;
         }
     }
     let account = Account::open(content);
     write_account(path, &account)?;
     Ok(account)
+}
+
+fn corrupt(path: &Path, err: impl std::fmt::Display) -> ExchangeError {
+    ExchangeError::Corrupt(format!("dev account save {} is corrupt: {err}", path.display()))
+}
+
+fn unreadable(path: &Path, err: impl std::fmt::Display) -> ExchangeError {
+    ExchangeError::Unreadable(format!("dev account save {} is unreadable: {err}", path.display()))
 }
 
 fn partial_path(path: &Path) -> PathBuf {
@@ -135,20 +165,20 @@ fn partial_path(path: &Path) -> PathBuf {
     PathBuf::from(partial)
 }
 
-fn write_account(path: &Path, account: &Account) -> Result<(), String> {
-    let bytes = account.to_bytes().map_err(|err| format!("could not encode the dev account: {err}"))?;
+fn write_account(path: &Path, account: &Account) -> Result<(), ExchangeError> {
+    let bytes = account.to_bytes().map_err(|err| ExchangeError::Failed(format!("could not encode the dev account: {err}")))?;
     let partial = partial_path(path);
     {
-        let mut file = fs::File::create(&partial).map_err(|err| format!("could not write {}: {err}", partial.display()))?;
-        file.write_all(&bytes).map_err(|err| format!("could not write {}: {err}", partial.display()))?;
+        let mut file = fs::File::create(&partial).map_err(|err| ExchangeError::Failed(format!("could not write {}: {err}", partial.display())))?;
+        file.write_all(&bytes).map_err(|err| ExchangeError::Failed(format!("could not write {}: {err}", partial.display())))?;
         file.sync_all().ok();
     }
-    let written = fs::read(&partial).map_err(|err| format!("could not read back {}: {err}", partial.display()))?;
-    Account::from_bytes(&written).map_err(|err| format!("refusing to replace {} after a bad write: {err}", path.display()))?;
+    let written = fs::read(&partial).map_err(|err| unreadable(&partial, err))?;
+    Account::from_bytes(&written).map_err(|err| corrupt(&partial, err))?;
     if path.exists() {
-        fs::remove_file(path).map_err(|err| format!("could not replace {}: {err}", path.display()))?;
+        fs::remove_file(path).map_err(|err| ExchangeError::Failed(format!("could not replace {}: {err}", path.display())))?;
     }
-    fs::rename(&partial, path).map_err(|err| format!("could not replace {}: {err}", path.display()))?;
+    fs::rename(&partial, path).map_err(|err| ExchangeError::Failed(format!("could not replace {}: {err}", path.display())))?;
     Ok(())
 }
 
@@ -204,7 +234,7 @@ mod tests {
         let before = fs::read(&path).unwrap();
         fs::write(&path, b"not-an-account").unwrap();
         let err = exchange_at(&path, &bytes).unwrap_err();
-        assert!(err.contains("corrupt"), "{err}");
+        assert!(matches!(err, ExchangeError::Corrupt(_)), "{err}");
         assert_eq!(fs::read(&path).unwrap(), b"not-an-account", "a bad save must stay in place");
         let _ = before;
         let _ = fs::remove_dir_all(&dir);
@@ -226,7 +256,7 @@ mod tests {
         let blocked = dir.join("blocked");
         fs::create_dir(&blocked).unwrap();
         let err = require_readable_at(&blocked).unwrap_err();
-        assert!(err.contains("unreadable"), "{err}");
+        assert!(matches!(err, ExchangeError::Unreadable(_)), "{err}");
         assert!(blocked.is_dir(), "an unreadable path is not replaced with a new account");
 
         reset_at(&path).unwrap();

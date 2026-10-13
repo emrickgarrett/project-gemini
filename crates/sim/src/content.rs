@@ -4790,6 +4790,7 @@ pub struct UiCopy {
     pub pull_have: String,
     pub pull_credits: String,
     pub pull_needs_server: String,
+    pub pull_no_shards: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]

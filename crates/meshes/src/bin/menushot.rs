@@ -9,7 +9,7 @@ use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use gemini_meshes::{paint_menu, raster_hero_portrait, MenuShot, PaintPrefs};
+use gemini_meshes::{paint_menu, paint_menu_masked, raster_hero_portrait, MenuShot, PaintPrefs};
 use gemini_sim::content::Content;
 
 fn main() {
@@ -56,9 +56,8 @@ fn main() {
         ("click_to_play", MenuShot::ClickToPlay),
     ];
     for (name, shot) in shots {
-        let (rgb, _) = paint_menu(&content, &shot, 1280, 720);
         let path = format!("{out}/{name}_1280x720.png");
-        write_png(&path, &rgb, 1280, 720);
+        write_shot(&content, &shot, 1280, 720, &path);
         println!("wrote {path}");
     }
     let mut unlocked = content.clone();
@@ -77,9 +76,8 @@ fn main() {
         println!("wrote {path}");
     }
     for (name, live) in [("pause_solo_1920x1080", false), ("pause_coop_1920x1080", true)] {
-        let (rgb, _) = paint_menu(&content, &MenuShot::Pause { focus: 0, hero_id: hero.clone(), live }, 1920, 1080);
         let path = format!("{out}/{name}.png");
-        write_png(&path, &rgb, 1920, 1080);
+        write_shot(&content, &MenuShot::Pause { focus: 0, hero_id: hero.clone(), live }, 1920, 1080, &path);
         println!("wrote {path}");
     }
     let raster = content.ui.portrait.raster;
@@ -94,6 +92,47 @@ fn main() {
         write_png(&path, &rgb, big, big);
         println!("wrote {path}");
     }
+}
+
+/// Co-op pause leaves the live frame clear. The still bakes the veil the client draws over it.
+fn write_shot(content: &gemini_sim::content::Content, shot: &MenuShot, width: u32, height: u32, path: &str) {
+    let rgb = match shot {
+        MenuShot::Pause { live: true, focus, hero_id } => coop_backdrop(content, *focus, hero_id, width, height),
+        _ => paint_menu(content, shot, width, height).0,
+    };
+    write_png(path, &rgb, width, height);
+}
+
+fn coop_backdrop(content: &gemini_sim::content::Content, focus: usize, hero_id: &str, width: u32, height: u32) -> Vec<u8> {
+    let solo = paint_menu_masked(
+        content,
+        &MenuShot::Pause { focus, hero_id: hero_id.to_string(), live: false },
+        width,
+        height,
+    );
+    let coop = paint_menu_masked(
+        content,
+        &MenuShot::Pause { focus, hero_id: hero_id.to_string(), live: true },
+        width,
+        height,
+    );
+    let keep = content.ui.layout.pause_keep.max(1e-3);
+    let dim = content.ui.layout.coop_pause_dim.clamp(0.0, 1.0);
+    let veil = content.palette.key(&content.ui.colors.veil);
+    let mut rgb = Vec::with_capacity(coop.rgb.len());
+    for (index, cover) in coop.alpha.iter().copied().enumerate() {
+        if cover == 0 {
+            for channel in 0..3 {
+                let stored = solo.rgb[index * 3 + channel] as f32;
+                let arena = (stored / keep).round().clamp(0.0, 255.0);
+                let mixed = arena * (1.0 - dim) + veil[channel] * 255.0 * dim;
+                rgb.push(mixed.round().clamp(0.0, 255.0) as u8);
+            }
+        } else {
+            rgb.extend_from_slice(&coop.rgb[index * 3..index * 3 + 3]);
+        }
+    }
+    rgb
 }
 
 fn write_png(path: &str, rgb: &[u8], width: u32, height: u32) {
