@@ -1,8 +1,13 @@
 # Mixer policy. These sit beside the per-file rows. Critical cues ignore the voice cap.
+# Warning rows do not. Each warning row keeps its own max_instances.
+# Loading fails when warning max_instances + crowd loops + hit_reserve exceed voice_cap.
 voice_cap = 32
 crowd_radius = 30.0
 crowd_full_count = 18
 min_distance = 0.5
+hit_reserve = 3
+# Seconds a replaced warning voice fades out. Nearest-wins stays inside one warning row.
+warning_fade = 0.030
 critical = ["spitter_charge", "player_downed", "wave_start", "brood_roar", "tyrant_roar"]
 
 # Sim event ids that name a file. Unlisted events stay silent.
@@ -73,7 +78,10 @@ category = "ui_meta"
 #                      Derived from each file's max 100 ms RMS (hp 60 Hz) toward a per-category target level
 #                      (boss roars/deaths loudest, weapons/UI clear, swarmer clicks/crowd bed quietest), clamped to [-18, +2].
 # pitch_rand_semitones  +/- random pitch per play (0 = fixed; UI and timed telegraphs stay fixed).
-# max_instances        concurrent voices of this sound; extra plays steal the oldest (all count toward the global 32-voice cap).
+# max_instances        concurrent voices of this sound. A warning row never takes another row's voice.
+#                      Inside one warning row, a closer new instance replaces the farthest
+#                      and that voice fades for warning_fade. A farther one stays silent.
+#                      Other rows: extra plays steal the oldest. All count toward voice_cap.
 # loop                 true = seamless loop, play until stopped.
 # stealable            required on every row. Loading names a row that omits it.
 # flat                 required. true = not positioned in the world.
@@ -159,7 +167,7 @@ measured_rms_db = -11.1
 [brood_pod_charge]
 volume_db = 1.1
 pitch_rand_semitones = 0
-max_instances = 3
+max_instances = 2
 loop = false
 category = "boss"
 priority = 100
@@ -193,7 +201,7 @@ measured_rms_db = -9.7
 [brood_roar]
 volume_db = 2
 pitch_rand_semitones = 0
-max_instances = 2
+max_instances = 1
 loop = false
 category = "boss_big"
 priority = 100
@@ -604,7 +612,7 @@ measured_rms_db = -8.4
 [tyrant_roar]
 volume_db = 2
 pitch_rand_semitones = 0
-max_instances = 2
+max_instances = 1
 loop = false
 category = "boss_big"
 priority = 100
@@ -627,7 +635,7 @@ measured_rms_db = -13.2
 [tyrant_tail_charge]
 volume_db = -0.5
 pitch_rand_semitones = 0
-max_instances = 3
+max_instances = 2
 loop = false
 category = "boss"
 priority = 100
@@ -1150,7 +1158,7 @@ sync_at = 3.0
 [vent_warn]
 volume_db = -3.2
 pitch_rand_semitones = 0
-max_instances = 6
+max_instances = 3
 loop = false
 category = "enemy"
 priority = 100

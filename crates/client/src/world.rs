@@ -1045,6 +1045,69 @@ fn box_at(center: [f32; 3], size: [f32; 3]) -> MeshData {
     mesh
 }
 
+#[derive(Component)]
+pub(crate) struct VentTellMesh {
+    index: u8,
+}
+
+/// One glow per vent that has a pending telegraph. The voice list is not an input.
+pub fn sync_vent_tells(
+    mut commands: Commands,
+    game: Res<Game>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    glows: Query<(Entity, &VentTellMesh)>,
+) {
+    let tells = gemini_sim::sim::vent_tells(&game.content, &game.sim.pending_vents)
+        .unwrap_or_else(|err| panic!("{err}"));
+    let mut wanted = Vec::new();
+    for tell in &tells {
+        if !wanted.contains(&tell.vent) {
+            wanted.push(tell.vent);
+        }
+    }
+    for (entity, glow) in &glows {
+        if !wanted.contains(&glow.index) {
+            commands.entity(entity).despawn();
+        }
+    }
+    let vein = game
+        .content
+        .arena_scene
+        .materials
+        .iter()
+        .find(|material| material.id == "vein")
+        .unwrap_or_else(|| panic!("arena material vein is missing"));
+    let rgb = game.content.palette.key(&vein.color);
+    let shade = shade_for_actor_emissive(true, true);
+    let size = game.content.arena_scene.vent_size;
+    let center_y = game.content.arena_scene.vent_center_y;
+    for index in wanted {
+        if glows.iter().any(|(_, glow)| glow.index == index) {
+            continue;
+        }
+        let tell = tells.iter().find(|tell| tell.vent == index).expect("vent tell");
+        let mesh = upload(&mut meshes, &box_at([0.0, 0.0, 0.0], size));
+        let handle = materials.add(StandardMaterial {
+            base_color: Color::srgb(rgb[0], rgb[1], rgb[2]),
+            emissive: LinearRgba::rgb(
+                rgb[0] * shade.emissive_scale,
+                rgb[1] * shade.emissive_scale,
+                rgb[2] * shade.emissive_scale,
+            ),
+            unlit: shade.unlit,
+            ..default()
+        });
+        commands.spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(handle),
+            Transform::from_xyz(tell.pos.x, center_y, tell.pos.z),
+            VentTellMesh { index },
+            PlayPiece,
+        ));
+    }
+}
+
 /// Charge 0 at the start of the telegraph, 1 as warn_left hits 0.
 /// A non-positive duration panics.
 fn hatch_fraction(telegraph: f32, warn_left: f32) -> f32 {
