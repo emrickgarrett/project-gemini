@@ -428,10 +428,10 @@ mod tests {
     fn anchors_follow_the_visual_table() {
         let sp = bug("spitter");
         let sac = sp.parts.iter().find(|p| p.name == "sac").expect("sac");
-        assert!(near(sac.rest_pos, [0.01385055, 0.67324573, -0.24146803], 0.02), "{:?}", sac.rest_pos);
+        assert!(near(sac.rest_pos, [0.06444810, 0.62343204, -0.29764500], 0.02), "{:?}", sac.rest_pos);
         assert!(sac.emissive);
         let gland = bug("brood_mother").parts.iter().find(|p| p.name == "gland").expect("gland");
-        assert!(near(gland.rest_pos, [0.0, 1.50, 1.20], 0.02));
+        assert!(near(gland.rest_pos, [-0.01607708, 1.45470980, 1.18440960], 0.02));
         assert!(gland.emissive);
         let core = bug("hive_tyrant").parts.iter().find(|p| p.name == "core").expect("core");
         assert!(near(core.rest_pos, [-0.00914036, 3.35820866, 0.86390787], 0.02));

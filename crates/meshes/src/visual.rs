@@ -1431,11 +1431,18 @@ fn normalize(v: [f32; 3]) -> [f32; 3] {
 }
 
 fn glow_radius(id: &str, spec: &VPart) -> Result<f32, String> {
-    if spec.visual_radius > 0.0 {
-        Ok(spec.visual_radius)
-    } else {
-        Err(format!("{id} {} glow is missing visual_radius", spec.name))
+    if spec.visual_radius <= 0.0 {
+        return Err(format!("{id} {} glow is missing visual_radius", spec.name));
     }
+    if spec.part == "cannon" {
+        let cap = gemini_sim::content::Content::embedded().cast.tail_glow_radius;
+        if !(cap > 0.0) {
+            return Err(format!("{id} tail glow cap is not positive"));
+        }
+        // The authored visual radius is the hit-zone glow. The tail tip is thinner.
+        return Ok(spec.visual_radius.min(cap));
+    }
+    Ok(spec.visual_radius)
 }
 
 fn add_glow_orb(parts: &mut Vec<Part>, id: &str, spec: &VPart) -> Result<(), String> {

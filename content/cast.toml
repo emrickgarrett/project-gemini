@@ -2,10 +2,17 @@
 # They do not keep a second copy of the numbers.
 #
 # Bug masks stay binary. Red is the accent palette key. Green is the glow key.
-# A bug texel with an empty mask is `base_light` times the base palette key.
+# An empty bug texel is the base palette key, shaded by the glb's grayscale base.
 # Heroes, guns, and the shield use a four-channel mask and an sRGB shade map.
 # In linear color, albedo = (shade / shade_mid_lin) * sum(weight * palette).
 # `shade_mid_lin` is that divisor. The painter reads it from here.
+# Hero shade PNGs are sRGB, so the painter gamma-decodes them first. A bug's
+# embedded base already stores the linear factor (its byte fraction sits on
+# `shade_mid_lin`). Decoding that again crushes the body to black.
+# `hitbox_fill` is how close each cast axis must sit to its body hitbox.
+# The fit scales from that hitbox. It does not keep a second size in code.
+# `tail_glow_radius` caps the tyrant tail glow. It is the tail-tip radius,
+# stays under the cannon hit radius, and is still readable at 15 m.
 # `rim_strength` scales the rim on an unmasked bug texel when a model has a rim key.
 # `rim_fill` is the facing share of that rim. The fresnel takes the rest at the silhouette.
 # Overdrive lights one mask channel on the equipped gun. `overdrive_emissive_channel`
@@ -23,6 +30,12 @@
 
 base_light = 0.5
 shade_mid_lin = 0.2623
+# Each fitted axis is within this fraction of the body hitbox. 0.02 rejects
+# a cast that only fills about half the box.
+hitbox_fill = 0.02
+# Tyrant tail tip. The cannon hit radius stays 0.83. This visual is not wider
+# than that zone, and it matches the tail part's radius in bugs.toml.
+tail_glow_radius = 0.40
 rim_strength = 1.0
 rim_fill = 0.30
 overdrive_emissive_channel = "accent"

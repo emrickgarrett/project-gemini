@@ -947,7 +947,7 @@ fn cast_hit_centers_stay_on_the_moved_anchors() {
     let spitter = content.bug(EnemyKind::Spitter);
     let sac = spitter.hitbox.weak().expect("spitter sac");
     assert!(
-        near(sac.offset, [0.01385055, 0.67324573, -0.24146803]),
+        near(sac.offset, [0.06444810, 0.62343204, -0.29764500]),
         "spitter sac {:?}",
         sac.offset
     );
@@ -955,7 +955,7 @@ fn cast_hit_centers_stay_on_the_moved_anchors() {
 
     let brute = content.bug(EnemyKind::Brute);
     let cracks = brute.hitbox.weak().expect("brute cracks");
-    assert!(near(cracks.offset, [0.0, 1.28, 0.15]), "brute cracks {:?}", cracks.offset);
+    assert!(near(cracks.offset, [0.05768617, 1.36893320, 0.16571500]), "brute cracks {:?}", cracks.offset);
     assert!(
         near(cracks.half_extents, [0.75, 0.50, 0.62]),
         "brute cracks half {:?}",
@@ -964,7 +964,7 @@ fn cast_hit_centers_stay_on_the_moved_anchors() {
 
     let brood = content.bug(EnemyKind::BroodMother);
     let gland = brood.hitbox.weak().expect("brood gland");
-    assert!(near(gland.offset, [0.0, 1.50, 1.20]), "brood gland {:?}", gland.offset);
+    assert!(near(gland.offset, [-0.01607708, 1.45470980, 1.18440960]), "brood gland {:?}", gland.offset);
     assert!((gland.radius - 0.50).abs() < 1.0e-4, "gland radius {}", gland.radius);
     let pod = brood.visual.parts.iter().find(|part| part.name == "pod").expect("pod");
     assert!((pod.ring_radius - 0.72).abs() < 1.0e-4, "pod ring {}", pod.ring_radius);
@@ -972,12 +972,12 @@ fn cast_hit_centers_stay_on_the_moved_anchors() {
     assert!((sink - 0.88).abs() < 1.0e-4, "pod sink {sink}");
     assert!((brood.hitbox.pod_radius().unwrap() - 0.65).abs() < 1.0e-4);
     assert!(
-        near(brood.hitbox.pods[1].offset, [0.07553730, 2.29495382, 0.61697435]),
+        near(brood.hitbox.pods[1].offset, [0.05874630, 2.24043730, 0.67323030]),
         "pod1 {:?}",
         brood.hitbox.pods[1].offset
     );
     assert!(
-        near(brood.hitbox.pods[4].offset, [-0.08838622, 2.43034029, -0.95747310]),
+        near(brood.hitbox.pods[4].offset, [-0.17627156, 2.53861070, -1.13850710]),
         "pod4 {:?}",
         brood.hitbox.pods[4].offset
     );
@@ -1060,8 +1060,8 @@ fn missing_weakpoint_anchor_fails_content_load() {
     assert!(err.contains("pod radius"), "{err}");
 
     let duplicated = bugs.replacen(
-        "seats=[{index=1, offset=[0.07553730, 2.29495382, 0.61697435]}, {index=4, offset=[-0.08838622, 2.43034029, -0.95747310]}]",
-        "seats=[{index=1, offset=[0.07553730, 2.29495382, 0.61697435]}, {index=1, offset=[-0.08838622, 2.43034029, -0.95747310]}]",
+        "seats=[{index=1, offset=[0.05874630, 2.24043730, 0.67323030]}, {index=3, offset=[-0.84399520, 2.38568780, -0.40689278]}, {index=4, offset=[-0.17627156, 2.53861070, -1.13850710]}, {index=5, offset=[0.79067680, 2.40897870, -0.64160660]}]",
+        "seats=[{index=1, offset=[0.05874630, 2.24043730, 0.67323030]}, {index=1, offset=[-0.17627156, 2.53861070, -1.13850710]}, {index=3, offset=[-0.84399520, 2.38568780, -0.40689278]}, {index=4, offset=[-0.17627156, 2.53861070, -1.13850710]}, {index=5, offset=[0.79067680, 2.40897870, -0.64160660]}]",
         1,
     );
     assert_ne!(duplicated, bugs, "the duplicate seat must change the table");

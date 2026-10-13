@@ -74,7 +74,7 @@ parts = [
   { name="thorax", part="thorax", shape="capsule", size=[0.25,0.9], offset=[0,0.75,0.1], tilt_deg=-35, color="spitter_carapace" },
   { name="head",   part="head",   shape="cone",    size=[0.24,0.46], offset=[0,0.48,0.72], color="spitter_carapace", point="forward" },
   { name="eyes",   part="eyes",   shape="sphere",  size=[0.05,0.05,0.05], offset=[0.09,0.56,0.82], color="spitter_glow", emissive=true, mirror=true, visual_radius=0.025 },
-  { name="sac",    part="gem",    shape="sphere",  size=[0.32,0.32,0.32], offset=[0.01385055, 0.67324573, -0.24146803], color="spitter_glow", emissive=true, visual_radius=0.30 },
+  { name="sac",    part="gem",    shape="sphere",  size=[0.32,0.32,0.32], offset=[0.06444810, 0.62343204, -0.29764500], color="spitter_glow", emissive=true, visual_radius=0.30 },
   { name="leg",    part="leg",    shape="capsule", size=[0.09,0.78], count=4, ring_radius=0.45, color="spitter_carapace", layout="paired", hip=0.46, femur=0.46, femur_lod=0.92, tibia=0.40, foot=0.16 },
 ]
 anim = { bob=[0.04, 3.0], leg_swing=25, gait="alternate", sac_charge_scale=1.25, sac_charge_glow=3.0 }
@@ -127,7 +127,7 @@ height = 1.8
 lod_distance = 34.0
 parts = [
   { name="shell",    part="shell",    shape="sphere",  size=[1.55,1.7,1.55], offset=[0,1.12,0], color="brute_amber", rear_open=false },
-  { name="cracks",   part="decal",    shape="decal",   on="shell", color="brute_cracks", emissive=true, patch=[0.28, 0.1, 0.22], patch_floor=0.05, offset=[0, 1.28, 0.15], visual_radius=0.40 },
+  { name="cracks",   part="decal",    shape="decal",   on="shell", color="brute_cracks", emissive=true, patch=[0.28, 0.1, 0.22], patch_floor=0.05, offset=[0.05768617, 1.36893320, 0.16571500], visual_radius=0.40 },
   { name="horn",     part="horn",     shape="cone",    size=[0.16,0.48], offset=[0,1.7,0.62], tilt_deg=28, color="brute_amber" },
   { name="forelimb", part="forelimb", shape="capsule", size=[0.48,0.72], offset=[0.95,1.15,0.95], color="brute_amber", mirror=true, aim=[0.42, -0.08, 1.2], seg=0.5, rad=0.92, taper=0.74, blade=0.48, blade_euler=[0.85, 0.2, 0.35], blade_r=[1.05, 0.4], swing_hz=2.2, swing_amp=0.18 },
   { name="leg",      part="leg",      shape="capsule", size=[0.20,0.86], count=4, ring_radius=0.75, color="brute_amber", layout="paired", hip=0.46, femur=0.46, femur_lod=0.92, tibia=0.40, foot=0.16 },
@@ -192,9 +192,9 @@ grown_color = "bud_glow"
 parts = [
   { name="head",  part="head",  shape="sphere", size=[1.0,0.8,1.0], offset=[0,1.3,1.6], color="brute_amber", fit=0.36 },
   { name="crown", part="crown", shape="cone",   size=[0.15,0.5], count=5, on="head", color="brute_amber", spread=[2.6, 0.25, 1.6], crown_pitch=0.85 },
-  { name="gland", part="gem",   shape="sphere", size=[0.36,0.36,0.36], offset=[0,1.50,1.20], color="spitter_glow", emissive=true, visual_radius=0.40 },
+  { name="gland", part="gem",   shape="sphere", size=[0.36,0.36,0.36], offset=[-0.01607708, 1.45470980, 1.18440960], color="spitter_glow", emissive=true, visual_radius=0.40 },
   { name="sac",   part="gem",   shape="sphere", size=[2.6,2.0,2.6], offset=[0,1.75,-0.1], color="brood_sac" },
-  { name="pod",   part="pod",   shape="sphere", size=[0.44,0.44,0.44], count=6, on="sac", ring_radius=0.72, color="swarmer_glow", emissive=true, ring_phase=0.0, sink=0.88, ny_floor=0.2, ring_turn=0.4, visual_radius=0.52, seats=[{index=1, offset=[0.07553730, 2.29495382, 0.61697435]}, {index=4, offset=[-0.08838622, 2.43034029, -0.95747310]}] },
+  { name="pod",   part="pod",   shape="sphere", size=[0.44,0.44,0.44], count=6, on="sac", ring_radius=0.72, color="swarmer_glow", emissive=true, ring_phase=0.0, sink=0.88, ny_floor=0.2, ring_turn=0.4, visual_radius=0.52, seats=[{index=1, offset=[0.05874630, 2.24043730, 0.67323030]}, {index=3, offset=[-0.84399520, 2.38568780, -0.40689278]}, {index=4, offset=[-0.17627156, 2.53861070, -1.13850710]}, {index=5, offset=[0.79067680, 2.40897870, -0.64160660]}] },
   { name="bud",   part="bud",   shape="sphere", size=[0.52,0.46,0.52], count=6, on="sac", ring_radius=0.8, color="brood_sac", emissive=false, grows_into_pod_on="enrage", ring_phase=0.5, sink=1.32, ny_floor=0.55, ring_turn=0.4, grown_scale=2.4, grown_glow=2.2 },
   { name="leg",   part="leg",   shape="capsule", size=[0.30,1.7], count=6, ring_radius=2.85, color="brute_amber", layout="radial", hip_scale=0.95, plant_scale=1.55, ring_phase=0.35, hip=0.42, femur=0.46, femur_lod=0.92, tibia=0.40, foot=0.16 },
 ]

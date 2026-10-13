@@ -1368,8 +1368,12 @@ pub struct CastModel {
 pub struct CastLook {
     /// Mid-gray a bug body is lifted to, before the base palette key.
     pub base_light: f32,
-    /// Linear divisor for an sRGB shade map. Albedo is `(shade / shade_mid_lin) * sum(weight * color)`.
+    /// Linear divisor for a shade map. Albedo is `(shade / shade_mid_lin) * sum(weight * color)`.
     pub shade_mid_lin: f32,
+    /// A fitted cast axis must land within this fraction of its body hitbox.
+    pub hitbox_fill: f32,
+    /// Visual radius of the tyrant tail glow. Never wider than the cannon hit.
+    pub tail_glow_radius: f32,
     pub rim_strength: f32,
     /// Facing share of the rim color on an unmasked bug texel. The fresnel takes the rest.
     pub rim_fill: f32,
@@ -2013,6 +2017,8 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
         &[
             "base_light",
             "shade_mid_lin",
+            "hitbox_fill",
+            "tail_glow_radius",
             "rim_strength",
             "rim_fill",
             "overdrive_emissive_channel",
@@ -2041,6 +2047,14 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
     }
     if !(shade_mid_lin > 0.0 && shade_mid_lin <= 1.0) {
         return Err("cast.toml shade_mid_lin must be > 0 and <= 1".into());
+    }
+    let hitbox_fill = vis_f32(table, "hitbox_fill", "cast.toml")?;
+    if !(hitbox_fill >= 0.0 && hitbox_fill < 0.5) {
+        return Err("cast.toml hitbox_fill must be >= 0 and < 0.5".into());
+    }
+    let tail_glow_radius = vis_f32(table, "tail_glow_radius", "cast.toml")?;
+    if !(tail_glow_radius > 0.0 && tail_glow_radius < 2.0) {
+        return Err("cast.toml tail_glow_radius must be > 0 and < 2".into());
     }
     if !(rim_strength >= 0.0 && rim_strength <= 1.0) {
         return Err("cast.toml rim_strength must be between 0 and 1".into());
@@ -2105,6 +2119,8 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
     Ok(CastLook {
         base_light,
         shade_mid_lin,
+        hitbox_fill,
+        tail_glow_radius,
         rim_strength,
         rim_fill,
         overdrive_emissive_channel,
