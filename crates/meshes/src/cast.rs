@@ -215,6 +215,7 @@ pub fn check_budget(id: &str, tris: usize, file_len: usize, tri_budget: u32, byt
 fn fit_model(bytes: &[u8], spec: &CastModel, content: &Content) -> Result<CastMesh, String> {
     check_budget(&spec.id, 0, bytes.len(), spec.triangles, spec.bytes)?;
     let mut decoded = decode_glb(bytes, &spec.id)?;
+    drop_needles(&mut decoded);
     check_budget(&spec.id, decoded.tris, bytes.len(), spec.triangles, spec.bytes)?;
     match spec.fit.as_str() {
         "hitbox" => fit_hitbox(&mut decoded, spec, content)?,
@@ -270,6 +271,42 @@ struct RawMesh {
     base: Tex,
     mask: Tex,
     tris: usize,
+}
+
+/// A needle is a triangle whose longest edge is a large fraction of the model
+/// and whose area is almost zero. Kip's left hip had a fan of these, and they
+/// draw as stray straps. Real panels are not this thin.
+fn drop_needles(mesh: &mut RawMesh) {
+    if mesh.positions.is_empty() || mesh.indices.is_empty() {
+        return;
+    }
+    let (mn, mx) = bounds(&mesh.positions);
+    let extent = (mx[0] - mn[0]).max(mx[1] - mn[1]).max(mx[2] - mn[2]).max(1.0e-6);
+    let mut keep = Vec::with_capacity(mesh.indices.len());
+    for tri in mesh.indices.chunks(3) {
+        if tri.len() < 3 {
+            continue;
+        }
+        let a = mesh.positions[tri[0] as usize];
+        let b = mesh.positions[tri[1] as usize];
+        let c = mesh.positions[tri[2] as usize];
+        let ab = sub(b, a);
+        let ac = sub(c, a);
+        let cross = [
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0],
+        ];
+        let area = 0.5 * (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
+        let longest = dist(a, b).max(dist(b, c)).max(dist(c, a));
+        let ratio = area / (longest * longest).max(1.0e-12);
+        if longest > 0.12 * extent && ratio < 0.02 {
+            continue;
+        }
+        keep.extend_from_slice(tri);
+    }
+    mesh.indices = keep;
+    mesh.tris = mesh.indices.len() / 3;
 }
 
 fn fit_hitbox(mesh: &mut RawMesh, spec: &CastModel, content: &Content) -> Result<(), String> {
@@ -467,6 +504,99 @@ fn dist(a: [f32; 3], b: [f32; 3]) -> f32 {
     (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
 }
 
+fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+/// Closest point on the mesh, and the distance to it.
+pub fn closest_on_mesh(positions: &[[f32; 3]], indices: &[u32], point: [f32; 3]) -> ([f32; 3], f32) {
+    let mut best = [0.0; 3];
+    let mut best_d = f32::MAX;
+    for tri in indices.chunks(3) {
+        if tri.len() < 3 {
+            continue;
+        }
+        let q = closest_on_triangle(
+            point,
+            positions[tri[0] as usize],
+            positions[tri[1] as usize],
+            positions[tri[2] as usize],
+        );
+        let d = dist(point, q);
+        if d < best_d {
+            best = q;
+            best_d = d;
+        }
+    }
+    (best, best_d)
+}
+
+fn closest_on_triangle(p: [f32; 3], a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
+    let ab = sub(b, a);
+    let ac = sub(c, a);
+    let ap = sub(p, a);
+    let d1 = dot3(ab, ap);
+    let d2 = dot3(ac, ap);
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return a;
+    }
+    let bp = sub(p, b);
+    let d3 = dot3(ab, bp);
+    let d4 = dot3(ac, bp);
+    if d3 >= 0.0 && d4 <= d3 {
+        return b;
+    }
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let v = d1 / (d1 - d3);
+        return [a[0] + ab[0] * v, a[1] + ab[1] * v, a[2] + ab[2] * v];
+    }
+    let cp = sub(p, c);
+    let d5 = dot3(ab, cp);
+    let d6 = dot3(ac, cp);
+    if d6 >= 0.0 && d5 <= d6 {
+        return c;
+    }
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        let w = d2 / (d2 - d6);
+        return [a[0] + ac[0] * w, a[1] + ac[1] * w, a[2] + ac[2] * w];
+    }
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        let bc = sub(c, b);
+        return [b[0] + bc[0] * w, b[1] + bc[1] * w, b[2] + bc[2] * w];
+    }
+    let denom = 1.0 / (va + vb + vc);
+    let v = vb * denom;
+    let w = vc * denom;
+    [
+        a[0] + ab[0] * v + ac[0] * w,
+        a[1] + ab[1] * v + ac[1] * w,
+        a[2] + ab[2] * v + ac[2] * w,
+    ]
+}
+
+/// Pull a glow center onto the cast when it floats clear of the surface.
+/// A center already within `radius` stays put, so a snapped hit does not move.
+/// The result is tangent: the gap equals `radius`.
+pub fn seat_glow(positions: &[[f32; 3]], indices: &[u32], center: [f32; 3], radius: f32) -> [f32; 3] {
+    if radius <= 0.0 || positions.is_empty() || indices.is_empty() {
+        return center;
+    }
+    let (closest, gap) = closest_on_mesh(positions, indices, center);
+    if gap <= radius || gap < 1.0e-5 {
+        return center;
+    }
+    let t = radius / gap;
+    [
+        closest[0] + (center[0] - closest[0]) * t,
+        closest[1] + (center[1] - closest[1]) * t,
+        closest[2] + (center[2] - closest[2]) * t,
+    ]
+}
+
 fn decode_glb(bytes: &[u8], id: &str) -> Result<RawMesh, String> {
     if bytes.len() < 20 || &bytes[0..4] != b"glTF" {
         return Err(format!("{id} is not a glb"));
@@ -631,10 +761,22 @@ pub fn bake_textures(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> (u3
                     write_rgb(&mut emit, i, glow);
                 }
             } else {
-                // The client texture stays a 1:1 copy. Bug stills flip in the software raster.
+                // Same top-left read as the software still. The client image is a 1:1 copy.
                 let base = sample(&mesh.base, [u, v]);
                 let mask = sample(&mesh.mask, [u, v]);
-                let color = tint_texel(base, mask, job.base_c, job.accent, job.glow, job.rim, 1.0, fresnel, job.base_light, job.rim_strength);
+                let color = tint_texel(
+                    base,
+                    mask,
+                    job.base_c,
+                    job.accent,
+                    job.glow,
+                    job.rim,
+                    1.0,
+                    fresnel,
+                    job.base_light,
+                    job.rim_strength,
+                    job.rim_fill,
+                );
                 write_rgb(&mut albedo, i, color);
                 if mask[1] > 0.0 {
                     write_rgb(&mut emit, i, [job.glow[0], job.glow[1], job.glow[2]]);
@@ -647,13 +789,8 @@ pub fn bake_textures(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> (u3
 
 /// White where the named mask channel has weight. The client multiplies this by the HDR gain.
 pub fn bake_overdrive_emissive(mesh: &CastMesh, channel: &str) -> (u32, u32, Vec<u8>) {
-    let index = match channel {
-        "primary" => 0,
-        "secondary" => 1,
-        "accent" => 2,
-        "fourth" => 3,
-        other => panic!("overdrive channel \"{other}\" is unknown"),
-    };
+    let index = gemini_sim::content::channel_index(channel)
+        .unwrap_or_else(|| panic!("overdrive channel \"{channel}\" is unknown"));
     let (w, h) = (mesh.mask.w.max(1), mesh.mask.h.max(1));
     let mut emit = vec![0u8; (w * h * 4) as usize];
     for y in 0..h {
@@ -690,12 +827,14 @@ struct PaintTint {
     shade_mid_lin: f32,
     base_light: f32,
     rim_strength: f32,
+    rim_fill: f32,
     overdrive_channel: Option<usize>,
     overdrive_toward: [f32; 3],
+    overdrive_gain: [f32; 3],
 }
 
 fn paint_tint(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> PaintTint {
-    let (base_light, rim_strength, shade_mid_lin) = tint_look();
+    let (base_light, rim_strength, shade_mid_lin, rim_fill) = tint_look();
     let rgb = |key: &str| -> [f32; 3] {
         if key.is_empty() {
             [0.0, 0.0, 0.0]
@@ -738,8 +877,10 @@ fn paint_tint(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> PaintTint 
         shade_mid_lin,
         base_light,
         rim_strength,
+        rim_fill,
         overdrive_channel: None,
         overdrive_toward: [0.0, 0.0, 0.0],
+        overdrive_gain: Content::embedded().cast.overdrive_emissive_gain,
     }
 }
 
@@ -822,6 +963,7 @@ pub fn tint_texel(
     fresnel: f32,
     base_light: f32,
     rim_strength: f32,
+    rim_fill: f32,
 ) -> [f32; 3] {
     let accent_w = mask[0].clamp(0.0, 1.0);
     let glow_w = mask[1].clamp(0.0, 1.0);
@@ -832,7 +974,7 @@ pub fn tint_texel(
         base_light * base_c[2] * shade * body_w + accent[2] * accent_w + glow[2] * glow_w,
     ];
     if rim[3] > 0.0 || rim[0] + rim[1] + rim[2] > 0.0 {
-        let k = fresnel * rim_strength * body_w;
+        let k = (rim_fill + (1.0 - rim_fill) * fresnel) * rim_strength * body_w;
         color[0] += rim[0] * k;
         color[1] += rim[1] * k;
         color[2] += rim[2] * k;
@@ -841,29 +983,19 @@ pub fn tint_texel(
 }
 
 fn sample(tex: &Tex, uv: [f32; 2]) -> [f32; 3] {
-    sample_origin(tex, uv, true)
-}
-
-fn sample_origin(tex: &Tex, uv: [f32; 2], top_left: bool) -> [f32; 3] {
-    let px = sample4_origin(tex, uv, top_left);
+    let px = sample4(tex, uv);
     [px[0], px[1], px[2]]
 }
 
+/// One mask read for every cast. `v = 0` is the top row, matching glTF and the PNGs.
 fn sample4(tex: &Tex, uv: [f32; 2]) -> [f32; 4] {
-    sample4_origin(tex, uv, true)
-}
-
-/// `top_left` matches glTF and the hero masks. Bug masks were authored for the
-/// previous bottom-left read, which is what their approved stills show.
-fn sample4_origin(tex: &Tex, uv: [f32; 2], top_left: bool) -> [f32; 4] {
     if tex.w == 0 || tex.h == 0 {
         return [0.5, 0.5, 0.5, 1.0];
     }
     let u = uv[0] - uv[0].floor();
     let v = uv[1] - uv[1].floor();
     let x = ((u * (tex.w as f32 - 1.0)).round() as u32).min(tex.w - 1);
-    let row = if top_left { v } else { 1.0 - v };
-    let y = ((row * (tex.h as f32 - 1.0)).round() as u32).min(tex.h - 1);
+    let y = ((v * (tex.h as f32 - 1.0)).round() as u32).min(tex.h - 1);
     let i = ((y * tex.w + x) * 4) as usize;
     [
         tex.rgba[i] as f32 / 255.0,
@@ -900,11 +1032,19 @@ pub fn paint_approved_gun(
 ) {
     let mut job = paint_tint(mesh, palette);
     if overdrive {
-        let look = &Content::embedded().cast;
-        let hero = mesh.id.trim_end_matches("_gun");
+        let content = Content::embedded();
+        let look = &content.cast;
+        let hero = content
+            .models
+            .iter()
+            .find(|model| model.id == mesh.id)
+            .map(|model| model.hero.as_str())
+            .filter(|hero| !hero.is_empty())
+            .unwrap_or_else(|| panic!("{} has no hero id", mesh.id));
         let toward = palette(&format!("hero_{hero}"));
         job.overdrive_channel = Some(look.overdrive_channel_index());
         job.overdrive_toward = [toward[0], toward[1], toward[2]];
+        job.overdrive_gain = look.overdrive_emissive_gain;
     }
     let xform = |p: [f32; 3]| place_point(p, &place);
     let rotate_n = |n: [f32; 3]| place_normal(n, &place);
@@ -966,11 +1106,11 @@ fn paint_tris(
     }
 }
 
-fn tint_look() -> (f32, f32, f32) {
-    static CELL: OnceLock<(f32, f32, f32)> = OnceLock::new();
+fn tint_look() -> (f32, f32, f32, f32) {
+    static CELL: OnceLock<(f32, f32, f32, f32)> = OnceLock::new();
     *CELL.get_or_init(|| {
         let look = &Content::embedded().cast;
-        (look.base_light, look.rim_strength, look.shade_mid_lin)
+        (look.base_light, look.rim_strength, look.shade_mid_lin, look.rim_fill)
     })
 }
 
@@ -1018,8 +1158,7 @@ fn fill_textured(
                 uvs[0][0] * w0 + uvs[1][0] * w1 + uvs[2][0] * w2,
                 uvs[0][1] * w0 + uvs[1][1] * w1 + uvs[2][1] * w2,
             ];
-            let top_left = job.channeled;
-            let mask = sample_origin(&mesh.mask, uv, top_left);
+            let mask = sample(&mesh.mask, uv);
             if let Some(tags) = tags.as_deref_mut() {
                 tags[idx] = if mask[1] > 0.0 { 2 } else if mask[0] > 0.0 { 1 } else { 0 };
             }
@@ -1045,18 +1184,18 @@ fn fill_textured(
                 let fresnel = (1.0 - facing).powf(2.0);
                 let texel = if job.channeled {
                     // The shade map is the lighting. Emissive stays in the client texture.
-                    let shade_srgb = sample_origin(&mesh.shade, uv, true)[0];
-                    let weights = sample4_origin(&mesh.mask, uv, true);
+                    let shade_srgb = sample(&mesh.shade, uv)[0];
+                    let weights = sample4(&mesh.mask, uv);
                     let albedo = tint_channels(shade_srgb, weights, job.channels, job.emissive, job.shade_mid_lin).0;
                     if let Some(channel) = job.overdrive_channel {
-                        brighten_channel(albedo, weights, channel, job.overdrive_toward)
+                        brighten_channel(albedo, weights, channel, job.overdrive_toward, job.overdrive_gain)
                     } else {
                         albedo
                     }
                 } else {
                     tint_texel(
-                        sample_origin(&mesh.base, uv, false),
-                        sample_origin(&mesh.mask, uv, false),
+                        sample(&mesh.base, uv),
+                        sample(&mesh.mask, uv),
                         job.base_c,
                         job.accent,
                         job.glow,
@@ -1065,6 +1204,7 @@ fn fill_textured(
                         fresnel,
                         job.base_light,
                         job.rim_strength,
+                        job.rim_fill,
                     )
                 };
                 [
@@ -1096,20 +1236,18 @@ fn edge(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> f32 {
     (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])
 }
 
-/// Pull the named channel toward `toward`, then lift it. Other channels stay put.
-fn brighten_channel(albedo: [f32; 3], weights: [f32; 4], channel: usize, toward: [f32; 3]) -> [f32; 3] {
+/// Replace the named channel with `toward * gain`, the same product the client
+/// puts on the emissive color. The still has no bloom, so the product clamps.
+fn brighten_channel(albedo: [f32; 3], weights: [f32; 4], channel: usize, toward: [f32; 3], gain: [f32; 3]) -> [f32; 3] {
     let w = weights[channel].clamp(0.0, 1.0);
     if w <= 0.0 {
         return albedo;
     }
-    let mut hot = [
-        albedo[0] + (toward[0] - albedo[0]) * 0.75,
-        albedo[1] + (toward[1] - albedo[1]) * 0.75,
-        albedo[2] + (toward[2] - albedo[2]) * 0.75,
+    let hot = [
+        (toward[0] * gain[0]).min(1.0),
+        (toward[1] * gain[1]).min(1.0),
+        (toward[2] * gain[2]).min(1.0),
     ];
-    hot[0] = (hot[0] * 1.35).min(1.0);
-    hot[1] = (hot[1] * 1.25).min(1.0);
-    hot[2] = (hot[2] * 1.1).min(1.0);
     [
         albedo[0] + (hot[0] - albedo[0]) * w,
         albedo[1] + (hot[1] - albedo[1]) * w,
@@ -1650,73 +1788,33 @@ mod tests {
         best
     }
 
-    fn closest_on_mesh(positions: &[[f32; 3]], indices: &[u32], point: [f32; 3]) -> ([f32; 3], f32) {
-        let mut best = [0.0; 3];
-        let mut best_d = f32::MAX;
-        for tri in indices.chunks(3) {
-            if tri.len() < 3 {
-                continue;
-            }
-            let q = closest_on_triangle(
-                point,
-                positions[tri[0] as usize],
-                positions[tri[1] as usize],
-                positions[tri[2] as usize],
-            );
-            let d = dist(point, q);
-            if d < best_d {
-                best = q;
-                best_d = d;
-            }
+    /// Independent of `sample4`. `flip_v` is the bottom-left row this reader must not use.
+    fn mask_row(tex: &Tex, uv: [f32; 2], flip_v: bool) -> [u8; 4] {
+        let u = uv[0] - uv[0].floor();
+        let mut v = uv[1] - uv[1].floor();
+        if flip_v {
+            v = 1.0 - v;
         }
-        (best, best_d)
+        let x = ((u * (tex.w as f32 - 1.0)).round() as u32).min(tex.w - 1);
+        let y = ((v * (tex.h as f32 - 1.0)).round() as u32).min(tex.h - 1);
+        let i = ((y * tex.w + x) * 4) as usize;
+        [tex.rgba[i], tex.rgba[i + 1], tex.rgba[i + 2], tex.rgba[i + 3]]
     }
 
-    fn closest_on_triangle(p: [f32; 3], a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
-        let ab = sub(b, a);
-        let ac = sub(c, a);
-        let ap = sub(p, a);
-        let d1 = dot3(ab, ap);
-        let d2 = dot3(ac, ap);
-        if d1 <= 0.0 && d2 <= 0.0 {
-            return a;
+    fn strict_channel(px: &[u8], floor: u8) -> Option<usize> {
+        let mut best = 0u8;
+        let mut index = 0usize;
+        let mut ties = 0u8;
+        for (i, channel) in px.iter().take(4).enumerate() {
+            if *channel > best {
+                best = *channel;
+                index = i;
+                ties = 1;
+            } else if *channel == best {
+                ties += 1;
+            }
         }
-        let bp = sub(p, b);
-        let d3 = dot3(ab, bp);
-        let d4 = dot3(ac, bp);
-        if d3 >= 0.0 && d4 <= d3 {
-            return b;
-        }
-        let vc = d1 * d4 - d3 * d2;
-        if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
-            let v = d1 / (d1 - d3);
-            return [a[0] + ab[0] * v, a[1] + ab[1] * v, a[2] + ab[2] * v];
-        }
-        let cp = sub(p, c);
-        let d5 = dot3(ab, cp);
-        let d6 = dot3(ac, cp);
-        if d6 >= 0.0 && d5 <= d6 {
-            return c;
-        }
-        let vb = d5 * d2 - d1 * d6;
-        if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
-            let w = d2 / (d2 - d6);
-            return [a[0] + ac[0] * w, a[1] + ac[1] * w, a[2] + ac[2] * w];
-        }
-        let va = d3 * d6 - d5 * d4;
-        if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
-            let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-            let bc = sub(c, b);
-            return [b[0] + bc[0] * w, b[1] + bc[1] * w, b[2] + bc[2] * w];
-        }
-        let denom = 1.0 / (va + vb + vc);
-        let v = vb * denom;
-        let w = vc * denom;
-        [a[0] + ab[0] * v + ac[0] * w, a[1] + ab[1] * v + ac[1] * w, a[2] + ab[2] * v + ac[2] * w]
-    }
-
-    fn dot3(a: [f32; 3], b: [f32; 3]) -> f32 {
-        a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+        if best >= floor && ties == 1 { Some(index) } else { None }
     }
 
     fn content_visual_radius(id: &str, name: &str) -> f32 {
@@ -1772,6 +1870,7 @@ mod tests {
         assert!((look.shade_mid_lin - shade_mid).abs() < 1.0e-6);
         assert!(!text.contains("base_gray"), "base_gray is not a cast key");
         assert!((look.rim_strength - 1.0).abs() < 1.0e-6);
+        assert!((look.rim_fill - 0.30).abs() < 1.0e-6, "rim_fill comes from cast.toml");
         assert_eq!(look.overdrive_emissive_channel, "accent");
         assert!(!text.contains("view_gun_"), "the view-gun grade is not a cast key");
         assert!((look.glow_falloff - 2.0).abs() < 1.0e-6);
@@ -1785,65 +1884,149 @@ mod tests {
         let glow = [0.0, 1.0, 0.0, 1.0];
         let rim = [1.0, 1.0, 1.0, 1.0];
         let base_c = [0.2, 0.4, 0.6, 1.0];
-        let painted = tint_texel(base, [1.0, 0.0, 0.0], base_c, accent, glow, rim, 1.0, 0.0, look.base_light, look.rim_strength);
+        let fill = look.rim_fill;
+        let painted = tint_texel(base, [1.0, 0.0, 0.0], base_c, accent, glow, rim, 1.0, 0.0, look.base_light, look.rim_strength, fill);
         assert_eq!(painted, [1.0, 0.0, 0.0]);
-        let acid = tint_texel(base, [0.0, 1.0, 0.0], base_c, accent, glow, rim, 1.0, 0.0, look.base_light, look.rim_strength);
+        let acid = tint_texel(base, [0.0, 1.0, 0.0], base_c, accent, glow, rim, 1.0, 0.0, look.base_light, look.rim_strength, fill);
         assert_eq!(acid, [0.0, 1.0, 0.0]);
-        let body = tint_texel(base, [0.0, 0.0, 0.0], base_c, accent, glow, rim, 1.0, 0.0, look.base_light, look.rim_strength);
+        let bare = [0.0, 0.0, 0.0, 0.0];
+        let body = tint_texel(base, [0.0, 0.0, 0.0], base_c, accent, glow, bare, 1.0, 0.0, look.base_light, look.rim_strength, fill);
         assert!((body[0] - look.base_light * base_c[0]).abs() < 1.0e-4, "mid-gray lift {body:?}");
-        let camo = tint_texel([0.92, 0.14, 0.04], [0.0, 0.0, 0.0], base_c, accent, glow, rim, 1.0, 0.0, look.base_light, look.rim_strength);
+        let camo = tint_texel([0.92, 0.14, 0.04], [0.0, 0.0, 0.0], base_c, accent, glow, bare, 1.0, 0.0, look.base_light, look.rim_strength, fill);
         assert!(
             (camo[0] - body[0]).abs() < 1.0e-4 && (camo[1] - body[1]).abs() < 1.0e-4 && (camo[2] - body[2]).abs() < 1.0e-4,
             "albedo is not a tint color {camo:?}"
         );
-        let edged = tint_texel(base, [0.0, 0.0, 0.0], base_c, accent, glow, rim, 1.0, 1.0, look.base_light, look.rim_strength);
+        let facing = tint_texel(base, [0.0, 0.0, 0.0], base_c, accent, glow, rim, 1.0, 0.0, look.base_light, look.rim_strength, fill);
+        assert!(
+            (facing[0] - (body[0] + look.rim_strength * fill)).abs() < 1.0e-4,
+            "facing rim is rim_fill {facing:?}"
+        );
+        let edged = tint_texel(base, [0.0, 0.0, 0.0], base_c, accent, glow, rim, 1.0, 1.0, look.base_light, look.rim_strength, fill);
         assert!((edged[0] - (body[0] + look.rim_strength)).abs() < 1.0e-4, "rim {edged:?}");
     }
 
     #[test]
-    fn kip_panel_uvs_read_the_mask_from_the_top_left() {
+    fn every_cast_mask_is_read_from_the_top_left() {
         let content = Content::embedded();
-        let mesh = cast("kip_body");
-        let spec = content.models.iter().find(|model| model.id == "kip_body").unwrap();
-        assert_eq!(spec.file, "models/kip_body.glb");
-        // Shoulder, chest, and thigh UVs from the Meshy kip body. fit_height
-        // moves the positions; the UVs stay on the same vertices.
-        let panels = [
-            ([0.690408_f32, 0.173917], [0u8, 0, 242, 13], 2usize),
-            ([0.654068, 0.401659], [185, 0, 0, 70], 0),
-            ([0.294907, 0.469354], [5, 250, 0, 0], 1),
-        ];
-        for (uv, expect, channel) in panels {
-            let mut best = f32::MAX;
-            let mut found = [0.0_f32; 2];
-            for tex in &mesh.uvs {
-                let d = (tex[0] - uv[0]).powi(2) + (tex[1] - uv[1]).powi(2);
-                if d < best {
-                    best = d;
-                    found = *tex;
+        assert!(content.models.len() > 4, "the uv test walks every content mask");
+        for spec in &content.models {
+            assert_eq!(spec.file, format!("models/{}.glb", spec.id));
+            let mesh = cast(&spec.id);
+            let tex = &mesh.mask;
+            assert!(tex.w > 1 && tex.h > 1, "{} mask", spec.id);
+            let mut flipped_differs = false;
+            let mut hit = [false; 4];
+            for uv in &mesh.uvs {
+                let got = sample4(tex, *uv);
+                let top = mask_row(tex, *uv, false);
+                let bytes = [
+                    (got[0] * 255.0).round() as u8,
+                    (got[1] * 255.0).round() as u8,
+                    (got[2] * 255.0).round() as u8,
+                    (got[3] * 255.0).round() as u8,
+                ];
+                assert_eq!(bytes, top, "{} sample4 is not the top-left row", spec.id);
+                if top != mask_row(tex, *uv, true) {
+                    flipped_differs = true;
+                }
+                if let Some(channel) = strict_channel(&bytes, 200) {
+                    hit[channel] = true;
                 }
             }
-            assert!(best.sqrt() < 1.0e-4, "panel uv is not on the in-game mesh ({:.6})", best.sqrt());
-            let px = sample4(&mesh.mask, found);
-            let bytes = [
-                (px[0] * 255.0).round() as u8,
-                (px[1] * 255.0).round() as u8,
-                (px[2] * 255.0).round() as u8,
-                (px[3] * 255.0).round() as u8,
-            ];
-            assert_eq!(bytes, expect, "channel {channel} mask {bytes:?}");
-            let dominant = (0..4).max_by_key(|i| bytes[*i]).unwrap();
-            assert_eq!(dominant, channel);
+            let mut image_flips = false;
+            let row = (tex.w * 4) as usize;
+            for y in 0..tex.h / 2 {
+                let top = (y * tex.w * 4) as usize;
+                let bot = ((tex.h - 1 - y) * tex.w * 4) as usize;
+                if tex.rgba[top..top + row] != tex.rgba[bot..bot + row] {
+                    image_flips = true;
+                    break;
+                }
+            }
+            if image_flips {
+                assert!(
+                    flipped_differs,
+                    "{} mask changes under a v flip and no mesh uv shows it",
+                    spec.id
+                );
+            }
+            let mut strong = [false; 4];
+            for px in tex.rgba.chunks_exact(4) {
+                if let Some(channel) = strict_channel(px, 200) {
+                    strong[channel] = true;
+                }
+            }
+            for channel in 0..4 {
+                assert!(
+                    !strong[channel] || hit[channel],
+                    "{} channel {channel} is in the mask and no mesh uv reads it",
+                    spec.id
+                );
+            }
         }
+    }
+
+    #[test]
+    fn stray_needles_are_dropped() {
+        for mesh in casts() {
+            let (mn, mx) = bounds(&mesh.positions);
+            let extent = (mx[0] - mn[0]).max(mx[1] - mn[1]).max(mx[2] - mn[2]).max(1.0e-6);
+            for tri in mesh.indices.chunks(3) {
+                let a = mesh.positions[tri[0] as usize];
+                let b = mesh.positions[tri[1] as usize];
+                let c = mesh.positions[tri[2] as usize];
+                let ab = sub(b, a);
+                let ac = sub(c, a);
+                let cross = [
+                    ab[1] * ac[2] - ab[2] * ac[1],
+                    ab[2] * ac[0] - ab[0] * ac[2],
+                    ab[0] * ac[1] - ab[1] * ac[0],
+                ];
+                let area = 0.5 * (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
+                let longest = dist(a, b).max(dist(b, c)).max(dist(c, a));
+                let ratio = area / (longest * longest).max(1.0e-12);
+                assert!(
+                    !(longest > 0.12 * extent && ratio < 0.02),
+                    "{} still has a needle",
+                    mesh.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_floating_glow_seats_on_the_cast() {
+        let mesh = cast("hive_tyrant");
+        let on = mesh.positions[0];
+        let stayed = seat_glow(&mesh.positions, &mesh.indices, on, 0.5);
+        assert!(dist(stayed, on) < 1.0e-4, "a center on the surface stays");
+        let visual = crate::bug("hive_tyrant");
+        let posed = rest_pose(visual);
+        let index = visual.parts.iter().position(|part| part.name == "cannon").expect("cannon");
+        let center = posed.xforms[index].pos;
+        let radius = 0.64_f32;
+        let gap = closest_on_mesh(&mesh.positions, &mesh.indices, center).1;
+        assert!(gap > radius, "hive cannon gap {gap:.3} should float clear of the cast");
+        let seated = seat_glow(&mesh.positions, &mesh.indices, center, radius);
+        let seated_gap = closest_on_mesh(&mesh.positions, &mesh.indices, seated).1;
+        assert!((seated_gap - radius).abs() < 1.0e-3, "seated gap {seated_gap:.4}");
+        assert!(dist(seated, center) > 0.2, "the cannon actually moves onto the cast");
     }
 
     #[test]
     fn overdrive_brightens_only_the_named_channel() {
         let toward = [0.976, 0.451, 0.086];
+        let gain = Content::embedded().cast.overdrive_emissive_gain;
         let albedo = [0.15, 0.45, 0.50];
-        let hot = brighten_channel(albedo, [0.0, 0.0, 1.0, 0.0], 2, toward);
-        assert!(hot[0] > albedo[0] && hot[2] < albedo[2], "accent moves toward hero_vex {hot:?}");
-        let other = brighten_channel(albedo, [1.0, 0.0, 0.0, 0.0], 2, toward);
+        let hot = brighten_channel(albedo, [0.0, 0.0, 1.0, 0.0], 2, toward, gain);
+        let expect = [
+            (toward[0] * gain[0]).min(1.0),
+            (toward[1] * gain[1]).min(1.0),
+            (toward[2] * gain[2]).min(1.0),
+        ];
+        assert!((hot[0] - expect[0]).abs() < 1.0e-4 && (hot[1] - expect[1]).abs() < 1.0e-4 && (hot[2] - expect[2]).abs() < 1.0e-4, "still uses toward * gain {hot:?}");
+        let other = brighten_channel(albedo, [1.0, 0.0, 0.0, 0.0], 2, toward, gain);
         assert_eq!(other, albedo);
         let (w, h, emit) = bake_overdrive_emissive(cast("vex_gun"), "accent");
         assert!(w > 1 && h > 1);
@@ -1892,6 +2075,7 @@ mod tests {
                         0.0,
                         look.base_light,
                         look.rim_strength,
+                        look.rim_fill,
                     );
                     assert!(
                         away(color, weak) && away(color, acid),

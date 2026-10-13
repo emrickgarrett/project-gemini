@@ -296,12 +296,12 @@ pub fn scene(
     let gun_id = format!("{}_gun", content.hero.id);
     let gun_mesh = bank.casts.get(&gun_id).cloned().unwrap_or_else(|| panic!("missing {gun_id}"));
     let gun_idle = bank.cast_mats.get(&gun_id).cloned().unwrap_or_else(|| panic!("missing {gun_id} material"));
-    let gun_view = content
+    let gun_model = content
         .models
         .iter()
         .find(|model| model.id == gun_id)
-        .unwrap_or_else(|| panic!("{gun_id} has no cast record"))
-        .view;
+        .unwrap_or_else(|| panic!("{gun_id} has no cast record"));
+    let gun_view = gun_model.view;
     let grip = Transform::from_xyz(offset[0] + gun_view[0], offset[1] + gun_view[1], offset[2] + gun_view[2]);
     let mut gun_hot_src = materials
         .get(&gun_idle)
@@ -310,7 +310,10 @@ pub fn scene(
     let gun_mesh_data = gemini_meshes::cast(&gun_id);
     let (ew, eh, emit) = gemini_meshes::bake_overdrive_emissive(gun_mesh_data, &content.cast.overdrive_emissive_channel);
     gun_hot_src.emissive_texture = Some(images.add(rgba_image(ew, eh, emit)));
-    let hero_id = gun_id.trim_end_matches("_gun");
+    let hero_id = gun_model.hero.as_str();
+    if hero_id.is_empty() {
+        panic!("{gun_id} has no hero id");
+    }
     let toward = content.palette.key(&format!("hero_{hero_id}"));
     let gain = content.cast.overdrive_emissive_gain;
     gun_hot_src.emissive = LinearRgba::rgb(toward[0] * gain[0], toward[1] * gain[1], toward[2] * gain[2]);
@@ -461,13 +464,25 @@ pub fn sync(
             }
         }
         let _ = eye;
+        let body = gemini_meshes::cast(enemy.kind.name());
         for entity in &part_ids {
             if let Ok((mut part, mut local, mut vis)) = parts.get_mut(*entity) {
                 let xf = posed
                     .xforms
                     .get(part.index)
                     .unwrap_or_else(|| panic!("bug part {} is outside the pose", part.index));
-                local.translation = bevy::math::Vec3::new(xf.pos[0], xf.pos[1], xf.pos[2]);
+                let pos = if part.emissive {
+                    let spec = &visual.parts[part.index];
+                    let mut radius = 0.0_f32;
+                    for p in &spec.mesh.positions {
+                        let scaled = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
+                        radius = radius.max((scaled[0] * scaled[0] + scaled[1] * scaled[1] + scaled[2] * scaled[2]).sqrt());
+                    }
+                    gemini_meshes::seat_glow(&body.positions, &body.indices, xf.pos, radius)
+                } else {
+                    xf.pos
+                };
+                local.translation = bevy::math::Vec3::new(pos[0], pos[1], pos[2]);
                 local.rotation = Quat::from_xyzw(xf.rot[0], xf.rot[1], xf.rot[2], xf.rot[3]);
                 local.scale = bevy::math::Vec3::new(xf.scale[0], xf.scale[1], xf.scale[2]);
                 let pod_dead = part

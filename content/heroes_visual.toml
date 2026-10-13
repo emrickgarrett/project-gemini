@@ -190,6 +190,7 @@ view = [0.0, 0.0, 0.0]
 
 [[model]]
 id = "vex_gun"
+hero = "vex"
 file = "models/vex_gun.glb"
 mask = "masks/vex_gun_mask_rgba.png"
 shade = "masks/vex_gun_shade.png"
@@ -236,6 +237,7 @@ view = [0.0, 0.0, 0.0]
 
 [[model]]
 id = "nyra_gun"
+hero = "nyra"
 file = "models/nyra_gun.glb"
 mask = "masks/nyra_gun_mask_rgba.png"
 shade = "masks/nyra_gun_shade.png"
@@ -282,6 +284,7 @@ view = [0.0, 0.0, 0.0]
 
 [[model]]
 id = "brakk_gun"
+hero = "brakk"
 file = "models/brakk_gun.glb"
 mask = "masks/brakk_gun_mask_rgba.png"
 shade = "masks/brakk_gun_shade.png"
@@ -351,6 +354,7 @@ view = [0.0, 0.0, 0.0]
 
 [[model]]
 id = "kip_gun"
+hero = "kip"
 file = "models/kip_gun.glb"
 mask = "masks/kip_gun_mask_rgba.png"
 shade = "masks/kip_gun_shade.png"

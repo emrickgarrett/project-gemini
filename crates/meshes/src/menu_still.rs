@@ -614,6 +614,9 @@ fn paint_portrait(rgb: &mut [u8], content: &Content, frame: Frame, hero: &gemini
                     away.away_desaturation,
                     content.ui.layout.locked_body_desaturation,
                     away.dim_floor,
+                    content.ui.layout.locked_accent_chroma,
+                    content.ui.layout.locked_accent_value,
+                    content.ui.layout.locked_hue_window,
                 );
             }
             put(rgb, frame.width, frame.height, dx + col, dy + row, px);
@@ -808,14 +811,14 @@ fn gray(px: [u8; 3]) -> [u8; 3] {
     [y, y, y]
 }
 
-fn hue_deg(px: [u8; 3]) -> Option<f32> {
+fn hue_deg(px: [u8; 3], chroma_floor: f32, value_floor: f32) -> Option<f32> {
     let r = px[0] as f32;
     let g = px[1] as f32;
     let b = px[2] as f32;
     let max = r.max(g).max(b);
     let min = r.min(g).min(b);
     let chroma = max - min;
-    if chroma < 18.0 || max < 24.0 {
+    if chroma < chroma_floor || max < value_floor {
         return None;
     }
     let h = if max == r {
@@ -828,19 +831,30 @@ fn hue_deg(px: [u8; 3]) -> Option<f32> {
     Some(if h < 0.0 { h + 360.0 } else { h })
 }
 
-fn near_accent(px: [u8; 3], accent: [u8; 3]) -> bool {
-    let (Some(h), Some(a)) = (hue_deg(px), hue_deg(accent)) else {
+fn near_accent(px: [u8; 3], accent: [u8; 3], chroma_floor: f32, value_floor: f32, window: f32) -> bool {
+    let (Some(h), Some(a)) = (hue_deg(px, chroma_floor, value_floor), hue_deg(accent, chroma_floor, value_floor)) else {
         return false;
     };
     let mut d = (h - a).abs();
     if d > 180.0 {
         d = 360.0 - d;
     }
-    d <= 20.0
+    d <= window
 }
 
-fn locked_pixel(px: [u8; 3], accent: [u8; 3], mix: f32, dim: f32, accent_desat: f32, body_desat: f32, floor: f32) -> [u8; 3] {
-    let accent_px = near_accent(px, accent);
+fn locked_pixel(
+    px: [u8; 3],
+    accent: [u8; 3],
+    mix: f32,
+    dim: f32,
+    accent_desat: f32,
+    body_desat: f32,
+    floor: f32,
+    chroma_floor: f32,
+    value_floor: f32,
+    window: f32,
+) -> [u8; 3] {
+    let accent_px = near_accent(px, accent, chroma_floor, value_floor, window);
     let desat = if accent_px { accent_desat } else { body_desat };
     let body = crate::away_still::grade(px[0], px[1], px[2], dim, desat, floor);
     if accent_px { lift(body, accent, mix) } else { body }

@@ -1329,6 +1329,8 @@ pub struct HeroesVisual {
 #[derive(Clone, Debug)]
 pub struct CastModel {
     pub id: String,
+    /// Hero id for a weapon. Empty on bodies, shields, and bugs.
+    pub hero: String,
     pub file: String,
     /// Cleaned mask PNG under assets/. Red is accent, green is glow.
     pub mask: String,
@@ -1365,6 +1367,8 @@ pub struct CastLook {
     /// Linear divisor for an sRGB shade map. Albedo is `(shade / shade_mid_lin) * sum(weight * color)`.
     pub shade_mid_lin: f32,
     pub rim_strength: f32,
+    /// Facing share of the rim color on an unmasked bug texel. The fresnel takes the rest.
+    pub rim_fill: f32,
     /// Mask channel Overdrive lights on the equipped gun: primary, secondary, accent, or fourth.
     pub overdrive_emissive_channel: String,
     /// HDR multiplier on `hero_<id>` while that channel is emissive.
@@ -1836,6 +1840,9 @@ fn load_model_rows(
         } else {
             keys.push("glow");
         }
+        if fit_peek == "weapon" {
+            keys.push("hero");
+        }
         expect_keys(map, &keys, &format!("{what} model"))?;
         let id = vis_str(map, "id", &format!("{what} model"))?.to_string();
         if id.is_empty() || models.iter().any(|model| model.id == id) {
@@ -1903,8 +1910,18 @@ fn load_model_rows(
         if !yaw_deg.is_finite() {
             return Err(format!("{what} {id} yaw_deg must be finite"));
         }
+        let hero = if fit == "weapon" {
+            let hero = vis_str(map, "hero", &format!("{what} {id}"))?.to_string();
+            if hero.is_empty() {
+                return Err(format!("{what} {id} hero is empty"));
+            }
+            hero
+        } else {
+            String::new()
+        };
         models.push(CastModel {
             id,
+            hero,
             file,
             mask,
             triangles: vis_u32(map, "triangles", &format!("{what} model"))?,
@@ -1972,6 +1989,7 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
             "base_light",
             "shade_mid_lin",
             "rim_strength",
+            "rim_fill",
             "overdrive_emissive_channel",
             "overdrive_emissive_gain",
             "pod_glow_key",
@@ -1998,8 +2016,12 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
     if !(rim_strength >= 0.0 && rim_strength <= 1.0) {
         return Err("cast.toml rim_strength must be between 0 and 1".into());
     }
+    let rim_fill = vis_f32(table, "rim_fill", "cast.toml")?;
+    if !(rim_fill >= 0.0 && rim_fill < 1.0) {
+        return Err("cast.toml rim_fill must be >= 0 and < 1".into());
+    }
     let overdrive_emissive_channel = vis_str(table, "overdrive_emissive_channel", "cast.toml")?.to_string();
-    if !matches!(overdrive_emissive_channel.as_str(), "primary" | "secondary" | "accent" | "fourth") {
+    if channel_index(&overdrive_emissive_channel).is_none() {
         return Err(format!(
             "cast.toml overdrive_emissive_channel \"{overdrive_emissive_channel}\" is unknown"
         ));
@@ -2039,6 +2061,7 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
         base_light,
         shade_mid_lin,
         rim_strength,
+        rim_fill,
         overdrive_emissive_channel,
         overdrive_emissive_gain,
         pod_glow_key,
@@ -3858,16 +3881,26 @@ impl Palette {
     }
 }
 
+/// Mask slot. `primary` is 0, `secondary` is 1, `accent` is 2, `fourth` is 3.
+pub fn channel_index(name: &str) -> Option<usize> {
+    match name {
+        "primary" => Some(0),
+        "secondary" => Some(1),
+        "accent" => Some(2),
+        "fourth" => Some(3),
+        _ => None,
+    }
+}
+
 impl CastLook {
     /// Mask slot for `overdrive_emissive_channel`. Load rejects any other name.
     pub fn overdrive_channel_index(&self) -> usize {
-        match self.overdrive_emissive_channel.as_str() {
-            "primary" => 0,
-            "secondary" => 1,
-            "accent" => 2,
-            "fourth" => 3,
-            other => panic!("cast.toml overdrive_emissive_channel \"{other}\" is unknown"),
-        }
+        channel_index(&self.overdrive_emissive_channel).unwrap_or_else(|| {
+            panic!(
+                "cast.toml overdrive_emissive_channel \"{}\" is unknown",
+                self.overdrive_emissive_channel
+            )
+        })
     }
 }
 
@@ -4429,6 +4462,12 @@ pub struct UiLayout {
     pub portrait_fraction: f32,
     /// Locked portrait glow mixes this far from grayscale back toward the accent.
     pub locked_accent_mix: f32,
+    /// Chroma floor before a locked portrait pixel can count as the accent.
+    pub locked_accent_chroma: f32,
+    /// Value floor before a locked portrait pixel can count as the accent.
+    pub locked_accent_value: f32,
+    /// Hue window, in degrees, around the UI accent.
+    pub locked_hue_window: f32,
     /// Non-accent portrait pixels desaturate this far on a locked card. 1 is fully gray.
     pub locked_body_desaturation: f32,
     pub card_pad: f32,
@@ -4662,6 +4701,15 @@ fn validate_ui(
     }
     if !(layout.locked_accent_mix > 0.0 && layout.locked_accent_mix < 1.0) {
         return Err("ui.toml layout.locked_accent_mix must be in (0, 1)".into());
+    }
+    if !(layout.locked_accent_chroma >= 1.0 && layout.locked_accent_chroma <= 64.0) {
+        return Err("ui.toml layout.locked_accent_chroma must be in [1, 64]".into());
+    }
+    if !(layout.locked_accent_value >= 1.0 && layout.locked_accent_value <= 64.0) {
+        return Err("ui.toml layout.locked_accent_value must be in [1, 64]".into());
+    }
+    if !(layout.locked_hue_window > 0.0 && layout.locked_hue_window <= 45.0) {
+        return Err("ui.toml layout.locked_hue_window must be in (0, 45]".into());
     }
     if !(layout.locked_body_desaturation >= 0.0 && layout.locked_body_desaturation <= 1.0) {
         return Err("ui.toml layout.locked_body_desaturation must be in [0, 1]".into());

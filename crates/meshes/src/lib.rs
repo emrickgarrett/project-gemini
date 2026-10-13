@@ -15,7 +15,7 @@ mod visual;
 
 pub use cast::{
     bake_overdrive_emissive, bake_textures, body_pivot, cast, casts, hero_pieces, hero_placement, load_catalog, model_bytes, muzzle_tip, paint_approved_gun, place_point, read_model_file,
-    CastMesh, PaintCam, Placement,
+    seat_glow, CastMesh, PaintCam, Placement,
 };
 
 pub use menu_still::{paint_menu, raster_hero_portrait, Hit, MenuShot, PaintPrefs};

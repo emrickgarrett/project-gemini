@@ -6,19 +6,23 @@
 # Heroes, guns, and the shield use a four-channel mask and an sRGB shade map.
 # In linear color, albedo = (shade / shade_mid_lin) * sum(weight * palette).
 # `shade_mid_lin` is that divisor. The painter reads it from here.
-# `rim_strength` scales the fresnel on an unmasked bug texel when a model has a rim key.
+# `rim_strength` scales the rim on an unmasked bug texel when a model has a rim key.
+# `rim_fill` is the facing share of that rim. The fresnel takes the rest at the silhouette.
 # Overdrive lights one mask channel on the equipped gun. `overdrive_emissive_channel`
 # is `primary`, `secondary`, `accent`, or `fourth`. The trim brightens toward `hero_<id>`.
-# `overdrive_emissive_gain` is the HDR factor on that color. It is not a hex.
+# `overdrive_emissive_gain` is the factor on `hero_<id>`. The client uses it as the
+# HDR emissive color. The still clamps the same product into the display.
 # Brood pod emissive is `pod_glow_key` times `pod_glow_base + glow * pod_glow_per_glow`.
-# A glow disc uses `glow_falloff` (radial exponent, solid core) and
-# `glow_show_through` (sac visible at the edge). The painter has no second copy.
+# A glow disc is `(1 - t^glow_falloff) * (1 - glow_show_through * t^glow_falloff)`.
+# `t` is 0 at the center and 1 at the rim. The core stays the palette color.
+# The painter has no second copy of those numbers.
 # The review orbit is the camera from the approved side_<id>.png sheets
 # (distance is radii, vertical field of view in degrees).
 
 base_light = 0.5
 shade_mid_lin = 0.2623
 rim_strength = 1.0
+rim_fill = 0.30
 overdrive_emissive_channel = "accent"
 overdrive_emissive_gain = [5.0, 2.2, 0.4]
 pod_glow_key = "swarmer_glow"

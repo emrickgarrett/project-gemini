@@ -628,19 +628,24 @@ fn paint_feedback_parts(
 ) {
     let (ls, lc) = lean.sin_cos();
     let look = &gemini_sim::content::Content::embedded().cast;
+    let body = crate::cast(&visual.id);
     for (part, xf) in visual.parts.iter().zip(posed.xforms.iter()) {
         if !(part.emissive || part.grows || part.pod_slot.is_some()) || !xf.visible {
             continue;
         }
         let albedo = palette(part.palette.as_str());
         let rgb = [albedo[0], albedo[1], albedo[2]];
-        let origin = [xf.pos[0], xf.pos[1], xf.pos[2]];
-        let center = lean_shift(origin, ls, lc, shift, bob);
         let mut radius = 0.0_f32;
         for p in &part.mesh.positions {
             let scaled = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
             radius = radius.max((scaled[0] * scaled[0] + scaled[1] * scaled[1] + scaled[2] * scaled[2]).sqrt());
         }
+        let origin = if part.emissive {
+            crate::seat_glow(&body.positions, &body.indices, xf.pos, radius)
+        } else {
+            xf.pos
+        };
+        let center = lean_shift(origin, ls, lc, shift, bob);
         for tri in part.mesh.indices.chunks(3) {
             if tri.len() < 3 {
                 continue;
@@ -652,7 +657,7 @@ fn paint_feedback_parts(
                 let p = part.mesh.positions[*index as usize];
                 let p = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
                 let p = crate::pose::rotate_vec(xf.rot, p);
-                let p = [p[0] + xf.pos[0], p[1] + xf.pos[1], p[2] + xf.pos[2]];
+                let p = [p[0] + origin[0], p[1] + origin[1], p[2] + origin[2]];
                 let placed = lean_shift(p, ls, lc, shift, bob);
                 let Some(screen) = project(placed, cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
                     ok = false;
@@ -790,8 +795,8 @@ fn paint_flat(color: &mut [u8], depth: &mut [f32], mesh: &crate::MeshData, albed
     }
 }
 
-/// In-arena color still. The eye stands on the deck, `review_distance` meters from the bug.
-pub fn raster_in_arena(id: &str, width: u32, height: u32) -> Vec<u8> {
+/// Eye on the deck at `eye_height`. The look point is `review_distance` meters away.
+fn arena_review_camera(id: &str) -> ([f32; 3], [f32; 3], f32, [f32; 3]) {
     use gemini_sim::content::Content;
     let content = Content::embedded();
     let dress = &content.arena_dressing;
@@ -819,6 +824,15 @@ pub fn raster_in_arena(id: &str, width: u32, height: u32) -> Vec<u8> {
     ];
     let eye = [platform.center.x + flat[0] * half, eye_y, platform.center.z + flat[1] * half];
     let look = [bug_at[0], look_y, bug_at[2]];
+    (eye, look, visual.camera.fov, bug_at)
+}
+
+/// In-arena color still. The eye stands on the deck, `review_distance` meters from the bug.
+pub fn raster_in_arena(id: &str, width: u32, height: u32) -> Vec<u8> {
+    use gemini_sim::content::Content;
+    let content = Content::embedded();
+    let visual = bug(id);
+    let (eye, look, fov, bug_at) = arena_review_camera(id);
     let sky = content.palette.key("arena_sky");
     let bg = [byte(sky[0]), byte(sky[1]), byte(sky[2])];
     let palette = |name: &str| content.palette.key(name);
@@ -837,7 +851,7 @@ pub fn raster_in_arena(id: &str, width: u32, height: u32) -> Vec<u8> {
         height,
         false,
         false,
-        Some((eye, look, visual.camera.fov)),
+        Some((eye, look, fov)),
         bug_at,
         bg,
         &extras,
@@ -1086,10 +1100,14 @@ fn lean_shift(p: [f32; 3], ls: f32, lc: f32, shift: [f32; 3], bob: f32) -> [f32;
     [p[0] + shift[0], y2 + shift[1] + bob, z2 + shift[2]]
 }
 
-/// Solid core, soft edge. `falloff` and `show_through` are the cast.toml keys.
+/// Solid core, soft edge. `t` is 0 at the center and 1 at the rim.
+/// `cover = (1 - t^falloff) * (1 - show_through * t^falloff)`. Both keys come from cast.toml.
+/// The exponent keeps the core at the palette color and lets the rim fade out.
 fn glow_cover(perp: f32, falloff: f32, show_through: f32) -> f32 {
-    let edge = perp.clamp(0.0, 1.0).powf(falloff);
-    (1.0 - show_through * edge).clamp(0.0, 1.0)
+    let t = perp.clamp(0.0, 1.0);
+    let fade = t.powf(falloff);
+    let glow = (1.0 - fade).clamp(0.0, 1.0);
+    (glow * (1.0 - show_through * fade)).clamp(0.0, 1.0)
 }
 
 fn fill_glow_tri(
@@ -1125,11 +1143,8 @@ fn fill_glow_tri(
             if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
                 continue;
             }
-            let z = a[2] * w0 + b[2] * w1 + c[2] * w2;
+            let mut z = a[2] * w0 + b[2] * w1 + c[2] * w2;
             let idx = (y as u32 * w + x as u32) as usize;
-            if z >= depth[idx] {
-                continue;
-            }
             let at = [
                 world[0][0] * w0 + world[1][0] * w1 + world[2][0] * w2,
                 world[0][1] * w0 + world[1][1] * w1 + world[2][1] * w2,
@@ -1140,6 +1155,14 @@ fn fill_glow_tri(
             let perp_v = [offset[0] - forward[0] * along, offset[1] - forward[1] * along, offset[2] - forward[2] * along];
             let perp = (perp_v[0] * perp_v[0] + perp_v[1] * perp_v[1] + perp_v[2] * perp_v[2]).sqrt() / radius;
             let cover = glow_cover(perp, falloff, show_through);
+            // The core sits on the cast. Pull it forward by its own radius so a
+            // shell that overhangs the pole does not hide the palette texel.
+            if perp < 0.25 {
+                z = (z - radius).max(0.05);
+            }
+            if z >= depth[idx] {
+                continue;
+            }
             let o = idx * 3;
             let under = [
                 color[o] as f32 / 255.0,
@@ -1147,9 +1170,22 @@ fn fill_glow_tri(
                 color[o + 2] as f32 / 255.0,
             ];
             depth[idx] = z;
-            color[o] = byte(rgb[0] * cover + under[0] * (1.0 - cover));
-            color[o + 1] = byte(rgb[1] * cover + under[1] * (1.0 - cover));
-            color[o + 2] = byte(rgb[2] * cover + under[2] * (1.0 - cover));
+            // The body mask already wrote this glow color. Keep it. The rim still
+            // fades everywhere else, and a near-core texel snaps to the palette.
+            let pure = [byte(rgb[0]), byte(rgb[1]), byte(rgb[2])];
+            if [color[o], color[o + 1], color[o + 2]] == pure {
+                continue;
+            }
+            let mixed = [
+                byte(rgb[0] * cover + under[0] * (1.0 - cover)),
+                byte(rgb[1] * cover + under[1] * (1.0 - cover)),
+                byte(rgb[2] * cover + under[2] * (1.0 - cover)),
+            ];
+            let snap = mixed.iter().zip(pure).all(|(got, want)| (*got as i16 - want as i16).abs() <= 1);
+            let out = if snap { pure } else { mixed };
+            color[o] = out[0];
+            color[o + 1] = out[1];
+            color[o + 2] = out[2];
         }
     }
 }
@@ -1220,6 +1256,41 @@ fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 fn norm(v: [f32; 3]) -> [f32; 3] {
     let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
     [v[0] / len, v[1] / len, v[2] / len]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glow_falloff_softens_the_disc() {
+        let look = &gemini_sim::content::Content::embedded().cast;
+        let core = glow_cover(0.0, look.glow_falloff, look.glow_show_through);
+        let mid = glow_cover(0.5, look.glow_falloff, look.glow_show_through);
+        let edge = glow_cover(1.0, look.glow_falloff, look.glow_show_through);
+        assert!((core - 1.0).abs() < 1.0e-4, "core {core}");
+        assert!(mid < 0.75, "mid {mid} is still a hard disc");
+        assert!(edge < 0.2, "edge {edge}");
+    }
+
+    #[test]
+    fn arena_stills_are_15m_from_eye_height() {
+        let content = gemini_sim::content::Content::embedded();
+        let deck = content.arena.platform.height;
+        let eye_y = deck + content.controller.camera.eye_height;
+        for id in ["spitter", "hive_tyrant"] {
+            let (eye, look, fov, _bug_at) = arena_review_camera(id);
+            let visual = bug(id);
+            assert!((eye[1] - eye_y).abs() < 1.0e-4, "{id} eye y {}", eye[1]);
+            let d = sub(eye, look);
+            let d = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            assert!(
+                (d - content.arena_dressing.review_distance).abs() < 1.0e-3,
+                "{id} distance {d}"
+            );
+            assert!((fov - visual.camera.fov).abs() < 1.0e-4, "{id} fov {fov}");
+        }
+    }
 }
 
 pub fn painted_pixels(rgb: &[u8]) -> usize {
