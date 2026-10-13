@@ -238,6 +238,7 @@ impl Content {
             &combat,
         )
         .map_err(|err| format!("arena scenery: {err}"))?;
+        validate_arena_audio(&arena, &audio).map_err(|err| format!("audio_mix.toml: {err}"))?;
         validate_stage_offset(&palette, &crate_reveal.layout)?;
         Ok(Self {
             fingerprint,
@@ -409,6 +410,19 @@ impl Content {
 
     pub fn sfx(&self, id: &str) -> Option<&SfxDef> {
         self.audio.sfx.iter().find(|s| s.id == id)
+    }
+
+    pub fn part_under(&self, pos: Vec3) -> Result<String, String> {
+        self.arena.part_under(&self.arena_scene, &self.arena_dressing, pos)
+    }
+
+    pub fn surface_kind(&self, part: &str) -> Result<String, String> {
+        self.arena
+            .surfaces
+            .iter()
+            .find(|row| row.part == part)
+            .map(|row| row.kind.clone())
+            .ok_or_else(|| format!("surface part \"{part}\" is missing"))
     }
 
     /// File for a reveal cue. Stings live in the sting table; tease and fakeout live in sfx.
@@ -2518,6 +2532,7 @@ fn load_arena_dressing(text: &str) -> Result<(ArenaDressing, crate::scenery::Are
             "pale",
             "trim",
             "boulder",
+            "beacon_glow_period",
             "prop_mesh",
             "platform_sides",
             "deck_phase_deg",
@@ -2848,6 +2863,10 @@ pub struct Arena {
     pub routes: Vec<crate::scenery::Corridor>,
     pub revive_spots: Vec<crate::scenery::ReviveSpot>,
     pub cover: Vec<crate::scenery::Cover>,
+    /// Stance tests, first match wins. Each name has a test in `part_under`.
+    pub stance_order: Vec<String>,
+    /// Stance name to content part id (`surface.part`).
+    pub stance_part: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug)]
@@ -3185,6 +3204,100 @@ impl Arena {
             && p.y <= self.platform.height + self.platform.railing_height
             && self.ramp_height(p.x, p.z).is_none()
     }
+
+    /// Content part id under `pos`. The first stance in `stance_order` whose test hits wins.
+    pub fn part_under(
+        &self,
+        scene: &crate::scenery::ArenaScene,
+        dress: &ArenaDressing,
+        pos: Vec3,
+    ) -> Result<String, String> {
+        for name in &self.stance_order {
+            if !stance_supported(name) {
+                return Err(format!("stance \"{name}\" has no test"));
+            }
+            if self.stance_test(name, scene, dress, pos)? {
+                let part = self
+                    .stance_part
+                    .get(name)
+                    .ok_or_else(|| format!("stance \"{name}\" has no part"))?;
+                return Ok(part.clone());
+            }
+        }
+        Err(format!("no stance under ({}, {}, {})", pos.x, pos.y, pos.z))
+    }
+
+    fn stance_test(
+        &self,
+        name: &str,
+        scene: &crate::scenery::ArenaScene,
+        dress: &ArenaDressing,
+        pos: Vec3,
+    ) -> Result<bool, String> {
+        if name == "ramp" {
+            return Ok(self.ramp_height(pos.x, pos.z).is_some());
+        }
+        if name == "cover" {
+            let slack = self.scenery.bounds_slack;
+            for cover in &self.cover {
+                let hx = cover.size[0] * 0.5 + slack;
+                let hz = cover.size[2] * 0.5 + slack;
+                let top = cover.pos.y + cover.size[1] * 0.5;
+                let on_xz = (pos.x - cover.pos.x).abs() <= hx && (pos.z - cover.pos.z).abs() <= hz;
+                let on_top = (pos.y - top).abs() <= slack;
+                if on_xz && on_top {
+                    return Ok(true);
+                }
+            }
+            return Ok(false);
+        }
+        if name == "nest" {
+            for nest in &scene.nests {
+                let vent = self
+                    .vents
+                    .iter()
+                    .find(|vent| vent.id == nest.vent)
+                    .ok_or_else(|| format!("nest {} vent \"{}\" is missing", nest.id, nest.vent))?;
+                let anchor = crate::scenery::nest_anchor(vent.pos.x, vent.pos.z, nest.outset, scene.nest_lift);
+                let hx = nest.size[0] * 0.5;
+                let hz = nest.size[2] * 0.5;
+                if (pos.x - anchor[0]).abs() <= hx && (pos.z - anchor[2]).abs() <= hz {
+                    return Ok(true);
+                }
+            }
+            return Ok(false);
+        }
+        if name == "rail" {
+            if !(dress.rail_thickness > 0.0) {
+                return Err("rail_thickness must be > 0".into());
+            }
+            let dist = self.disc_dist(pos.x, pos.z);
+            let inner = self.platform.radius - dress.rail_thickness;
+            return Ok(self.in_disc(pos.x, pos.z) && dist >= inner);
+        }
+        if name == "deck" {
+            return Ok(self.in_disc(pos.x, pos.z));
+        }
+        if name == "rim" {
+            let dist = (pos.x * pos.x + pos.z * pos.z).sqrt();
+            return Ok(dist > self.radius);
+        }
+        if name == "ground" {
+            let dist = (pos.x * pos.x + pos.z * pos.z).sqrt();
+            return Ok(dist <= self.radius);
+        }
+        Err(format!("stance \"{name}\" has no test"))
+    }
+}
+
+fn stance_supported(name: &str) -> bool {
+    name == "ramp"
+        || name == "cover"
+        || name == "nest"
+        || name == "rail"
+        || name == "deck"
+        || name == "rim"
+        || name == "ground"
 }
 
 fn load_arena(text: &str) -> Result<Arena, String> {
@@ -3211,6 +3324,8 @@ fn load_arena(text: &str) -> Result<Arena, String> {
             "route",
             "revive_spot",
             "cover",
+            "stance_order",
+            "stance_part",
         ],
         "arena_01",
     )?;
@@ -3261,6 +3376,20 @@ fn load_arena(text: &str) -> Result<Arena, String> {
     let paint = load_arena_paint(table.get("paint").unwrap())?;
     let edge_wash = load_edge_wash(table.get("edge_wash").unwrap())?;
     let play = crate::scenery::load_play(table)?;
+    let stance_order = string_list(table.get("stance_order").unwrap(), "stance_order")?;
+    let stance_rows = table
+        .get("stance_part")
+        .and_then(|value| value.as_table())
+        .ok_or_else(|| "arena_01 is missing stance_part".to_string())?;
+    let mut stance_part = BTreeMap::new();
+    for (name, value) in stance_rows {
+        let part = value
+            .as_str()
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| format!("stance_part {name} must be a string"))?;
+        stance_part.insert(name.clone(), part.to_string());
+    }
+    validate_stance_map(&stance_order, &stance_part, &play.surfaces, &play.cover)?;
     Ok(Arena {
         half_extent: size[0].max(size[1]) * 0.5,
         size,
@@ -3281,7 +3410,70 @@ fn load_arena(text: &str) -> Result<Arena, String> {
         routes: play.routes,
         revive_spots: play.revive_spots,
         cover: play.cover,
+        stance_order,
+        stance_part,
     })
+}
+
+fn string_list(value: &toml::Value, what: &str) -> Result<Vec<String>, String> {
+    let rows = value.as_array().ok_or_else(|| format!("{what} must be an array"))?;
+    if rows.is_empty() {
+        return Err(format!("{what} is empty"));
+    }
+    let mut out = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        let text = row
+            .as_str()
+            .filter(|text| !text.is_empty())
+            .ok_or_else(|| format!("{what}[{index}] must be a string"))?;
+        out.push(text.to_string());
+    }
+    Ok(out)
+}
+
+fn validate_stance_map(
+    order: &[String],
+    parts: &BTreeMap<String, String>,
+    surfaces: &[crate::scenery::Surface],
+    cover: &[crate::scenery::Cover],
+) -> Result<(), String> {
+    let mut seen = std::collections::BTreeSet::new();
+    for name in order {
+        if !seen.insert(name.clone()) {
+            return Err(format!("stance \"{name}\" is duplicated"));
+        }
+        if !stance_supported(name) {
+            return Err(format!("stance \"{name}\" has no test"));
+        }
+        if !parts.contains_key(name) {
+            return Err(format!("stance \"{name}\" has no part"));
+        }
+    }
+    for name in parts.keys() {
+        if !order.iter().any(|row| row == name) {
+            return Err(format!("stance \"{name}\" is not in stance_order"));
+        }
+    }
+    for part in parts.values() {
+        if !surfaces.iter().any(|row| row.part == *part) {
+            return Err(format!("stance part \"{part}\" is not a surface part"));
+        }
+    }
+    for surface in surfaces {
+        if !parts.values().any(|part| part == &surface.part) {
+            return Err(format!("surface part \"{}\" has no stance", surface.part));
+        }
+    }
+    let cover_part = parts.get("cover").ok_or_else(|| "stance \"cover\" has no part".to_string())?;
+    for row in cover {
+        if row.surface != *cover_part {
+            return Err(format!(
+                "cover {} surface \"{}\" does not match stance part \"{cover_part}\"",
+                row.id, row.surface
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn load_platform(value: &toml::Value) -> Result<Platform, String> {
@@ -4559,6 +4751,18 @@ pub struct AudioTable {
     pub sting: Vec<StingDef>,
     #[serde(default)]
     pub pitch: Vec<PitchDef>,
+    #[serde(default)]
+    pub footstep: Footsteps,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct Footsteps {
+    pub stride: f32,
+    pub min_speed: f32,
+    pub remote_priority: i32,
+    /// Shared cap for every player step row, own and teammate.
+    pub max_voices: u32,
+    pub rows: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -4591,6 +4795,81 @@ pub struct SfxDef {
     pub is_warning: bool,
     /// True when the cue is not positioned in the world.
     pub flat: bool,
+    /// Higher values stay in the mix. Voice picking reads this. It is not a category if-chain.
+    #[serde(default)]
+    pub priority: i32,
+    /// Mix row category. `category_ui` stays the ui flag.
+    #[serde(default)]
+    pub category: String,
+}
+
+fn validate_arena_audio(arena: &Arena, audio: &AudioTable) -> Result<(), String> {
+    if !(audio.footstep.stride > 0.0) {
+        return Err("footstep stride must be > 0".into());
+    }
+    if !(audio.footstep.min_speed > 0.0) {
+        return Err("footstep min_speed must be > 0".into());
+    }
+    if audio.footstep.max_voices == 0 {
+        return Err("footstep max_voices must be > 0".into());
+    }
+    for kind in &arena.scenery.surface_kinds {
+        let Some(rows) = audio.footstep.rows.get(kind) else {
+            return Err(format!("footstep.rows missing {kind}"));
+        };
+        if !(3..=4).contains(&rows.len()) {
+            return Err(format!("footstep.rows {kind} needs 3 or 4 variations"));
+        }
+        for id in rows {
+            let def = audio
+                .sfx
+                .iter()
+                .find(|row| row.id == *id)
+                .ok_or_else(|| format!("footstep.rows {kind} names missing file {id}"))?;
+            if def.category != "player" || !def.stealable || def.flat || def.looped || (def.pitch_semitones - 1.0).abs() > 1e-4 {
+                return Err(format!(
+                    "footstep {id} must be a stealable spatial player one-shot with pitch_rand_semitones = 1"
+                ));
+            }
+        }
+    }
+    for kind in audio.footstep.rows.keys() {
+        if !arena.scenery.surface_kinds.iter().any(|row| row == kind) {
+            return Err(format!("footstep.rows has extra kind {kind}"));
+        }
+    }
+    for surface in &arena.surfaces {
+        if !audio.footstep.rows.contains_key(&surface.kind) {
+            return Err(format!("surface {} kind \"{}\" has no step row", surface.id, surface.kind));
+        }
+    }
+    let bed = audio
+        .sfx
+        .iter()
+        .find(|row| row.id == "arena_01_bed")
+        .ok_or_else(|| "arena_01_bed is missing".to_string())?;
+    if bed.category != "music" || !bed.looped || !bed.flat {
+        return Err("arena_01_bed must be a flat looping music row".into());
+    }
+    for id in ["hive_nest_idle", "relay_tower_hum"] {
+        let row = audio
+            .sfx
+            .iter()
+            .find(|row| row.id == id)
+            .ok_or_else(|| format!("{id} is missing"))?;
+        if !row.looped || row.category != "prop" || row.flat || row.max_instances == 0 {
+            return Err(format!("{id} must be a spatial prop loop with max_instances > 0"));
+        }
+    }
+    let pulse = audio
+        .sfx
+        .iter()
+        .find(|row| row.id == "beacon_pulse")
+        .ok_or_else(|| "beacon_pulse is missing".to_string())?;
+    if pulse.looped || pulse.category != "prop" || pulse.flat || pulse.max_instances == 0 {
+        return Err("beacon_pulse must be a spatial prop one-shot with max_instances > 0".into());
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Deserialize)]

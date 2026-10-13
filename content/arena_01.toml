@@ -4,6 +4,18 @@ shape = "circle"
 radius = 40
 player_spawn = [0, 4.0, 0]
 
+# Which content part is under a body. Names are stance tests, values are surface part ids.
+stance_order = ["ramp", "cover", "nest", "rail", "deck", "rim", "ground"]
+
+[stance_part]
+ramp = "metal_stairs"
+cover = "rock_rim"
+nest = "resin_nest"
+rail = "metal_rail"
+deck = "metal_deck"
+rim = "rock_rim"
+ground = "dirt_floor"
+
 [platform]
 center = [0, 0]
 radius = 8
@@ -152,32 +164,32 @@ shove_center_epsilon = 0.001
 [[surface]]
 id = "dirt_floor"
 kind = "dirt"
-part = "floor"
+part = "dirt_floor"
 
 [[surface]]
 id = "metal_deck"
 kind = "metal"
-part = "deck"
+part = "metal_deck"
 
 [[surface]]
 id = "metal_rail"
 kind = "metal"
-part = "rail"
+part = "metal_rail"
 
 [[surface]]
 id = "metal_stairs"
 kind = "metal"
-part = "stairs"
+part = "metal_stairs"
 
 [[surface]]
 id = "rock_rim"
 kind = "rock"
-part = "rim"
+part = "rock_rim"
 
 [[surface]]
 id = "resin_nest"
 kind = "resin"
-part = "nest"
+part = "resin_nest"
 
 [[lane]]
 id = "lane_vent_1"

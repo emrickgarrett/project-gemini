@@ -2,6 +2,7 @@
 //! Sfx playback volume is the `volume` column. Charge stops drop that owner's voice
 //! in the same frame the sim emits the stop.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,7 +12,7 @@ use bevy::audio::{
 };
 use bevy::prelude::*;
 
-use gemini_sim::audio_mix::{select_voices, SoundEvent};
+use gemini_sim::audio_mix::{select_voices, SoundEvent, Voice};
 use gemini_sim::content::Content;
 use gemini_sim::math::Vec3 as SimVec;
 use gemini_sim::music::{
@@ -27,6 +28,25 @@ use crate::settings::Prefs;
 #[derive(Component)]
 pub(crate) struct MusicStem {
     index: usize,
+}
+
+/// Arena bed. Not a MusicStem, so a track change does not despawn it.
+#[derive(Component)]
+pub(crate) struct BedStem;
+
+/// A prop loop that stays up until the voice list drops it.
+#[derive(Component)]
+pub(crate) struct PropLoop {
+    id: String,
+    pos: SimVec,
+}
+
+#[derive(Resource)]
+pub(crate) struct ArenaAudio {
+    last_time: f32,
+    travel: BTreeMap<u32, f32>,
+    variant: BTreeMap<u32, u32>,
+    beacon_cycle: i64,
 }
 
 #[derive(Component)]
@@ -192,11 +212,26 @@ pub(crate) struct Crowd {
 }
 
 pub fn boot(mut commands: Commands, assets: Res<AssetServer>, game: Res<Game>) {
+    let linked = arena_audio_linked();
+    if linked == 0 {
+        panic!("arena audio embedded no bytes");
+    }
     let mut music = Music::default();
     // Menu already started the theme. MatchStart hard-cuts into combat.
     start_track(&mut commands, &assets, &game.content, &mut music, "theme_main");
     let moments = game.sim.music.clone();
     apply_moments(&mut commands, &assets, &game.content, &mut music, &moments, &game.sim);
+    spawn_bed(&mut commands, &assets, &game.content, &music);
+    let period = game.content.arena_scene.beacon_glow_period;
+    if !(period > 0.0) {
+        panic!("beacon_glow_period must be > 0");
+    }
+    commands.insert_resource(ArenaAudio {
+        last_time: game.sim.time,
+        travel: BTreeMap::new(),
+        variant: BTreeMap::new(),
+        beacon_cycle: (game.sim.time / period).floor() as i64,
+    });
     commands.insert_resource(music);
     commands.insert_resource(Crowd::default());
 }
@@ -209,10 +244,12 @@ pub fn play(
     fx: Res<FrameFx>,
     mut music: ResMut<Music>,
     mut crowd: ResMut<Crowd>,
-    shots: Query<(Entity, &OneShot), Without<MusicStem>>,
+    shots: Query<(Entity, &OneShot), (Without<MusicStem>, Without<PropLoop>)>,
     time: Res<Time>,
     prefs: Res<Prefs>,
     hold: Res<PauseMenu>,
+    mut arena_audio: ResMut<ArenaAudio>,
+    mut prop_loops: Query<(Entity, &PropLoop, &mut OneShot)>,
 ) {
     let hud = &game.content.presentation.hud.away;
     let mix = away_mix(away.view.look, hud.music_duck_db, hud.music_duck_lowpass_hz);
@@ -233,11 +270,16 @@ pub fn play(
         }
     }
 
-    let selected = select_voices(&game.content.audio, &fx.sounds, listener);
+    let mut events = fx.sounds.clone();
+    events.extend(arena_cues(&mut arena_audio, &game));
+    let selected = select_voices(&game.content.audio, &events, listener);
     let mut crowd_vol = 0.0;
     let mut shot_i = 0u32;
     for voice in &selected {
         let Some(def) = game.content.sfx(&voice.id) else { continue };
+        if def.looped && def.category == "prop" {
+            continue;
+        }
         if voice.crowd {
             let fullness = if def.loudness > 0.0 { voice.gain / def.loudness } else { 1.0 };
             crowd_vol = def.volume * fullness * bus_gain(&prefs, false);
@@ -271,14 +313,14 @@ pub fn play(
                 settings,
                 OneShot {
                     id: voice.id.clone(),
-                    owner: owner_of(&fx.sounds, &voice.id, voice.pos),
+                    owner: owner_of(&events, &voice.id, voice.pos),
                     started: time.elapsed_secs(),
                     order: next_voice_order(),
                     gain: full,
                 },
             ))
             .id();
-        let owner = owner_of(&fx.sounds, &voice.id, voice.pos);
+        let owner = owner_of(&events, &voice.id, voice.pos);
         if fx.stops.iter().any(|s| s.id == voice.id && s.owner == owner) {
             commands.entity(entity).despawn();
         }
@@ -288,6 +330,19 @@ pub fn play(
             commands.entity(entity).despawn();
         }
     }
+    sync_prop_loops(
+        &mut commands,
+        &assets,
+        &game,
+        &prefs,
+        hold.open,
+        solo,
+        hud.coop_pause_duck_db,
+        time.elapsed_secs(),
+        listener,
+        &selected,
+        &mut prop_loops,
+    );
     crowd.volume = crowd_vol * paused_bus(hold.open, solo, false, false, hud.coop_pause_duck_db);
     if crowd.entity.is_none() {
         if let Some(def) = game.content.sfx("swarmer_crowd") {
@@ -526,7 +581,7 @@ pub fn menu_theme(mut commands: Commands, assets: Res<AssetServer>) {
     commands.insert_resource(music);
 }
 
-pub fn stop_all(mut commands: Commands, music: Option<ResMut<Music>>, crowd: Option<Res<Crowd>>, shots: Query<Entity, Or<(With<OneShot>, With<CrowdVoice>, With<MusicStem>)>>) {
+pub fn stop_all(mut commands: Commands, music: Option<ResMut<Music>>, crowd: Option<Res<Crowd>>, shots: Query<Entity, Or<(With<OneShot>, With<CrowdVoice>, With<MusicStem>, With<BedStem>, With<PropLoop>)>>) {
     for entity in &shots {
         commands.entity(entity).despawn();
     }
@@ -773,7 +828,7 @@ pub fn attach_duck(
     ducked: Option<ResMut<Assets<DuckedMusic>>>,
     music: Option<Res<Music>>,
     output: Option<Res<GlobalVolume>>,
-    pending: Query<(Entity, &StemFile), (With<MusicStem>, Without<AudioPlayer<DuckedMusic>>)>,
+    pending: Query<(Entity, &StemFile), (Or<(With<MusicStem>, With<BedStem>)>, Without<AudioPlayer<DuckedMusic>>)>,
 ) {
     // Bevy keeps AudioOutput private. GlobalVolume is inserted with that output,
     // and a headless match does not install the audio plugin. A missing
@@ -887,10 +942,8 @@ fn ogg_seconds(path: &str) -> Option<f32> {
 }
 
 fn listener_of(game: &Game) -> SimVec {
-    game.sim
-        .players
-        .first()
-        .map(|p| p.pos)
+    game.local()
+        .map(|player| player.pos)
         .unwrap_or(SimVec::ZERO)
 }
 
@@ -899,6 +952,293 @@ fn attenuate(content: &Content, pos: SimVec, listener: SimVec) -> f32 {
     let dz = pos.z - listener.z;
     let dist = (dx * dx + dz * dz).sqrt().max(content.audio.min_distance);
     (8.0 / (8.0 + dist)).clamp(0.15, 1.0)
+}
+
+const ARENA_OGG: &[&str] = &[
+    "arena_01_bed.ogg",
+    "hive_nest_idle.ogg",
+    "relay_tower_hum.ogg",
+    "beacon_pulse.ogg",
+    "step_dirt_1.ogg",
+    "step_dirt_2.ogg",
+    "step_dirt_3.ogg",
+    "step_dirt_4.ogg",
+    "step_metal_1.ogg",
+    "step_metal_2.ogg",
+    "step_metal_3.ogg",
+    "step_metal_4.ogg",
+    "step_rock_1.ogg",
+    "step_rock_2.ogg",
+    "step_rock_3.ogg",
+    "step_rock_4.ogg",
+    "step_resin_1.ogg",
+    "step_resin_2.ogg",
+    "step_resin_3.ogg",
+    "step_resin_4.ogg",
+];
+
+fn arena_audio_bytes(name: &str) -> Result<&'static [u8], String> {
+    let bytes: &[u8] = match name {
+        "arena_01_bed.ogg" => include_bytes!("../../../assets/audio/sfx/arena_01_bed.ogg"),
+        "hive_nest_idle.ogg" => include_bytes!("../../../assets/audio/sfx/hive_nest_idle.ogg"),
+        "relay_tower_hum.ogg" => include_bytes!("../../../assets/audio/sfx/relay_tower_hum.ogg"),
+        "beacon_pulse.ogg" => include_bytes!("../../../assets/audio/sfx/beacon_pulse.ogg"),
+        "step_dirt_1.ogg" => include_bytes!("../../../assets/audio/sfx/step_dirt_1.ogg"),
+        "step_dirt_2.ogg" => include_bytes!("../../../assets/audio/sfx/step_dirt_2.ogg"),
+        "step_dirt_3.ogg" => include_bytes!("../../../assets/audio/sfx/step_dirt_3.ogg"),
+        "step_dirt_4.ogg" => include_bytes!("../../../assets/audio/sfx/step_dirt_4.ogg"),
+        "step_metal_1.ogg" => include_bytes!("../../../assets/audio/sfx/step_metal_1.ogg"),
+        "step_metal_2.ogg" => include_bytes!("../../../assets/audio/sfx/step_metal_2.ogg"),
+        "step_metal_3.ogg" => include_bytes!("../../../assets/audio/sfx/step_metal_3.ogg"),
+        "step_metal_4.ogg" => include_bytes!("../../../assets/audio/sfx/step_metal_4.ogg"),
+        "step_rock_1.ogg" => include_bytes!("../../../assets/audio/sfx/step_rock_1.ogg"),
+        "step_rock_2.ogg" => include_bytes!("../../../assets/audio/sfx/step_rock_2.ogg"),
+        "step_rock_3.ogg" => include_bytes!("../../../assets/audio/sfx/step_rock_3.ogg"),
+        "step_rock_4.ogg" => include_bytes!("../../../assets/audio/sfx/step_rock_4.ogg"),
+        "step_resin_1.ogg" => include_bytes!("../../../assets/audio/sfx/step_resin_1.ogg"),
+        "step_resin_2.ogg" => include_bytes!("../../../assets/audio/sfx/step_resin_2.ogg"),
+        "step_resin_3.ogg" => include_bytes!("../../../assets/audio/sfx/step_resin_3.ogg"),
+        "step_resin_4.ogg" => include_bytes!("../../../assets/audio/sfx/step_resin_4.ogg"),
+        other => return Err(format!("arena audio \"{other}\" is not embedded")),
+    };
+    if bytes.is_empty() {
+        return Err(format!("arena audio \"{name}\" is empty"));
+    }
+    Ok(bytes)
+}
+
+fn arena_audio_linked() -> usize {
+    ARENA_OGG
+        .iter()
+        .map(|name| {
+            arena_audio_bytes(name)
+                .unwrap_or_else(|err| panic!("{err}"))
+                .len()
+        })
+        .sum()
+}
+
+fn spawn_bed(commands: &mut Commands, assets: &AssetServer, content: &Content, music: &Music) {
+    let def = content
+        .sfx("arena_01_bed")
+        .unwrap_or_else(|| panic!("missing arena_01_bed"));
+    let volume = def.volume * music.duck_gain * music.user_gain;
+    commands.spawn((
+        StemFile(assets.load::<AudioSource>(def.path.clone())),
+        PlaybackSettings::LOOP.with_volume(Volume::Linear(volume)),
+        BedStem,
+    ));
+}
+
+pub fn sync_bed(
+    music: Option<Res<Music>>,
+    game: Option<Res<Game>>,
+    mut sinks: Query<&mut AudioSink, With<BedStem>>,
+) {
+    let (Some(music), Some(game)) = (music, game) else {
+        return;
+    };
+    let def = game
+        .content
+        .sfx("arena_01_bed")
+        .unwrap_or_else(|| panic!("missing arena_01_bed"));
+    let volume = def.volume * music.duck_gain * music.user_gain;
+    for mut sink in &mut sinks {
+        sink.set_volume(Volume::Linear(volume));
+    }
+}
+
+fn arena_cues(state: &mut ArenaAudio, game: &Game) -> Vec<SoundEvent> {
+    let mut events = footstep_cues(state, game);
+    events.extend(beacon_cues(state, game));
+    events.extend(prop_cues(game));
+    events
+}
+
+fn footstep_cues(state: &mut ArenaAudio, game: &Game) -> Vec<SoundEvent> {
+    let now = game.sim.time;
+    let dt = now - state.last_time;
+    state.last_time = now;
+    if dt == 0.0 {
+        return Vec::new();
+    }
+    if dt < 0.0 {
+        panic!("sim time went backwards");
+    }
+    let steps = &game.content.audio.footstep;
+    if !(steps.stride > 0.0) {
+        panic!("footstep stride must be > 0");
+    }
+    let local = game.local().map(|player| player.id);
+    let mut out = Vec::new();
+    for player in &game.sim.players {
+        if !player.alive || !player.connected || !player.grounded {
+            continue;
+        }
+        let speed = (player.vel.x * player.vel.x + player.vel.z * player.vel.z).sqrt();
+        if speed < steps.min_speed {
+            continue;
+        }
+        let travel = state.travel.entry(player.id).or_insert(0.0);
+        *travel += speed * dt;
+        if *travel < steps.stride {
+            continue;
+        }
+        *travel -= steps.stride;
+        let kind = game
+            .content
+            .surface_kind(&player.under_part)
+            .unwrap_or_else(|err| panic!("{err}"));
+        let rows = steps
+            .rows
+            .get(&kind)
+            .unwrap_or_else(|| panic!("footstep.rows missing {kind}"));
+        if rows.is_empty() {
+            panic!("footstep.rows {kind} is empty");
+        }
+        let n = state.variant.entry(player.id).or_insert(0);
+        let id = rows[*n as usize % rows.len()].clone();
+        *n = n.wrapping_add(1);
+        let priority = if Some(player.id) == local {
+            None
+        } else {
+            Some(steps.remote_priority)
+        };
+        out.push(SoundEvent {
+            id,
+            pos: player.pos,
+            owner: player.id,
+            priority,
+        });
+    }
+    out
+}
+
+fn beacon_cues(state: &mut ArenaAudio, game: &Game) -> Vec<SoundEvent> {
+    let period = game.content.arena_scene.beacon_glow_period;
+    if !(period > 0.0) {
+        panic!("beacon_glow_period must be > 0");
+    }
+    let cycle = (game.sim.time / period).floor() as i64;
+    if cycle == state.beacon_cycle {
+        return Vec::new();
+    }
+    state.beacon_cycle = cycle;
+    let points = gemini_sim::scenery::beacon_points(&game.content.arena, &game.content.arena_scene)
+        .unwrap_or_else(|err| panic!("{err}"));
+    points
+        .into_iter()
+        .map(|pos| SoundEvent {
+            id: "beacon_pulse".into(),
+            pos,
+            owner: 0,
+            priority: None,
+        })
+        .collect()
+}
+
+fn prop_cues(game: &Game) -> Vec<SoundEvent> {
+    let mut out = Vec::new();
+    let nests = gemini_sim::scenery::nest_points(&game.content.arena, &game.content.arena_scene)
+        .unwrap_or_else(|err| panic!("{err}"));
+    for pos in nests {
+        out.push(SoundEvent {
+            id: "hive_nest_idle".into(),
+            pos,
+            owner: 0,
+            priority: None,
+        });
+    }
+    let towers = gemini_sim::scenery::relay_points(&game.content.arena, &game.content.arena_scene)
+        .unwrap_or_else(|err| panic!("{err}"));
+    for pos in towers {
+        out.push(SoundEvent {
+            id: "relay_tower_hum".into(),
+            pos,
+            owner: 0,
+            priority: None,
+        });
+    }
+    out
+}
+
+fn sync_prop_loops(
+    commands: &mut Commands,
+    assets: &AssetServer,
+    game: &Game,
+    prefs: &Prefs,
+    hold_open: bool,
+    solo: bool,
+    coop_duck_db: f32,
+    time: f32,
+    listener: SimVec,
+    selected: &[Voice],
+    existing: &mut Query<(Entity, &PropLoop, &mut OneShot)>,
+) {
+    let mut wanted: Vec<Voice> = selected
+        .iter()
+        .filter(|voice| {
+            game.content
+                .sfx(&voice.id)
+                .is_some_and(|def| def.looped && def.category == "prop")
+        })
+        .cloned()
+        .collect();
+    for (entity, prop, mut shot) in existing.iter_mut() {
+        let slot = wanted
+            .iter()
+            .position(|voice| voice.id == prop.id && voice.pos == prop.pos);
+        if let Some(index) = slot {
+            let voice = &wanted[index];
+            let def = game
+                .content
+                .sfx(&voice.id)
+                .unwrap_or_else(|| panic!("missing {}", voice.id));
+            let atten = if def.flat {
+                1.0
+            } else {
+                attenuate(&game.content, voice.pos, listener)
+            };
+            shot.gain = def.volume * atten * bus_gain(prefs, false);
+            wanted.remove(index);
+        } else {
+            commands.entity(entity).despawn();
+        }
+    }
+    for voice in wanted {
+        let def = game
+            .content
+            .sfx(&voice.id)
+            .unwrap_or_else(|| panic!("missing {}", voice.id));
+        let atten = if def.flat {
+            1.0
+        } else {
+            attenuate(&game.content, voice.pos, listener)
+        };
+        let full = def.volume * atten * bus_gain(prefs, false);
+        let bus = paused_bus(
+            hold_open,
+            solo,
+            def.category_ui,
+            def.is_warning,
+            coop_duck_db,
+        );
+        commands.spawn((
+            AudioPlayer::new(assets.load::<AudioSource>(def.path.clone())),
+            PlaybackSettings::LOOP.with_volume(Volume::Linear(full * bus)),
+            OneShot {
+                id: voice.id.clone(),
+                owner: 0,
+                started: time,
+                order: next_voice_order(),
+                gain: full,
+            },
+            PropLoop {
+                id: voice.id,
+                pos: voice.pos,
+            },
+        ));
+    }
 }
 
 fn owner_of(events: &[SoundEvent], id: &str, pos: SimVec) -> u32 {
@@ -1100,5 +1440,15 @@ mod tests {
         assert_eq!(super::paused_bus(true, false, false, true, duck), 1.0, "warnings stay full in co-op");
         assert_eq!(super::paused_bus(true, true, false, true, duck), 1.0, "warnings stay full in solo");
         assert_eq!(super::paused_bus(false, true, false, false, duck), 1.0);
+    }
+
+    #[test]
+    fn arena_sounds_are_embedded_without_a_disk_fallback() {
+        for name in super::ARENA_OGG {
+            let bytes = super::arena_audio_bytes(name).unwrap_or_else(|err| panic!("{err}"));
+            assert!(bytes.len() > 32, "{name}");
+        }
+        let err = super::arena_audio_bytes("missing.ogg").unwrap_err();
+        assert!(err.contains("not embedded"), "{err}");
     }
 }

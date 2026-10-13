@@ -924,6 +924,7 @@ struct ShadeSplit {
     bloom: bool,
 }
 
+
 /// Scene key, fill, and ambient shade scenery. Scenery never carries bloom or an emissive.
 fn shade_for_scenery(lit: bool, bloom: bool) -> ShadeSplit {
     if bloom {

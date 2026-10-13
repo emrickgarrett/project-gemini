@@ -74,6 +74,7 @@ fn install_match(app: &mut App) {
                     audio::hold_loops,
                     audio::attach_duck,
                     audio::sync_gains,
+                    audio::sync_bed,
                     audio::sync_crowd,
                     world::sync,
                     world::sync_viewmodel,

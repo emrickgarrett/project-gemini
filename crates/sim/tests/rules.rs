@@ -490,18 +490,21 @@ fn mixer_caps_voices_and_keeps_the_charge_cue() {
             id: "vex_fire".into(),
             pos: Vec3::new(i as f32, 0.0, 0.0),
             owner: 0,
+            priority: None,
         });
     }
     events.push(SoundEvent {
         id: "spitter_charge".into(),
         pos: Vec3::new(80.0, 0.0, 0.0),
         owner: 1,
+        priority: None,
     });
     for i in 0..25 {
         events.push(SoundEvent {
             id: "swarmer_crowd".into(),
             pos: Vec3::new(0.2 * i as f32, 0.0, 1.0),
             owner: 0,
+            priority: None,
         });
     }
     let voices = select_voices(audio, &events, Vec3::ZERO);
@@ -3318,12 +3321,12 @@ fn scenery_limits_fail_the_load() {
         assert!(content.arena.surfaces.iter().any(|row| row.kind == kind), "missing surface {kind}");
     }
     for (part, kind) in [
-        ("floor", "dirt"),
-        ("deck", "metal"),
-        ("rail", "metal"),
-        ("stairs", "metal"),
-        ("rim", "rock"),
-        ("nest", "resin"),
+        ("dirt_floor", "dirt"),
+        ("metal_deck", "metal"),
+        ("metal_rail", "metal"),
+        ("metal_stairs", "metal"),
+        ("rock_rim", "rock"),
+        ("resin_nest", "resin"),
     ] {
         assert!(
             content.arena.surfaces.iter().any(|row| row.part == part && row.kind == kind),
@@ -3416,6 +3419,133 @@ fn scenery_limits_fail_the_load() {
     let bad_navy = base.arena_visual.replacen("navy = \"navy\"", "navy = \"missing\"", 1);
     let err = visual(&bad_navy).expect_err("navy material");
     assert!(err.contains("missing"), "{err}");
+    let dropped = base.arena.replacen("ground = \"dirt_floor\"\n", "", 1);
+    let err = arena(&dropped).expect_err("missing stance part");
+    assert!(err.contains("ground"), "{err}");
+    let mud = base.arena.replacen("kind = \"dirt\"", "kind = \"mud\"", 1);
+    let err = arena(&mud).expect_err("bad surface kind");
+    assert!(err.contains("mud"), "{err}");
+    let sky = base.arena.replacen("\"ground\"", "\"sky\"", 1);
+    let err = arena(&sky).expect_err("unknown stance");
+    assert!(err.contains("no test"), "{err}");
+}
+
+#[test]
+fn every_surface_resolves_to_a_step_row() {
+    let content = Content::embedded();
+    assert!((content.arena_scene.beacon_glow_period - 1.8).abs() < 1e-4);
+    let pulse = content.sfx("beacon_pulse").expect("beacon_pulse");
+    assert!(!pulse.looped);
+    for surface in &content.arena.surfaces {
+        let rows = content
+            .audio
+            .footstep
+            .rows
+            .get(&surface.kind)
+            .unwrap_or_else(|| panic!("surface {} kind {}", surface.id, surface.kind));
+        assert!((3..=4).contains(&rows.len()), "{}", surface.kind);
+        for id in rows {
+            let def = content.sfx(id).unwrap_or_else(|| panic!("missing {id}"));
+            assert_eq!(def.category, "player");
+            assert!(def.stealable && !def.flat && !def.looped, "{id}");
+        }
+    }
+    let sim = gemini_sim::sim::Sim::new(&content, "normal", 1);
+    assert_eq!(sim.players[0].under_part, "metal_deck");
+    assert_eq!(
+        content
+            .part_under(gemini_sim::math::Vec3::new(0.0, 4.0, 0.0))
+            .unwrap(),
+        "metal_deck"
+    );
+    assert_eq!(
+        content
+            .part_under(gemini_sim::math::Vec3::new(0.0, 4.0, 7.9))
+            .unwrap(),
+        "metal_rail"
+    );
+    assert_eq!(
+        content
+            .part_under(gemini_sim::math::Vec3::new(12.0, 2.0, 0.0))
+            .unwrap(),
+        "metal_stairs"
+    );
+    assert_eq!(
+        content
+            .part_under(gemini_sim::math::Vec3::new(0.0, 0.0, 12.0))
+            .unwrap(),
+        "dirt_floor"
+    );
+    assert_eq!(
+        content
+            .part_under(gemini_sim::math::Vec3::new(0.0, 0.0, 50.0))
+            .unwrap(),
+        "rock_rim"
+    );
+    assert_eq!(
+        content
+            .part_under(gemini_sim::math::Vec3::new(11.0, 2.4, 19.05))
+            .unwrap(),
+        "rock_rim"
+    );
+    let nest = &content.arena_scene.nests[0];
+    let vent = content
+        .arena
+        .vents
+        .iter()
+        .find(|vent| vent.id == nest.vent)
+        .unwrap();
+    let anchor = gemini_sim::scenery::nest_anchor(
+        vent.pos.x,
+        vent.pos.z,
+        nest.outset,
+        content.arena_scene.nest_lift,
+    );
+    assert_eq!(
+        content
+            .part_under(gemini_sim::math::Vec3::new(anchor[0], anchor[1], anchor[2]))
+            .unwrap(),
+        "resin_nest"
+    );
+    let mut broken = content.clone();
+    broken.arena.stance_order.insert(0, "sky".into());
+    let err = broken.part_under(gemini_sim::math::Vec3::ZERO).unwrap_err();
+    assert!(err.contains("no test"), "{err}");
+    broken.arena.stance_order.clear();
+    let err = broken
+        .part_under(gemini_sim::math::Vec3::new(1.0, 2.0, 3.0))
+        .unwrap_err();
+    assert!(err.contains("1"), "{err}");
+    assert!(err.contains("2"), "{err}");
+    assert!(err.contains("3"), "{err}");
+}
+
+#[test]
+fn every_reachable_spot_hits_a_stance() {
+    let content = Content::embedded();
+    let radius = content.arena.radius;
+    let jump = &content.controller.jump;
+    assert!(jump.gravity > 0.0 && jump.jump_velocity > 0.0);
+    let jump_height = jump.jump_velocity * jump.jump_velocity / (2.0 * jump.gravity);
+    let ceiling = content.arena.platform.height + jump_height;
+    let step = 1.0_f32;
+    let n = (radius / step).ceil() as i32;
+    let ny = (ceiling / step).ceil() as i32;
+    for iy in 0..=ny {
+        let y = (iy as f32 * step).min(ceiling);
+        for ix in -n..=n {
+            for iz in -n..=n {
+                let x = ix as f32 * step;
+                let z = iz as f32 * step;
+                if x * x + z * z > radius * radius {
+                    continue;
+                }
+                content
+                    .part_under(gemini_sim::math::Vec3::new(x, y, z))
+                    .unwrap_or_else(|err| panic!("{err}"));
+            }
+        }
+    }
 }
 
 fn sources_ranks<'a>(
