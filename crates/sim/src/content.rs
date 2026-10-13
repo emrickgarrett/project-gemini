@@ -2463,6 +2463,7 @@ fn load_arena_dressing(text: &str) -> Result<(ArenaDressing, crate::scenery::Are
             "ledge_size",
             "ledge_thickness",
             "ledge_skirt_scale",
+            "ledge_plinth_run",
             "bulb_chamfer_scale",
             "bulb_stacks",
             "clutter_chamfer_scale",

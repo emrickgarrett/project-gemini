@@ -95,6 +95,7 @@ pub struct ArenaScene {
     pub ledge_size: [f32; 3],
     pub ledge_thickness: f32,
     pub ledge_skirt_scale: f32,
+    pub ledge_plinth_run: f32,
     pub bulb_chamfer_scale: f32,
     pub bulb_stacks: u32,
     pub clutter_chamfer_scale: f32,
@@ -381,6 +382,7 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
         ledge_size: content::vis_vec3(table, "ledge_size", what)?,
         ledge_thickness: content::vis_f32(table, "ledge_thickness", what)?,
         ledge_skirt_scale: content::vis_f32(table, "ledge_skirt_scale", what)?,
+        ledge_plinth_run: content::vis_f32(table, "ledge_plinth_run", what)?,
         bulb_chamfer_scale: content::vis_f32(table, "bulb_chamfer_scale", what)?,
         bulb_stacks: content::vis_u32(table, "bulb_stacks", what)?,
         clutter_chamfer_scale: content::vis_f32(table, "clutter_chamfer_scale", what)?,
@@ -494,6 +496,7 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
         || !(scene.panel_depth_scale > 0.0)
         || !(scene.ledge_thickness > 0.0)
         || !(scene.ledge_skirt_scale > 0.0)
+        || !(scene.ledge_plinth_run > 0.0)
         || !(scene.bulb_chamfer_scale > 0.0)
         || !(scene.clutter_chamfer_scale > 0.0)
         || !(scene.dome_radius_scale > 0.0)

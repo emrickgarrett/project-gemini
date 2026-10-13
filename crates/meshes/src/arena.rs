@@ -270,11 +270,22 @@ fn deck_pieces(content: &Content) -> Vec<ArenaPiece> {
 fn railing(content: &Content) -> Vec<ArenaPiece> {
     let dress = &content.arena_dressing;
     let platform = &content.arena.platform;
-    let navy = mat(scene_materials(content), &content.arena_scene.navy);
+    let scene = &content.arena_scene;
+    let navy = mat(scene_materials(content), &scene.navy);
+    let pale = mat(scene_materials(content), &scene.pale);
+    let trim = mat(scene_materials(content), &scene.trim);
     let mut posts = MeshData::new();
     let mut beam = MeshData::new();
+    let mut caps = MeshData::new();
+    let mut bands = MeshData::new();
     let y = platform.height + dress.rail_height * 0.5;
     let radius = platform.radius;
+    let cap_h = scene.trim_height;
+    let band_h = scene.trim_height;
+    let shaft_h = dress.rail_height - cap_h - band_h;
+    if !(shaft_h > 0.0) {
+        panic!("rail_height must leave room for the pale cap and the cyan trim");
+    }
     for i in 0..dress.rail_posts {
         let ang = i as f32 / dress.rail_posts as f32 * std::f32::consts::TAU;
         let (s, c) = ang.sin_cos();
@@ -286,13 +297,37 @@ fn railing(content: &Content) -> Vec<ArenaPiece> {
         let mut post = MeshData::new();
         geom::box_mesh(
             &mut post,
-            [0.0, 0.0, 0.0],
-            [dress.rail_thickness, dress.rail_height, dress.rail_thickness],
+            [0.0, shaft_h * 0.5 - dress.rail_height * 0.5, 0.0],
+            [dress.rail_thickness, shaft_h, dress.rail_thickness],
             INK,
         );
         geom::rotate_y(&mut post, ang);
         geom::translate(&mut post, [x, y, z]);
         append_mesh(&mut posts, &post);
+        let mut cap = MeshData::new();
+        geom::box_mesh(
+            &mut cap,
+            [0.0, dress.rail_height * 0.5 - cap_h * 0.5, 0.0],
+            [dress.rail_thickness, cap_h, dress.rail_thickness],
+            INK,
+        );
+        geom::rotate_y(&mut cap, ang);
+        geom::translate(&mut cap, [x, y, z]);
+        append_mesh(&mut caps, &cap);
+        let mut band = MeshData::new();
+        geom::box_mesh(
+            &mut band,
+            [
+                0.0,
+                dress.rail_height * 0.5 - cap_h - band_h * 0.5,
+                dress.rail_thickness * 0.5,
+            ],
+            [dress.rail_thickness, band_h, scene.panel_thickness],
+            INK,
+        );
+        geom::rotate_y(&mut band, ang);
+        geom::translate(&mut band, [x, y, z]);
+        append_mesh(&mut bands, &band);
     }
     let step = dress.rail_thickness / radius;
     for i in 0..dress.deck_sides {
@@ -322,6 +357,8 @@ fn railing(content: &Content) -> Vec<ArenaPiece> {
     vec![
         tagged(posts, navy, "rail"),
         tagged(beam, navy, "rail"),
+        tagged(caps, pale, "rail"),
+        tagged(bands, trim, "rail"),
     ]
 }
 
@@ -490,136 +527,176 @@ fn ledge_pad(content: &Content, x: f32, y: f32, z: f32) -> Vec<ArenaPiece> {
     vec![
         piece(pad, material),
         piece(skirt, mat(scene_materials(content), &scene.navy)),
+        piece(
+            ledge_plinth(content, x, y, z),
+            mat(scene_materials(content), &scene.boulder),
+        ),
     ]
 }
 
-fn rim_pile(content: &Content, cliff: &gemini_sim::scenery::Cliff) -> MeshData {
+/// Rock under a jetpack pad, wide at the dirt and narrow at the slab, so the pad sits on the ground.
+fn ledge_plinth(content: &Content, x: f32, y: f32, z: f32) -> MeshData {
+    let scene = &content.arena_scene;
+    let floor_y = scene
+        .floors
+        .iter()
+        .map(|floor| floor.y)
+        .fold(f32::MAX, f32::min);
+    let top_y = y - scene.ledge_size[1] - scene.ledge_thickness;
     let mut mesh = MeshData::new();
-    for (start, end) in clear_arcs(content, cliff) {
-        pile_arc(&mut mesh, content, cliff, start, end);
+    if !(top_y > floor_y) {
+        return mesh;
+    }
+    let rise = top_y - floor_y;
+    let top_r = (scene.ledge_size[0] * scene.ledge_size[0] + scene.ledge_size[2] * scene.ledge_size[2]).sqrt()
+        * 0.5;
+    let bot_r = top_r + rise * scene.ledge_plinth_run;
+    let sides = scene.boulder_slices;
+    for i in 0..sides {
+        let a0 = i as f32 / sides as f32 * std::f32::consts::TAU;
+        let a1 = (i + 1) as f32 / sides as f32 * std::f32::consts::TAU;
+        let (s0, c0) = a0.sin_cos();
+        let (s1, c1) = a1.sin_cos();
+        geom::add_quad(
+            &mut mesh,
+            [x + s0 * bot_r, floor_y, z + c0 * bot_r],
+            [x + s1 * bot_r, floor_y, z + c1 * bot_r],
+            [x + s1 * top_r, top_y, z + c1 * top_r],
+            [x + s0 * top_r, top_y, z + c0 * top_r],
+            INK,
+        );
     }
     mesh
 }
 
-/// Boulders along one clear arc. The inner row is shorter, so the pile slopes down into the arena.
-fn pile_arc(
-    mesh: &mut MeshData,
-    content: &Content,
-    cliff: &gemini_sim::scenery::Cliff,
-    start: f32,
-    end: f32,
-) {
+/// One faceted slope from the play-disc edge up to the crest. Neighboring cliffs share boundary
+/// heights, so the mass stays continuous instead of reading as separate mounds.
+fn rim_pile(content: &Content, cliff: &gemini_sim::scenery::Cliff) -> MeshData {
     let scene = &content.arena_scene;
-    let span = end - start;
-    if span < scene.rim_min_arc_deg {
-        return;
+    let start = cliff.angle_deg;
+    let end = cliff.angle_deg + cliff.span_deg;
+    let mut mesh = MeshData::new();
+    if end - start < scene.rim_min_arc_deg {
+        return mesh;
     }
+    let floor_y = scene
+        .floors
+        .iter()
+        .map(|floor| floor.y)
+        .fold(f32::MAX, f32::min);
     let rows = scene.rim_rows;
-    let count = scene.rim_boulders;
-    let radial = cliff.outer - cliff.inner;
-    let depth = radial / rows as f32 * scene.rim_fill;
-    let slot = span / count as f32;
-    for i in 0..count {
-        let mid = start + slot * (i as f32 + 0.5);
-        for row in 0..rows {
-            let center_r = cliff.inner + radial * (row as f32) / rows as f32 + depth * 0.5;
-            let crest = if row + 1 == rows {
+    let splits = scene.rim_boulders;
+    let toe_s = shared_rim_height(content, start, false);
+    let toe_e = shared_rim_height(content, end, false);
+    let crest_s = shared_rim_height(content, start, true);
+    let crest_e = shared_rim_height(content, end, true);
+    let toe_mid = cliff.inner_height * scene.rim_inner_scale;
+    let crest_mid = cliff.outer_height * scene.rim_inner_scale;
+    let cols = (rows + 1) as usize;
+    let mut grid = Vec::with_capacity((splits as usize + 1) * cols);
+    for i in 0..=splits {
+        let u = i as f32 / splits as f32;
+        let ang_deg = start + (end - start) * u;
+        let toe = blend_peak(u, toe_s, toe_mid, toe_e);
+        let crest = blend_peak(u, crest_s, crest_mid, crest_e);
+        let dip = nest_dip(content, ang_deg) * scene.chunk_size[1];
+        for row in 0..=rows {
+            let v = row as f32 / rows as f32;
+            let radial = cliff.inner + (cliff.outer - cliff.inner) * v * scene.rim_fill;
+            let y = (toe + (crest - toe) * v - dip).max(floor_y);
+            let facet = if row > 0 && row < rows && i > 0 && i < splits {
+                scene.rim_stagger_deg * if row % 2 == 0 { 1.0 } else { -1.0 }
+            } else {
+                0.0
+            };
+            let (s, c) = (ang_deg + facet).to_radians().sin_cos();
+            grid.push([s * radial, y, c * radial]);
+        }
+    }
+    for i in 0..splits as usize {
+        for row in 0..rows as usize {
+            let a = grid[i * cols + row];
+            let b = grid[i * cols + row + 1];
+            let d = grid[(i + 1) * cols + row];
+            let c = grid[(i + 1) * cols + row + 1];
+            geom::add_quad(&mut mesh, a, b, c, d, INK);
+        }
+        let inner = grid[i * cols];
+        let inner_next = grid[(i + 1) * cols];
+        geom::add_quad(
+            &mut mesh,
+            inner,
+            inner_next,
+            [inner_next[0], floor_y, inner_next[2]],
+            [inner[0], floor_y, inner[2]],
+            INK,
+        );
+        let outer = grid[i * cols + rows as usize];
+        let outer_next = grid[(i + 1) * cols + rows as usize];
+        geom::add_quad(
+            &mut mesh,
+            outer,
+            [outer[0], floor_y, outer[2]],
+            [outer_next[0], floor_y, outer_next[2]],
+            outer_next,
+            INK,
+        );
+    }
+    mesh
+}
+
+fn blend_peak(u: f32, start: f32, mid: f32, end: f32) -> f32 {
+    if u <= 0.5 {
+        start + (mid - start) * (u / 0.5)
+    } else {
+        mid + (end - mid) * ((u - 0.5) / 0.5)
+    }
+}
+
+fn shared_rim_height(content: &Content, angle_deg: f32, outer: bool) -> f32 {
+    let scene = &content.arena_scene;
+    let mut sum = 0.0;
+    let mut count = 0.0;
+    for cliff in &scene.cliffs {
+        let end = cliff.angle_deg + cliff.span_deg;
+        if near_deg(cliff.angle_deg, angle_deg) || near_deg(end, angle_deg) {
+            let height = if outer {
                 cliff.outer_height
             } else {
                 cliff.inner_height
             };
-            let height = crest * scene.rim_inner_scale;
-            let stagger = if (row + i) % 2 == 0 {
-                scene.rim_stagger_deg
-            } else {
-                -scene.rim_stagger_deg
-            };
-            let ang = (mid + stagger).to_radians();
-            let width = center_r * slot.to_radians() * scene.rim_fill;
-            let run = cliff.outer - cliff.inner;
-            let rise = cliff.outer_height - cliff.inner_height;
-            let tilt = -(rise / run).atan();
-            let lift = row as f32 * cliff.inner_height * scene.rim_inner_scale / rows as f32;
-            place_rock(mesh, ang, center_r, [width, height, depth], tilt, lift, scene);
+            sum += height * scene.rim_inner_scale;
+            count += 1.0;
         }
     }
-    let chunk = scene.chunk_size;
-    let mid = (start + end) * 0.5;
-    place_rock(
-        mesh,
-        (mid + scene.rim_stagger_deg).to_radians(),
-        cliff.inner + chunk[2] * 0.5,
-        chunk,
-        0.0,
-        0.0,
-        scene,
-    );
+    if count == 0.0 {
+        panic!("rim slope has no cliff at {angle_deg} deg");
+    }
+    sum / count
 }
 
-/// Cliff arc with the nest windows cut out, so a nest can sit in the wall.
-fn clear_arcs(content: &Content, cliff: &gemini_sim::scenery::Cliff) -> Vec<(f32, f32)> {
-    let mut spans = vec![(cliff.angle_deg, cliff.angle_deg + cliff.span_deg)];
+fn near_deg(a: f32, b: f32) -> bool {
+    let mut d = (a - b).rem_euclid(360.0);
+    if d > 180.0 {
+        d = 360.0 - d;
+    }
+    d <= 0.05
+}
+
+/// 0 at open rock, 1 on a vent bearing, so the slope dips and the hive pod sits in the mass.
+fn nest_dip(content: &Content, angle_deg: f32) -> f32 {
     let gap = content.arena_scene.nest_gap_deg;
+    let mut dip: f32 = 0.0;
     for vent in &content.arena.vents {
-        let mut next = Vec::new();
-        for (start, end) in spans {
-            next.extend(cut_span(start, end, vent.bearing_deg, gap));
+        let mut d = (angle_deg - vent.bearing_deg).rem_euclid(360.0);
+        if d > 180.0 {
+            d = 360.0 - d;
         }
-        spans = next;
-    }
-    spans
-}
-
-fn cut_span(start: f32, end: f32, bearing: f32, gap: f32) -> Vec<(f32, f32)> {
-    let mut spans = vec![(start, end)];
-    for shift in [-360.0, 0.0, 360.0] {
-        let lo = bearing + shift - gap;
-        let hi = bearing + shift + gap;
-        let mut next = Vec::new();
-        for (a, b) in spans {
-            if hi <= a || lo >= b {
-                next.push((a, b));
-                continue;
-            }
-            if lo > a {
-                next.push((a, lo));
-            }
-            if hi < b {
-                next.push((hi, b));
-            }
+        if d < gap {
+            dip = dip.max(1.0 - d / gap);
         }
-        spans = next;
     }
-    spans
-}
-
-fn place_rock(
-    mesh: &mut MeshData,
-    ang: f32,
-    radius: f32,
-    size: [f32; 3],
-    tilt: f32,
-    lift: f32,
-    scene: &gemini_sim::scenery::ArenaScene,
-) {
-    let mut rock = MeshData::new();
-    let radii = [size[0] * 0.5, size[1] * 0.5, size[2] * 0.5];
-    geom::gem(
-        &mut rock,
-        [0.0, 0.0, 0.0],
-        radii,
-        scene.boulder_slices,
-        scene.boulder_stacks,
-        INK,
-    );
-    geom::rotate_x(&mut rock, tilt);
-    geom::rotate_y(&mut rock, ang);
-    let (s, c) = ang.sin_cos();
-    // The lean pulls the crest inward. Shift the mound out by that amount so it stays outside the floor.
-    let shove = tilt.abs().sin() * size[1] * 0.5;
-    let placed = radius + shove;
-    geom::translate(&mut rock, [s * placed, lift + size[1] * 0.5, c * placed]);
-    append_mesh(mesh, &rock);
+    dip
 }
 
 fn append_mesh(mesh: &mut MeshData, extra: &MeshData) {

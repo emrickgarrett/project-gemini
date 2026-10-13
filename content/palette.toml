@@ -100,8 +100,8 @@ gear_brakk_shield_secondary = "#163662"
 gear_brakk_shield_accent = "#A71126"
 # Arena 01 scenery. Surface albedos stay under the darkest actor base.
 # Fog and sky stay darker than the lit floor so the sky is never the brightest thing.
-dirt_mauve = "#3A2E40"
-dirt_outer = "#322838"
+dirt_mauve = "#342848"
+dirt_outer = "#2A2038"
 rim_violet = "#292434"
 rim_violet_hi = "#312D3D"
 boulder_violet = "#2A282F"

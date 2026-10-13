@@ -39,6 +39,7 @@ vent_center_y = 0.2
 ledge_size = [2.4, 0.62, 2.4]
 ledge_thickness = 0.12
 ledge_skirt_scale = 0.82
+ledge_plinth_run = 0.85
 bulb_chamfer_scale = 0.2
 bulb_stacks = 2
 clutter_chamfer_scale = 0.18
@@ -64,10 +65,10 @@ deck_open_deg = 12.0
 stair_count = 5
 stair_tread = 0.85
 stair_thickness = 0.1
-rim_rows = 2
+rim_rows = 3
 rim_boulders = 2
 rim_fill = 1.0
-rim_inner_scale = 0.32
+rim_inner_scale = 1.0
 rim_stagger_deg = 0.8
 rim_min_arc_deg = 2.0
 chunk_size = [1.6, 0.85, 1.3]
@@ -82,7 +83,7 @@ shadow_max_t = 80.0
 shadow_self_pad = 0.05
 max_triangles = 10200
 max_bytes = 1120000
-sha256 = "682e5b46e68ae8183fde4813fe1030ad09ec91799b90a03cf35a4cb6b6053fa4"
+sha256 = "b87eae39ffd272082ab95d38054f00125e9958569d0ec7abd0cea85730e9add3"
 review_ambient = 0.38
 review_key = 0.28
 review_fill = 0.12
@@ -283,8 +284,8 @@ angle_deg = 0
 span_deg = 15.0
 inner = 40.25
 outer = 46.2
-inner_height = 4.8
-outer_height = 7.6
+inner_height = 0.28
+outer_height = 3.20
 material = "rim_hi"
 [[cliff]]
 id = "cliff_01"
@@ -292,8 +293,8 @@ angle_deg = 15
 span_deg = 15.0
 inner = 40.25
 outer = 47.050000000000004
-inner_height = 8.5
-outer_height = 11.65
+inner_height = 0.36
+outer_height = 4.25
 material = "rim"
 [[cliff]]
 id = "cliff_02"
@@ -301,8 +302,8 @@ angle_deg = 30
 span_deg = 15.0
 inner = 40.25
 outer = 47.900000000000006
-inner_height = 9.4
-outer_height = 12.899999999999999
+inner_height = 0.44
+outer_height = 5.30
 material = "rim_hi"
 [[cliff]]
 id = "cliff_03"
@@ -310,8 +311,8 @@ angle_deg = 45
 span_deg = 15.0
 inner = 40.25
 outer = 48.75
-inner_height = 7.6
-outer_height = 11.45
+inner_height = 0.28
+outer_height = 3.90
 material = "rim"
 [[cliff]]
 id = "cliff_04"
@@ -319,8 +320,8 @@ angle_deg = 60
 span_deg = 15.0
 inner = 40.25
 outer = 49.6
-inner_height = 4.8
-outer_height = 7.6
+inner_height = 0.36
+outer_height = 4.95
 material = "rim_hi"
 [[cliff]]
 id = "cliff_05"
@@ -328,8 +329,8 @@ angle_deg = 75
 span_deg = 15.0
 inner = 40.25
 outer = 46.2
-inner_height = 9.4
-outer_height = 12.549999999999999
+inner_height = 0.44
+outer_height = 3.55
 material = "rim"
 [[cliff]]
 id = "cliff_06"
@@ -337,8 +338,8 @@ angle_deg = 90
 span_deg = 15.0
 inner = 40.25
 outer = 47.050000000000004
-inner_height = 7.6
-outer_height = 11.099999999999998
+inner_height = 0.28
+outer_height = 4.60
 material = "rim_hi"
 [[cliff]]
 id = "cliff_07"
@@ -346,8 +347,8 @@ angle_deg = 105
 span_deg = 15.0
 inner = 40.25
 outer = 47.900000000000006
-inner_height = 8.5
-outer_height = 12.350000000000001
+inner_height = 0.36
+outer_height = 3.20
 material = "rim"
 [[cliff]]
 id = "cliff_08"
@@ -355,8 +356,8 @@ angle_deg = 120
 span_deg = 15.0
 inner = 40.25
 outer = 48.75
-inner_height = 4.8
-outer_height = 7.6
+inner_height = 0.44
+outer_height = 4.25
 material = "rim_hi"
 [[cliff]]
 id = "cliff_09"
@@ -364,8 +365,8 @@ angle_deg = 135
 span_deg = 15.0
 inner = 40.25
 outer = 49.6
-inner_height = 7.6
-outer_height = 10.749999999999998
+inner_height = 0.28
+outer_height = 5.30
 material = "rim"
 [[cliff]]
 id = "cliff_10"
@@ -373,8 +374,8 @@ angle_deg = 150
 span_deg = 15.0
 inner = 40.25
 outer = 46.2
-inner_height = 8.5
-outer_height = 12.0
+inner_height = 0.36
+outer_height = 3.90
 material = "rim_hi"
 [[cliff]]
 id = "cliff_11"
@@ -382,8 +383,8 @@ angle_deg = 165
 span_deg = 15.0
 inner = 40.25
 outer = 47.050000000000004
-inner_height = 9.4
-outer_height = 13.25
+inner_height = 0.44
+outer_height = 4.95
 material = "rim"
 [[cliff]]
 id = "cliff_12"
@@ -391,8 +392,8 @@ angle_deg = 180
 span_deg = 15.0
 inner = 40.25
 outer = 47.900000000000006
-inner_height = 4.8
-outer_height = 7.6
+inner_height = 0.28
+outer_height = 3.55
 material = "rim_hi"
 [[cliff]]
 id = "cliff_13"
@@ -400,8 +401,8 @@ angle_deg = 195
 span_deg = 15.0
 inner = 40.25
 outer = 48.75
-inner_height = 8.5
-outer_height = 11.65
+inner_height = 0.36
+outer_height = 4.60
 material = "rim"
 [[cliff]]
 id = "cliff_14"
@@ -409,8 +410,8 @@ angle_deg = 210
 span_deg = 15.0
 inner = 40.25
 outer = 49.6
-inner_height = 9.4
-outer_height = 12.899999999999999
+inner_height = 0.44
+outer_height = 3.20
 material = "rim_hi"
 [[cliff]]
 id = "cliff_15"
@@ -418,8 +419,8 @@ angle_deg = 225
 span_deg = 15.0
 inner = 40.25
 outer = 46.2
-inner_height = 7.6
-outer_height = 11.45
+inner_height = 0.28
+outer_height = 4.25
 material = "rim"
 [[cliff]]
 id = "cliff_16"
@@ -427,8 +428,8 @@ angle_deg = 240
 span_deg = 15.0
 inner = 40.25
 outer = 47.050000000000004
-inner_height = 4.8
-outer_height = 7.6
+inner_height = 0.36
+outer_height = 5.30
 material = "rim_hi"
 [[cliff]]
 id = "cliff_17"
@@ -436,8 +437,8 @@ angle_deg = 255
 span_deg = 15.0
 inner = 40.25
 outer = 47.900000000000006
-inner_height = 9.4
-outer_height = 12.549999999999999
+inner_height = 0.44
+outer_height = 3.90
 material = "rim"
 [[cliff]]
 id = "cliff_18"
@@ -445,8 +446,8 @@ angle_deg = 270
 span_deg = 15.0
 inner = 40.25
 outer = 48.75
-inner_height = 7.6
-outer_height = 11.099999999999998
+inner_height = 0.28
+outer_height = 4.95
 material = "rim_hi"
 [[cliff]]
 id = "cliff_19"
@@ -454,8 +455,8 @@ angle_deg = 285
 span_deg = 15.0
 inner = 40.25
 outer = 49.6
-inner_height = 8.5
-outer_height = 12.350000000000001
+inner_height = 0.36
+outer_height = 3.55
 material = "rim"
 [[cliff]]
 id = "cliff_20"
@@ -463,8 +464,8 @@ angle_deg = 300
 span_deg = 15.0
 inner = 40.25
 outer = 46.2
-inner_height = 4.8
-outer_height = 7.6
+inner_height = 0.44
+outer_height = 4.60
 material = "rim_hi"
 [[cliff]]
 id = "cliff_21"
@@ -472,8 +473,8 @@ angle_deg = 315
 span_deg = 15.0
 inner = 40.25
 outer = 47.050000000000004
-inner_height = 7.6
-outer_height = 10.749999999999998
+inner_height = 0.28
+outer_height = 3.20
 material = "rim"
 [[cliff]]
 id = "cliff_22"
@@ -481,8 +482,8 @@ angle_deg = 330
 span_deg = 15.0
 inner = 40.25
 outer = 47.900000000000006
-inner_height = 8.5
-outer_height = 12.0
+inner_height = 0.36
+outer_height = 4.25
 material = "rim_hi"
 [[cliff]]
 id = "cliff_23"
@@ -490,14 +491,14 @@ angle_deg = 345
 span_deg = 15.0
 inner = 40.25
 outer = 48.75
-inner_height = 9.4
-outer_height = 13.25
+inner_height = 0.44
+outer_height = 5.30
 material = "rim"
 [[prop]]
 id = "rubble_0_0"
 kind = "rubble"
-pos = [9.249999999999998, 0.06, 16.021469970012117]
-size = [0.7, 0.12, 0.55]
+pos = [9.249999999999998, 0.08, 16.021469970012117]
+size = [1.15, 0.16, 0.85]
 yaw_deg = 30
 material = "rubble"
 [[prop]]
@@ -510,8 +511,8 @@ material = "boulder"
 [[prop]]
 id = "rubble_0_1"
 kind = "rubble"
-pos = [13.249999999999998, 0.06, 22.949673200287627]
-size = [0.7, 0.12, 0.55]
+pos = [13.249999999999998, 0.08, 22.949673200287627]
+size = [1.15, 0.16, 0.85]
 yaw_deg = 30
 material = "rubble"
 [[prop]]
@@ -524,8 +525,8 @@ material = "boulder"
 [[prop]]
 id = "rubble_1_1"
 kind = "rubble"
-pos = [26.5, 0.06, 1.622657008870243e-15]
-size = [0.7, 0.12, 0.55]
+pos = [26.5, 0.08, 1.622657008870243e-15]
+size = [1.15, 0.16, 0.85]
 yaw_deg = 90
 material = "rubble"
 [[prop]]
@@ -538,8 +539,8 @@ material = "boulder"
 [[prop]]
 id = "rubble_4_1"
 kind = "rubble"
-pos = [-26.5, 0.06, -4.8679710266107285e-15]
-size = [0.7, 0.12, 0.55]
+pos = [-26.5, 0.08, -4.8679710266107285e-15]
+size = [1.15, 0.16, 0.85]
 yaw_deg = 270
 material = "rubble"
 [[prop]]
@@ -552,8 +553,8 @@ material = "boulder"
 [[prop]]
 id = "rubble_5_0"
 kind = "rubble"
-pos = [-9.250000000000009, 0.06, 16.02146997001211]
-size = [0.7, 0.12, 0.55]
+pos = [-9.250000000000009, 0.08, 16.02146997001211]
+size = [1.15, 0.16, 0.85]
 yaw_deg = 330
 material = "rubble"
 [[prop]]
@@ -566,8 +567,8 @@ material = "boulder"
 [[prop]]
 id = "rubble_5_1"
 kind = "rubble"
-pos = [-13.250000000000012, 0.06, 22.949673200287616]
-size = [0.7, 0.12, 0.55]
+pos = [-13.250000000000012, 0.08, 22.949673200287616]
+size = [1.15, 0.16, 0.85]
 yaw_deg = 330
 material = "rubble"
 [[prop]]
@@ -580,8 +581,8 @@ material = "boulder"
 [[prop]]
 id = "crack_vent_1_a"
 kind = "crack"
-pos = [8.346305398188537, 0.02, 33.47520255652188]
-size = [1.4, 0.04, 0.22]
+pos = [8.346305398188537, 0.03, 33.47520255652188]
+size = [3.4, 0.05, 0.48]
 yaw_deg = 14.0
 material = "crack"
 [[prop]]
@@ -594,8 +595,8 @@ material = "vein"
 [[prop]]
 id = "crack_vent_1_b"
 kind = "crack"
-pos = [-8.346305398188537, 0.02, 33.47520255652188]
-size = [1.4, 0.04, 0.22]
+pos = [-8.346305398188537, 0.03, 33.47520255652188]
+size = [3.4, 0.05, 0.48]
 yaw_deg = -14.0
 material = "crack"
 [[prop]]
@@ -608,8 +609,8 @@ material = "vein"
 [[prop]]
 id = "crack_vent_2_a"
 kind = "crack"
-pos = [33.163528509872, 0.02, 9.50948877568647]
-size = [1.4, 0.04, 0.22]
+pos = [33.163528509872, 0.03, 9.50948877568647]
+size = [3.4, 0.05, 0.48]
 yaw_deg = 74.0
 material = "crack"
 [[prop]]
@@ -622,8 +623,8 @@ material = "vein"
 [[prop]]
 id = "crack_vent_2_b"
 kind = "crack"
-pos = [24.81722311168346, 0.02, 23.965713780835404]
-size = [1.4, 0.04, 0.22]
+pos = [24.81722311168346, 0.03, 23.965713780835404]
+size = [3.4, 0.05, 0.48]
 yaw_deg = 46.0
 material = "crack"
 [[prop]]
@@ -636,8 +637,8 @@ material = "vein"
 [[prop]]
 id = "crack_vent_3_a"
 kind = "crack"
-pos = [24.81722311168346, 0.02, -23.965713780835408]
-size = [1.4, 0.04, 0.22]
+pos = [24.81722311168346, 0.03, -23.965713780835408]
+size = [3.4, 0.05, 0.48]
 yaw_deg = 134.0
 material = "crack"
 [[prop]]
@@ -650,8 +651,8 @@ material = "vein"
 [[prop]]
 id = "crack_vent_3_b"
 kind = "crack"
-pos = [33.163528509872, 0.02, -9.509488775686467]
-size = [1.4, 0.04, 0.22]
+pos = [33.163528509872, 0.03, -9.509488775686467]
+size = [3.4, 0.05, 0.48]
 yaw_deg = 106.0
 material = "crack"
 [[prop]]
@@ -664,8 +665,8 @@ material = "vein"
 [[prop]]
 id = "crack_vent_5_a"
 kind = "crack"
-pos = [-33.16352850987201, 0.02, -9.509488775686462]
-size = [1.4, 0.04, 0.22]
+pos = [-33.16352850987201, 0.03, -9.509488775686462]
+size = [3.4, 0.05, 0.48]
 yaw_deg = 254.0
 material = "crack"
 [[prop]]
@@ -678,8 +679,8 @@ material = "vein"
 [[prop]]
 id = "crack_vent_5_b"
 kind = "crack"
-pos = [-24.817223111683465, 0.02, -23.965713780835404]
-size = [1.4, 0.04, 0.22]
+pos = [-24.817223111683465, 0.03, -23.965713780835404]
+size = [3.4, 0.05, 0.48]
 yaw_deg = 226.0
 material = "crack"
 [[prop]]
@@ -692,8 +693,8 @@ material = "vein"
 [[prop]]
 id = "crack_vent_6_a"
 kind = "crack"
-pos = [-24.817223111683465, 0.02, 23.965713780835404]
-size = [1.4, 0.04, 0.22]
+pos = [-24.817223111683465, 0.03, 23.965713780835404]
+size = [3.4, 0.05, 0.48]
 yaw_deg = 314.0
 material = "crack"
 [[prop]]
@@ -706,8 +707,8 @@ material = "vein"
 [[prop]]
 id = "crack_vent_6_b"
 kind = "crack"
-pos = [-33.163528509871995, 0.02, 9.50948877568648]
-size = [1.4, 0.04, 0.22]
+pos = [-33.163528509871995, 0.03, 9.50948877568648]
+size = [3.4, 0.05, 0.48]
 yaw_deg = 286.0
 material = "crack"
 [[prop]]
@@ -972,50 +973,50 @@ material = "rim"
 [[prop]]
 id = "beacon_n"
 kind = "beacon"
-pos = [-5.0, 0.06, 26.0]
-size = [0.35, 0.12, 0.35]
+pos = [-5.0, 0.08, 26.0]
+size = [0.9, 0.16, 0.9]
 yaw_deg = 0.0
 material = "beacon"
 [[prop]]
 id = "beacon_ne"
 kind = "beacon"
-pos = [20.0167, 0.06, 17.3301]
-size = [0.35, 0.12, 0.35]
+pos = [20.0167, 0.08, 17.3301]
+size = [0.9, 0.16, 0.9]
 yaw_deg = 0.0
 material = "beacon"
 [[prop]]
 id = "beacon_se"
 kind = "beacon"
-pos = [25.0167, 0.06, -8.6699]
-size = [0.35, 0.12, 0.35]
+pos = [25.0167, 0.08, -8.6699]
+size = [0.9, 0.16, 0.9]
 yaw_deg = 0.0
 material = "beacon"
 [[prop]]
 id = "beacon_s"
 kind = "beacon"
-pos = [5.0, 0.06, -26.0]
-size = [0.35, 0.12, 0.35]
+pos = [5.0, 0.08, -26.0]
+size = [0.9, 0.16, 0.9]
 yaw_deg = 0.0
 material = "beacon"
 [[prop]]
 id = "beacon_sw"
 kind = "beacon"
-pos = [-20.0167, 0.06, -17.3301]
-size = [0.35, 0.12, 0.35]
+pos = [-20.0167, 0.08, -17.3301]
+size = [0.9, 0.16, 0.9]
 yaw_deg = 0.0
 material = "beacon"
 [[prop]]
 id = "beacon_nw"
 kind = "beacon"
-pos = [-25.0167, 0.06, 8.6699]
-size = [0.35, 0.12, 0.35]
+pos = [-25.0167, 0.08, 8.6699]
+size = [0.9, 0.16, 0.9]
 yaw_deg = 0.0
 material = "beacon"
 [[nest]]
 id = "nest_vent_1"
 vent = "vent_1"
 outset = 3.35
-size = [4.6, 3.6, 2.4]
+size = [0.9, 0.16, 0.9]
 material = "brass"
 goo = "goo"
 goo_scale = [0.34, 0.28, 0.46]
@@ -1023,7 +1024,7 @@ goo_scale = [0.34, 0.28, 0.46]
 id = "nest_vent_2"
 vent = "vent_2"
 outset = 3.35
-size = [4.6, 3.6, 2.4]
+size = [0.9, 0.16, 0.9]
 material = "brass"
 goo = "goo"
 goo_scale = [0.34, 0.28, 0.46]
@@ -1031,7 +1032,7 @@ goo_scale = [0.34, 0.28, 0.46]
 id = "nest_vent_3"
 vent = "vent_3"
 outset = 3.35
-size = [4.6, 3.6, 2.4]
+size = [0.9, 0.16, 0.9]
 material = "brass"
 goo = "goo"
 goo_scale = [0.34, 0.28, 0.46]
@@ -1039,7 +1040,7 @@ goo_scale = [0.34, 0.28, 0.46]
 id = "nest_vent_4"
 vent = "vent_4"
 outset = 3.35
-size = [4.6, 3.6, 2.4]
+size = [0.9, 0.16, 0.9]
 material = "brass"
 goo = "goo"
 goo_scale = [0.34, 0.28, 0.46]
@@ -1047,7 +1048,7 @@ goo_scale = [0.34, 0.28, 0.46]
 id = "nest_vent_5"
 vent = "vent_5"
 outset = 3.35
-size = [4.6, 3.6, 2.4]
+size = [0.9, 0.16, 0.9]
 material = "brass"
 goo = "goo"
 goo_scale = [0.34, 0.28, 0.46]
@@ -1055,7 +1056,7 @@ goo_scale = [0.34, 0.28, 0.46]
 id = "nest_vent_6"
 vent = "vent_6"
 outset = 3.35
-size = [4.6, 3.6, 2.4]
+size = [0.9, 0.16, 0.9]
 material = "brass"
 goo = "goo"
 goo_scale = [0.34, 0.28, 0.46]
@@ -1080,9 +1081,9 @@ height = 720
 
 [[camera]]
 id = "overhead"
-eye = [10.0, 148.0, -24.0]
-look = [0.0, 0.0, 4.0]
-fov = 47.0
+eye = [10.0, 32.0, -30.0]
+look = [0.0, 0.0, -4.0]
+fov = 46.0
 width = 1280
 height = 720
 
