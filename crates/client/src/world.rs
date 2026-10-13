@@ -735,7 +735,7 @@ fn spawn_arena_lights(commands: &mut Commands, content: &gemini_sim::content::Co
             bevy::light::DirectionalLight {
                 color: Color::srgb(rgb[0], rgb[1], rgb[2]),
                 illuminance,
-                shadows_enabled: shadows,
+                shadow_maps_enabled: shadows,
                 ..default()
             },
             bevy::light::ShadowFilteringMethod::Gaussian,
@@ -745,7 +745,7 @@ fn spawn_arena_lights(commands: &mut Commands, content: &gemini_sim::content::Co
     };
     spawn(commands, light.key_yaw_deg, light.key_pitch_deg, light.key_illuminance, key, true);
     spawn(commands, light.fill_yaw_deg, light.fill_pitch_deg, light.fill_illuminance, fill, false);
-    commands.insert_resource(bevy::light::AmbientLight {
+    commands.insert_resource(bevy::light::GlobalAmbientLight {
         color: Color::srgb(ambient[0], ambient[1], ambient[2]),
         brightness: light.ambient_brightness,
         ..default()
