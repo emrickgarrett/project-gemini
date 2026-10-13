@@ -4,6 +4,9 @@
 use crate::content::{self, Arena, BossDef, Combat, Palette, WavesFile};
 use crate::math::Vec3;
 
+/// A pending-vent tell is a ground decal. Taller than this is rejected, not clamped.
+const VENT_TELL_MAX_HEIGHT: f32 = 0.05;
+
 #[derive(Clone, Debug)]
 pub struct Play {
     pub rules: SceneryRules,
@@ -92,6 +95,10 @@ pub struct ArenaScene {
     pub panel_count: u32,
     pub vent_size: [f32; 3],
     pub vent_center_y: f32,
+    /// XZ extent of the pending-vent decal, in meters.
+    pub vent_tell_size: [f32; 2],
+    /// Height of the pending-vent decal, in meters. Must stay in (0, 0.05].
+    pub vent_tell_height: f32,
     pub ledge_size: [f32; 3],
     pub ledge_thickness: f32,
     pub ledge_skirt_scale: f32,
@@ -427,6 +434,8 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
         panel_count: content::vis_u32(table, "panel_count", what)?,
         vent_size: content::vis_vec3(table, "vent_size", what)?,
         vent_center_y: content::vis_f32(table, "vent_center_y", what)?,
+        vent_tell_size: content::vis_vec2(table, "vent_tell_size", what)?,
+        vent_tell_height: content::vis_f32(table, "vent_tell_height", what)?,
         ledge_size: content::vis_vec3(table, "ledge_size", what)?,
         ledge_thickness: content::vis_f32(table, "ledge_thickness", what)?,
         ledge_skirt_scale: content::vis_f32(table, "ledge_skirt_scale", what)?,
@@ -541,6 +550,15 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
     }
     if !(scene.beacon_glow_period > 0.0) {
         return Err("arena_visual.toml beacon_glow_period must be > 0".into());
+    }
+    if scene.vent_tell_size.iter().any(|n| !(*n > 0.0)) {
+        return Err("arena_visual.toml vent_tell_size must be > 0".into());
+    }
+    if !(scene.vent_tell_height > 0.0) || scene.vent_tell_height > VENT_TELL_MAX_HEIGHT {
+        return Err(format!(
+            "arena_visual.toml vent_tell_height must be in (0, {VENT_TELL_MAX_HEIGHT}], got {}",
+            scene.vent_tell_height
+        ));
     }
     if !(scene.cover_chamfer > 0.0)
         || !(scene.trim_height > 0.0)

@@ -1158,7 +1158,7 @@ sync_at = 3.0
 [vent_warn]
 volume_db = -3.2
 pitch_rand_semitones = 0
-max_instances = 4
+max_instances = 3
 loop = false
 category = "enemy"
 priority = 100
@@ -1192,7 +1192,7 @@ measured_rms_db = -14.0
 [perch_climb_warn]
 volume_db = -2.4
 pitch_rand_semitones = 0
-max_instances = 3
+max_instances = 4
 loop = false
 category = "enemy"
 priority = 100
