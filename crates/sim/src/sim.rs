@@ -162,6 +162,9 @@ pub struct Player {
     /// True after the perch already played the regen-paused cue this stay.
     #[serde(default)]
     pub regen_pause_cue: bool,
+    /// Content part id under the feet. The client maps it to a step row.
+    #[serde(default)]
+    pub under_part: String,
 }
 
 fn default_connected() -> bool {
@@ -490,9 +493,13 @@ impl Sim {
         let mods = Modifiers::default();
         let max_hp = max_hp(content, &mods, self.duplicate_rank);
         let max_fuel = content.controller.boost.fuel_max;
+        let pos = content.arena.player_spawn;
+        let under_part = content
+            .part_under(pos)
+            .unwrap_or_else(|err| panic!("player spawn has no surface: {err}"));
         Player {
             id: self.alloc_id(),
-            pos: content.arena.player_spawn,
+            pos,
             vel: Vec3::ZERO,
             yaw: 0.0,
             pitch: 0.0,
@@ -532,6 +539,7 @@ impl Sim {
             catchup_left: 0,
             catchup_options: Vec::new(),
             regen_pause_cue: false,
+            under_part,
         }
     }
 
@@ -1034,6 +1042,7 @@ impl Sim {
                 id: "dash".into(),
                 pos: player.pos,
                 owner: 0,
+                priority: None,
             });
         }
         if input.boost_held && player.fuel > 0.0 && !player.downed {
@@ -1058,6 +1067,7 @@ impl Sim {
                 id: "fuel_regen_paused".into(),
                 pos: player.pos,
                 owner: player.id,
+                priority: None,
             });
         }
         if can_jump {
@@ -1066,6 +1076,7 @@ impl Sim {
                 id: "jump".into(),
                 pos: player.pos,
                 owner: 0,
+                priority: None,
             });
         }
 
@@ -1119,6 +1130,10 @@ impl Sim {
         } else {
             None
         };
+        let under = content
+            .part_under(player.pos)
+            .unwrap_or_else(|err| panic!("part_under: {err}"));
+        player.under_part = under;
         if just_landed {
             self.landed_pulse = 1.0;
             let radius = mods.landing_knockback_radius_m;
@@ -2586,6 +2601,7 @@ impl Sim {
                     id: "swarmer_crowd".into(),
                     pos: enemy.pos,
                     owner: enemy.id,
+                    priority: None,
                 });
             }
         }
@@ -2648,6 +2664,7 @@ impl Sim {
             id: id.to_string(),
             pos,
             owner,
+            priority: None,
         });
     }
 }
@@ -3297,6 +3314,7 @@ pub fn launch_pending_shots(sim: &mut Sim, content: &Content) {
                     id,
                     pos: enemy.pos,
                     owner: enemy.id,
+                    priority: None,
                 });
             } else if enemy.kind == EnemyKind::HiveTyrant {
                 let id = content.bug(enemy.kind).audio.attack.clone();
@@ -3304,6 +3322,7 @@ pub fn launch_pending_shots(sim: &mut Sim, content: &Content) {
                     id,
                     pos: enemy.pos,
                     owner: enemy.id,
+                    priority: None,
                 });
             }
         } else if marker == EnemyCue::Brute {
@@ -3312,6 +3331,7 @@ pub fn launch_pending_shots(sim: &mut Sim, content: &Content) {
                 id,
                 pos: enemy.pos,
                 owner: enemy.id,
+                priority: None,
             });
         } else if marker == EnemyCue::Brood {
             let id = content.bug(EnemyKind::BroodMother).audio.attack.clone();
@@ -3319,6 +3339,7 @@ pub fn launch_pending_shots(sim: &mut Sim, content: &Content) {
                 id,
                 pos: enemy.pos,
                 owner: enemy.id,
+                priority: None,
             });
         } else if marker == EnemyCue::Fire
             && (enemy.kind == EnemyKind::Spitter || enemy.kind == EnemyKind::HiveTyrant)
@@ -3359,6 +3380,7 @@ pub fn launch_pending_shots(sim: &mut Sim, content: &Content) {
                 id,
                 pos: origin,
                 owner: enemy.id,
+                priority: None,
             });
         }
     }

@@ -9,6 +9,8 @@ pub struct SoundEvent {
     pub pos: Vec3,
     /// Bug that owns the cue. 0 is the player or a global sting.
     pub owner: u32,
+    /// When set, this replaces the row priority. `None` uses the mix row.
+    pub priority: Option<i32>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -19,6 +21,8 @@ pub struct Voice {
     pub crowd: bool,
     pub gain: f32,
     pub pos: Vec3,
+    pub priority: i32,
+    pub is_warning: bool,
 }
 
 pub fn select_voices(
@@ -58,6 +62,8 @@ pub fn select_voices(
                 crowd: false,
                 gain: def.loudness,
                 pos: event.pos,
+                priority: event.priority.unwrap_or(def.priority),
+                is_warning: def.is_warning,
             });
         }
     }
@@ -77,24 +83,35 @@ pub fn select_voices(
             crowd: true,
             gain: def.loudness * fullness,
             pos,
+            priority: def.priority,
+            is_warning: def.is_warning,
         });
     }
 
-    let critical: Vec<Voice> = shots.iter().filter(|v| v.critical).cloned().collect();
-    let mut rest: Vec<Voice> = shots.into_iter().filter(|v| !v.critical).collect();
-    rest.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
+    shots.sort_by(|a, b| {
+        b.priority
+            .cmp(&a.priority)
+            .then_with(|| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal))
             .then_with(|| a.id.cmp(&b.id))
     });
-    rest = cap_instances(audio, rest);
-
-    let reserved = voices.len();
-    let room = audio.voice_cap.saturating_sub(reserved);
+    let sorted = shots;
+    let capped = cap_instances(audio, sorted.clone());
+    let warnings: Vec<Voice> = capped.iter().filter(|voice| voice.is_warning).cloned().collect();
+    let rest: Vec<Voice> = capped.into_iter().filter(|voice| !voice.is_warning).collect();
+    voices.extend(warnings);
+    let room = audio.voice_cap.saturating_sub(voices.len());
     voices.extend(rest.into_iter().take(room));
-    // Critical cues play even when that pushes the mix past the cap.
-    voices.extend(critical);
+    // Critical cues that the cap dropped still play. Ones already kept are not doubled.
+    let mut claimed: Vec<(String, Vec3)> = voices.iter().map(|voice| (voice.id.clone(), voice.pos)).collect();
+    for crit in sorted.into_iter().filter(|voice| voice.critical) {
+        if let Some(index) = claimed.iter().position(|(id, pos)| {
+            id == &crit.id && pos.x == crit.pos.x && pos.y == crit.pos.y && pos.z == crit.pos.z
+        }) {
+            claimed.remove(index);
+        } else {
+            voices.push(crit);
+        }
+    }
     voices
 }
 
@@ -150,7 +167,7 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
     for (key, value) in table {
         if matches!(
             key.as_str(),
-            "voice_cap" | "crowd_radius" | "crowd_full_count" | "min_distance" | "critical" | "alias" | "sting"
+            "voice_cap" | "crowd_radius" | "crowd_full_count" | "min_distance" | "critical" | "alias" | "sting" | "footstep"
         ) {
             continue;
         }
@@ -205,6 +222,14 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
             // Rows that omit path live at audio/sfx/{key}.ogg. A path key is used as written.
             None => format!("audio/sfx/{key}.ogg"),
         };
+        let priority = match row.get("priority") {
+            None => return Err(format!("{key} is missing priority")),
+            Some(value) => value
+                .as_integer()
+                .map(|n| n as i32)
+                .or_else(|| value.as_float().map(|n| n as i32))
+                .ok_or_else(|| format!("{key} priority is not a number"))?,
+        };
         by_file.insert(
             key.clone(),
             SfxDef {
@@ -222,6 +247,8 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
                 stealable,
                 is_warning,
                 flat,
+                priority,
+                category: category.to_string(),
             },
         );
     }
@@ -254,6 +281,10 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
             });
         }
     }
+    let footstep = match table.get("footstep") {
+        None => crate::content::Footsteps::default(),
+        Some(value) => parse_footsteps(value)?,
+    };
     Ok(AudioTable {
         voice_cap,
         crowd_radius: number("crowd_radius")? as f32,
@@ -265,6 +296,49 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
         sfx,
         sting,
         pitch: Vec::new(),
+        footstep,
+    })
+}
+
+fn parse_footsteps(value: &toml::Value) -> Result<crate::content::Footsteps, String> {
+    let row = value.as_table().ok_or_else(|| "footstep is not a table".to_string())?;
+    let stride = row_number(row, "footstep", "stride")?;
+    let min_speed = row_number(row, "footstep", "min_speed")?;
+    if !(stride > 0.0) {
+        return Err("footstep stride must be > 0".into());
+    }
+    if !(min_speed > 0.0) {
+        return Err("footstep min_speed must be > 0".into());
+    }
+    let remote_priority = row
+        .get("remote_priority")
+        .and_then(|value| value.as_integer())
+        .ok_or_else(|| "footstep is missing remote_priority".to_string())? as i32;
+    let rows_table = row
+        .get("rows")
+        .and_then(|value| value.as_table())
+        .ok_or_else(|| "footstep is missing rows".to_string())?;
+    let mut rows = std::collections::BTreeMap::new();
+    for (kind, list) in rows_table {
+        let items = list.as_array().ok_or_else(|| format!("footstep.rows {kind} must be an array"))?;
+        if items.is_empty() {
+            return Err(format!("footstep.rows {kind} is empty"));
+        }
+        let mut ids = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            let id = item
+                .as_str()
+                .filter(|text| !text.is_empty())
+                .ok_or_else(|| format!("footstep.rows {kind}[{index}] must be a string"))?;
+            ids.push(id.to_string());
+        }
+        rows.insert(kind.clone(), ids);
+    }
+    Ok(crate::content::Footsteps {
+        stride,
+        min_speed,
+        remote_priority,
+        rows,
     })
 }
 
@@ -405,6 +479,77 @@ flat = true
             let row = audio.sfx.iter().find(|row| row.id == id).unwrap();
             assert_eq!(row.path, format!("audio/stings/{id}.ogg"));
             assert_ne!(row.path, format!("audio/sfx/{id}.ogg"));
+        }
+    }
+
+    #[test]
+    fn worst_case_keeps_warnings_inside_the_voice_cap() {
+        let audio = load_mix(include_str!("../../../content/audio_mix.toml")).expect("audio mix");
+        let warn_min = audio
+            .sfx
+            .iter()
+            .filter(|row| row.is_warning)
+            .map(|row| row.priority)
+            .min()
+            .expect("warnings");
+        let hits = ["acid_impact", "weakpoint_hit", "player_hurt"];
+        let hit_max = hits
+            .iter()
+            .map(|id| audio.sfx.iter().find(|row| row.id == *id).unwrap().priority)
+            .max()
+            .unwrap();
+        let own_max = audio
+            .sfx
+            .iter()
+            .filter(|row| row.id.starts_with("step_"))
+            .map(|row| row.priority)
+            .max()
+            .unwrap();
+        let prop_max = ["hive_nest_idle", "relay_tower_hum", "beacon_pulse", "arena_01_bed"]
+            .iter()
+            .map(|id| audio.sfx.iter().find(|row| row.id == *id).unwrap().priority)
+            .max()
+            .unwrap();
+        let remote = audio.footstep.remote_priority;
+        assert!(warn_min > hit_max, "warnings {warn_min} hits {hit_max}");
+        assert!(hit_max > remote, "hits {hit_max} remote {remote}");
+        assert!(remote > own_max, "remote {remote} steps {own_max}");
+        assert!(own_max > prop_max, "steps {own_max} props {prop_max}");
+
+        let mut events = Vec::new();
+        let mut n = 0u32;
+        let push = |events: &mut Vec<super::SoundEvent>, id: &str, count: u32, priority: Option<i32>, n: &mut u32| {
+            for _ in 0..count {
+                let i = *n;
+                *n += 1;
+                events.push(super::SoundEvent {
+                    id: id.to_string(),
+                    pos: crate::math::Vec3::new(i as f32, 0.0, 0.0),
+                    owner: i,
+                    priority,
+                });
+            }
+        };
+        for row in audio.sfx.iter().filter(|row| row.is_warning) {
+            push(&mut events, &row.id, 1, None, &mut n);
+        }
+        for id in hits {
+            let row = audio.sfx.iter().find(|row| row.id == id).unwrap();
+            push(&mut events, id, row.max_instances.max(1), None, &mut n);
+        }
+        let step = audio.footstep.rows.values().next().unwrap()[0].clone();
+        push(&mut events, &step, 8, Some(remote), &mut n);
+        for id in audio.sfx.iter().filter(|row| row.id.starts_with("step_")) {
+            push(&mut events, &id.id, 1, None, &mut n);
+        }
+        for id in ["hive_nest_idle", "relay_tower_hum", "beacon_pulse"] {
+            let row = audio.sfx.iter().find(|row| row.id == id).unwrap();
+            push(&mut events, id, row.max_instances.max(1), None, &mut n);
+        }
+        let voices = super::select_voices(&audio, &events, crate::math::Vec3::ZERO);
+        assert!(voices.len() <= audio.voice_cap, "voices {}", voices.len());
+        for row in audio.sfx.iter().filter(|row| row.is_warning) {
+            assert!(voices.iter().any(|voice| voice.id == row.id), "stolen {}", row.id);
         }
     }
 }

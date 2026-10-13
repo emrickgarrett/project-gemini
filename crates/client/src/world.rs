@@ -194,6 +194,13 @@ pub fn scene(
     material(&mut bank, &mut materials, content, "arena_dark", false, false);
     material(&mut bank, &mut materials, content, "arena_light", false, false);
 
+    let beacon_color = content
+        .arena_scene
+        .materials
+        .iter()
+        .find(|row| row.id == "beacon")
+        .map(|row| row.color.clone())
+        .unwrap_or_else(|| panic!("missing beacon material"));
     for piece in gemini_meshes::arena_pieces(content) {
         let shade = shade_for_scenery(piece.lit, piece.bloom);
         let rgb = content.palette.key(&piece.palette);
@@ -210,12 +217,15 @@ pub fn scene(
             ..default()
         });
         let mesh = upload(&mut meshes, &piece.mesh);
-        commands.spawn((
+        let mut spawned = commands.spawn((
             Mesh3d(mesh),
             MeshMaterial3d(handle),
             Transform::IDENTITY,
             PlayPiece,
         ));
+        if piece.palette == beacon_color {
+            spawned.insert(BeaconLamp);
+        }
     }
     spawn_arena_lights(&mut commands, content);
 
@@ -922,6 +932,39 @@ struct ShadeSplit {
     unlit: bool,
     emissive_scale: f32,
     bloom: bool,
+}
+
+
+#[derive(Component)]
+pub(crate) struct BeaconLamp;
+
+/// Pulses beacon-colored pieces on `beacon_glow_period`, the same key the one-shot uses.
+pub fn pulse_beacons(
+    game: Res<Game>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    lamps: Query<&MeshMaterial3d<StandardMaterial>, With<BeaconLamp>>,
+) {
+    let scene = &game.content.arena_scene;
+    let period = scene.beacon_glow_period;
+    if !(period > 0.0) {
+        panic!("beacon_glow_period must be > 0");
+    }
+    let phase = (game.sim.time / period).fract();
+    let wave = (phase * std::f32::consts::TAU).sin();
+    let blend = (wave + 1.0) * 0.5;
+    let scale = scene.beacon_glow_min + (scene.beacon_glow_max - scene.beacon_glow_min) * blend;
+    let color = scene
+        .materials
+        .iter()
+        .find(|row| row.id == "beacon")
+        .map(|row| row.color.as_str())
+        .unwrap_or_else(|| panic!("missing beacon material"));
+    let rgb = game.content.palette.key(color);
+    for handle in &lamps {
+        if let Some(mut material) = materials.get_mut(&handle.0) {
+            material.emissive = LinearRgba::rgb(rgb[0] * scale, rgb[1] * scale, rgb[2] * scale);
+        }
+    }
 }
 
 /// Scene key, fill, and ambient shade scenery. Scenery never carries bloom or an emissive.

@@ -148,6 +148,10 @@ pub struct ArenaScene {
     pub review_fill: f32,
     pub review_gain: f32,
     pub exposure_ev: f32,
+    /// Seconds for one beacon glow cycle. Audio fires `beacon_pulse` once per this period.
+    pub beacon_glow_period: f32,
+    pub beacon_glow_min: f32,
+    pub beacon_glow_max: f32,
     pub light: SceneLight,
     pub materials: Vec<SceneMaterial>,
     pub floors: Vec<FloorBand>,
@@ -248,6 +252,51 @@ pub fn nest_anchor(vent_x: f32, vent_z: f32, outset: f32, lift: f32) -> [f32; 3]
     ]
 }
 
+pub fn nest_points(arena: &crate::content::Arena, scene: &ArenaScene) -> Result<Vec<Vec3>, String> {
+    let mut out = Vec::new();
+    for nest in &scene.nests {
+        let vent = arena
+            .vents
+            .iter()
+            .find(|vent| vent.id == nest.vent)
+            .ok_or_else(|| format!("nest {} vent \"{}\" is missing", nest.id, nest.vent))?;
+        let anchor = nest_anchor(vent.pos.x, vent.pos.z, nest.outset, scene.nest_lift);
+        out.push(Vec3::new(anchor[0], anchor[1], anchor[2]));
+    }
+    Ok(out)
+}
+
+/// Floor beacons plus the relay beacon center. The glow period is `scene.beacon_glow_period`.
+pub fn beacon_points(arena: &crate::content::Arena, scene: &ArenaScene) -> Result<Vec<Vec3>, String> {
+    let mut out = Vec::new();
+    for prop in &scene.props {
+        if prop.kind == "beacon" {
+            out.push(Vec3::new(prop.pos[0], prop.pos[1], prop.pos[2]));
+        }
+    }
+    out.extend(relay_points(arena, scene)?);
+    Ok(out)
+}
+
+/// Relay hum sits on the tower beacon, the same center the mesh uses.
+pub fn relay_points(arena: &crate::content::Arena, scene: &ArenaScene) -> Result<Vec<Vec3>, String> {
+    let mut out = Vec::new();
+    for tower in &scene.towers {
+        let ledge = arena
+            .ledges
+            .iter()
+            .find(|ledge| ledge.id == tower.ledge)
+            .ok_or_else(|| format!("tower {} ledge \"{}\" is missing", tower.id, tower.ledge))?;
+        let y = ledge.pos.y - scene.ledge_thickness
+            + tower.base[1]
+            + tower.mast[1]
+            + tower.head[1]
+            + tower.beacon[1] * 0.5;
+        out.push(Vec3::new(ledge.pos.x, y, ledge.pos.z));
+    }
+    Ok(out)
+}
+
 pub fn nest_front_radius(vent_x: f32, vent_z: f32, outset: f32, depth: f32) -> f32 {
     (vent_x * vent_x + vent_z * vent_z).sqrt() + outset - depth * 0.5
 }
@@ -334,16 +383,10 @@ pub fn load_play(table: &toml::map::Map<String, toml::Value>) -> Result<Play, St
             return Err(format!("surface {} part is empty", row.id));
         }
     }
-    for (part, kind) in [
-        ("floor", "dirt"),
-        ("deck", "metal"),
-        ("rail", "metal"),
-        ("stairs", "metal"),
-        ("rim", "rock"),
-        ("nest", "resin"),
-    ] {
-        if !surfaces.iter().any(|row| row.part == part && row.kind == kind) {
-            return Err(format!("surface part \"{part}\" needs kind \"{kind}\""));
+    let mut parts = std::collections::BTreeSet::new();
+    for row in &surfaces {
+        if !parts.insert(row.part.clone()) {
+            return Err(format!("surface part \"{}\" is duplicated", row.part));
         }
     }
     for row in &cover {
@@ -442,6 +485,9 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
         review_fill: content::vis_f32(table, "review_fill", what)?,
         review_gain: content::vis_f32(table, "review_gain", what)?,
         exposure_ev: content::vis_f32(table, "exposure_ev", what)?,
+        beacon_glow_period: content::vis_f32(table, "beacon_glow_period", what)?,
+        beacon_glow_min: content::vis_f32(table, "beacon_glow_min", what)?,
+        beacon_glow_max: content::vis_f32(table, "beacon_glow_max", what)?,
         light: load_light(table.get("light").unwrap())?,
         materials: load_named(table.get("material").unwrap(), "material", load_material)?,
         floors: load_named(table.get("floor").unwrap(), "floor", load_floor)?,
@@ -496,6 +542,12 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
         || !(scene.shadow_self_pad > 0.0)
     {
         return Err("arena_visual.toml deck, rim, and shadow sizes are out of range".into());
+    }
+    if !(scene.beacon_glow_period > 0.0) {
+        return Err("arena_visual.toml beacon_glow_period must be > 0".into());
+    }
+    if !(scene.beacon_glow_max > scene.beacon_glow_min) {
+        return Err("arena_visual.toml beacon_glow_max must be > beacon_glow_min".into());
     }
     if !(scene.cover_chamfer > 0.0)
         || !(scene.trim_height > 0.0)

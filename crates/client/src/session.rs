@@ -434,6 +434,7 @@ pub fn gather_and_step(
             id,
             pos: SimVec3::ZERO,
             owner: 0,
+            priority: None,
         });
     }
     for id in stops {
