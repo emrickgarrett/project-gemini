@@ -112,6 +112,23 @@ pub struct ArenaScene {
     pub trim: String,
     pub boulder: String,
     pub prop_meshes: Vec<PropMesh>,
+    pub platform_sides: u32,
+    pub deck_phase_deg: f32,
+    pub deck_step_outset: f32,
+    pub deck_step_height: f32,
+    pub deck_open_deg: f32,
+    pub stair_count: u32,
+    pub stair_tread: f32,
+    pub stair_thickness: f32,
+    pub rim_rows: u32,
+    pub rim_boulders: u32,
+    pub rim_fill: f32,
+    pub rim_inner_scale: f32,
+    pub rim_stagger_deg: f32,
+    pub chunk_size: [f32; 3],
+    pub nest_lift: f32,
+    pub nest_gap_deg: f32,
+    pub review_shadow: f32,
     pub max_triangles: u32,
     pub max_bytes: u32,
     pub sha256: String,
@@ -204,6 +221,24 @@ pub struct Nest {
     pub material: String,
     pub goo: String,
     pub goo_scale: [f32; 3],
+}
+
+/// Center of a nest. `outset` is added along the vent bearing, past the vent.
+pub fn nest_anchor(vent_x: f32, vent_z: f32, outset: f32, lift: f32) -> [f32; 3] {
+    let len = (vent_x * vent_x + vent_z * vent_z).sqrt();
+    let center_r = len + outset;
+    if len <= f32::EPSILON {
+        return [0.0, lift, 0.0];
+    }
+    [
+        vent_x / len * center_r,
+        lift,
+        vent_z / len * center_r,
+    ]
+}
+
+pub fn nest_front_radius(vent_x: f32, vent_z: f32, outset: f32, depth: f32) -> f32 {
+    (vent_x * vent_x + vent_z * vent_z).sqrt() + outset - depth * 0.5
 }
 
 #[derive(Clone, Debug)]
@@ -341,6 +376,23 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
         trim: content::vis_str(table, "trim", what)?.to_string(),
         boulder: content::vis_str(table, "boulder", what)?.to_string(),
         prop_meshes: load_named(table.get("prop_mesh").unwrap(), "prop_mesh", load_prop_mesh)?,
+        platform_sides: content::vis_u32(table, "platform_sides", what)?,
+        deck_phase_deg: content::vis_f32(table, "deck_phase_deg", what)?,
+        deck_step_outset: content::vis_f32(table, "deck_step_outset", what)?,
+        deck_step_height: content::vis_f32(table, "deck_step_height", what)?,
+        deck_open_deg: content::vis_f32(table, "deck_open_deg", what)?,
+        stair_count: content::vis_u32(table, "stair_count", what)?,
+        stair_tread: content::vis_f32(table, "stair_tread", what)?,
+        stair_thickness: content::vis_f32(table, "stair_thickness", what)?,
+        rim_rows: content::vis_u32(table, "rim_rows", what)?,
+        rim_boulders: content::vis_u32(table, "rim_boulders", what)?,
+        rim_fill: content::vis_f32(table, "rim_fill", what)?,
+        rim_inner_scale: content::vis_f32(table, "rim_inner_scale", what)?,
+        rim_stagger_deg: content::vis_f32(table, "rim_stagger_deg", what)?,
+        chunk_size: content::vis_vec3(table, "chunk_size", what)?,
+        nest_lift: content::vis_f32(table, "nest_lift", what)?,
+        nest_gap_deg: content::vis_f32(table, "nest_gap_deg", what)?,
+        review_shadow: content::vis_f32(table, "review_shadow", what)?,
         max_triangles: content::vis_u32(table, "max_triangles", what)?,
         max_bytes: content::vis_u32(table, "max_bytes", what)?,
         sha256: content::vis_str(table, "sha256", what)?.to_ascii_lowercase(),
@@ -375,8 +427,27 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
         || scene.flora_sides < scene.min_slice_count
         || scene.bulb_stacks < scene.min_stack_count
         || scene.panel_count < scene.min_panel_count
+        || scene.platform_sides < scene.min_slice_count
+        || scene.rim_rows < 1
+        || scene.rim_boulders < 1
+        || scene.stair_count < 1
     {
         return Err("arena_visual.toml tessellation counts are out of range".into());
+    }
+    if !(scene.deck_step_outset > 0.0)
+        || !(scene.deck_step_height > 0.0)
+        || !(scene.deck_open_deg > 0.0)
+        || !(scene.stair_tread > 0.0)
+        || !(scene.stair_thickness > 0.0)
+        || !(scene.rim_fill > 0.0 && scene.rim_fill <= 1.0)
+        || !(scene.rim_inner_scale > 0.0 && scene.rim_inner_scale <= 1.0)
+        || scene.rim_stagger_deg < 0.0
+        || scene.chunk_size.iter().any(|n| !(*n > 0.0))
+        || !(scene.nest_lift > 0.0)
+        || !(scene.nest_gap_deg > 0.0)
+        || !(scene.review_shadow > 0.0 && scene.review_shadow < 1.0)
+    {
+        return Err("arena_visual.toml deck, rim, and shadow sizes are out of range".into());
     }
     if !(scene.cover_chamfer > 0.0)
         || !(scene.trim_height > 0.0)
@@ -632,6 +703,9 @@ pub fn validate(
             return Err(format!("floor {} radii are out of order", floor.id));
         }
     }
+    if scene.deck_step_height >= arena.platform.height {
+        return Err("deck_step_height must stay under the platform height".into());
+    }
     cover_walkable_dirt(arena, scene)?;
     for cliff in &scene.cliffs {
         require_mat(&cliff.material, &format!("cliff {}", cliff.id))?;
@@ -706,6 +780,21 @@ pub fn validate(
             || nest.goo_scale.iter().any(|n| !(*n > 0.0 && *n < 1.0))
         {
             return Err(format!("nest {} sizes are out of range", nest.id));
+        }
+        if scene.nest_lift < nest.size[1] * 0.5 {
+            return Err(format!("nest {} lift is below the ground", nest.id));
+        }
+        let vent = arena
+            .vents
+            .iter()
+            .find(|vent| vent.id == nest.vent)
+            .ok_or_else(|| format!("nest {} vent \"{}\" is missing", nest.id, nest.vent))?;
+        let front = nest_front_radius(vent.pos.x, vent.pos.z, nest.outset, nest.size[2]);
+        if front < arena.radius {
+            return Err(format!(
+                "nest {} front radius {front} is inside the play disc {}",
+                nest.id, arena.radius
+            ));
         }
         let goo = material(&nest.goo)
             .ok_or_else(|| format!("nest {} goo material \"{}\" is missing", nest.id, nest.goo))?;

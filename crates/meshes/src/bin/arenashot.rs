@@ -5,7 +5,7 @@ use std::fs;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use gemini_meshes::{raster_arena, raster_viewmodel, ViewmodelFrame};
+use gemini_meshes::{raster_arena, raster_view_gun, ViewmodelFrame};
 use gemini_sim::content::{hex_srgb, Content};
 
 const FIELD: u8 = 0x8A;
@@ -31,7 +31,7 @@ fn main() {
             camera.height,
         );
         if camera.id == "vex" {
-            let arms = raster_viewmodel(camera.width, camera.height, &vex_viewmodel(&content));
+            let arms = raster_view_gun(camera.width, camera.height, &vex_viewmodel(&content));
             composite(&mut rgb, &arms);
         }
         let path = format!("{out}/{}.png", camera.id);

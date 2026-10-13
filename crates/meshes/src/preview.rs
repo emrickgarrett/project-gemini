@@ -272,6 +272,20 @@ pub fn raster_viewmodel(width: u32, height: u32, frame: &ViewmodelFrame) -> Vec<
     raster_viewmodel_yaw(width, height, frame, 0.0, 0.0)
 }
 
+/// Fitted gun on the arena plate. The procedural gloves are a separate hero still.
+pub fn raster_view_gun(width: u32, height: u32, frame: &ViewmodelFrame) -> Vec<u8> {
+    let (forward, right, up) = view_look(0.0, 0.0);
+    let w = width.max(8);
+    let h = height.max(8);
+    let mut color = Vec::with_capacity((w * h * 3) as usize);
+    for _ in 0..(w * h) {
+        color.extend_from_slice(&BG);
+    }
+    let mut depth = vec![f32::INFINITY; (w * h) as usize];
+    paint_view_gun(&mut color, &mut depth, frame, w, h, (forward, right, up));
+    color
+}
+
 /// Look yaw and pitch orbit this point. The gloves and the gun share it.
 /// The gun's authored view pitch stays on the grip, in mesh space, which is
 /// the same origin while this pivot is the camera.
@@ -656,6 +670,64 @@ fn draw_scene(
         key,
         fill,
     };
+    if !silhouette && !extras.is_empty() {
+        let shade_content = gemini_sim::content::Content::embedded();
+        let shadows = ShadowWorld::build(&shade_content);
+        for (mesh, albedo) in extras {
+            let scenery = albedo[3] < 0.75;
+            let glow = albedo[3] < 0.25;
+            for tri in mesh.indices.chunks(3) {
+                if tri.len() < 3 {
+                    continue;
+                }
+                let ia = tri[0] as usize;
+                let ib = tri[1] as usize;
+                let ic = tri[2] as usize;
+                let nw = mesh.normals[ia];
+                let shade = if scenery {
+                    scenery_shade(&shade_content, nw, glow)
+                } else {
+                    let ndot = (nw[0] * key[0] + nw[1] * key[1] + nw[2] * key[2]).clamp(0.0, 1.0);
+                    let ndot2 = (nw[0] * fill[0] + nw[1] * fill[1] + nw[2] * fill[2]).clamp(0.0, 1.0);
+                    0.62 + 0.40 * ndot + 0.22 * ndot2
+                };
+                let rgb = [albedo[0] * shade, albedo[1] * shade, albedo[2] * shade];
+                let Some(a) = project(mesh.positions[ia], eye, right, up, forward, focal, aspect, w, h) else {
+                    continue;
+                };
+                let Some(b) = project(mesh.positions[ib], eye, right, up, forward, focal, aspect, w, h) else {
+                    continue;
+                };
+                let Some(c) = project(mesh.positions[ic], eye, right, up, forward, focal, aspect, w, h) else {
+                    continue;
+                };
+                if scenery && !glow && nw[1] > 0.65 {
+                    let dim = scenery_shade_shadow(&shade_content, nw);
+                    let ratio = if shade > 1.0e-4 { dim / shade } else { 1.0 };
+                    fill_shadow_tri(
+                        &mut color,
+                        &mut depth,
+                        w,
+                        h,
+                        a,
+                        b,
+                        c,
+                        mesh.positions[ia],
+                        mesh.positions[ib],
+                        mesh.positions[ic],
+                        rgb,
+                        ratio,
+                        &shadows,
+                    );
+                } else {
+                    fill_tri(&mut color, &mut depth, w, h, a, b, c, rgb);
+                }
+            }
+        }
+        if extras.iter().any(|(_, albedo)| albedo[3] < 0.75) {
+            fog_arena(&mut color, &depth, &shade_content);
+        }
+    }
     let cast_mesh = crate::cast(&visual.id);
     crate::cast::paint(
         &mut color,
@@ -675,41 +747,6 @@ fn draw_scene(
     );
     if !silhouette {
         paint_feedback_parts(&mut color, &mut depth, visual, &posed, palette, &cam, shift, bob, lean);
-    }
-    if !silhouette && !extras.is_empty() {
-        let shade_content = gemini_sim::content::Content::embedded();
-        for (mesh, albedo) in extras {
-            for tri in mesh.indices.chunks(3) {
-                if tri.len() < 3 {
-                    continue;
-                }
-                let ia = tri[0] as usize;
-                let ib = tri[1] as usize;
-                let ic = tri[2] as usize;
-                let nw = mesh.normals[ia];
-                let shade = if albedo[3] < 0.75 {
-                    scenery_shade(&shade_content, nw, albedo[3] < 0.25)
-                } else {
-                    let ndot = (nw[0] * key[0] + nw[1] * key[1] + nw[2] * key[2]).clamp(0.0, 1.0);
-                    let ndot2 = (nw[0] * fill[0] + nw[1] * fill[1] + nw[2] * fill[2]).clamp(0.0, 1.0);
-                    0.62 + 0.40 * ndot + 0.22 * ndot2
-                };
-                let rgb = [albedo[0] * shade, albedo[1] * shade, albedo[2] * shade];
-                let Some(a) = project(mesh.positions[ia], eye, right, up, forward, focal, aspect, w, h) else {
-                    continue;
-                };
-                let Some(b) = project(mesh.positions[ib], eye, right, up, forward, focal, aspect, w, h) else {
-                    continue;
-                };
-                let Some(c) = project(mesh.positions[ic], eye, right, up, forward, focal, aspect, w, h) else {
-                    continue;
-                };
-                fill_tri(&mut color, &mut depth, w, h, a, b, c, rgb);
-            }
-        }
-        if extras.iter().any(|(_, albedo)| albedo[3] < 0.75) {
-            fog_arena(&mut color, &depth, &shade_content);
-        }
     }
     color
 }
@@ -837,8 +874,9 @@ pub fn raster_heroes_at_15m(width: u32, height: u32) -> Vec<u8> {
         fill: norm([0.55, 0.35, -0.45]),
     };
     let palette = |name: &str| content.palette.key(name);
+    let shadows = ShadowWorld::build(&content);
     for piece in crate::arena_pieces(&content) {
-        paint_scenery(&mut color, &mut depth, &piece, &palette, &cam, &content);
+        paint_scenery(&mut color, &mut depth, &piece, &palette, &cam, &content, &shadows);
     }
     fog_arena(&mut color, &depth, &content);
     let spacing = 1.15_f32;
@@ -865,6 +903,14 @@ fn paint_named_hero(color: &mut [u8], depth: &mut [f32], cam: &crate::PaintCam, 
 }
 
 fn scenery_shade(content: &gemini_sim::content::Content, normal: [f32; 3], glow: bool) -> f32 {
+    shade_terms(content, normal, glow, 1.0)
+}
+
+fn scenery_shade_shadow(content: &gemini_sim::content::Content, normal: [f32; 3]) -> f32 {
+    shade_terms(content, normal, false, content.arena_scene.review_shadow)
+}
+
+fn shade_terms(content: &gemini_sim::content::Content, normal: [f32; 3], glow: bool, key_scale: f32) -> f32 {
     let scene = &content.arena_scene;
     if glow {
         return scene.review_gain;
@@ -873,7 +919,129 @@ fn scenery_shade(content: &gemini_sim::content::Content, normal: [f32; 3], glow:
     let fill = light_toward(scene.light.fill_yaw_deg, scene.light.fill_pitch_deg);
     let ndot = (normal[0] * key[0] + normal[1] * key[1] + normal[2] * key[2]).max(0.0);
     let ndot2 = (normal[0] * fill[0] + normal[1] * fill[1] + normal[2] * fill[2]).max(0.0);
-    (scene.review_ambient + scene.review_key * ndot + scene.review_fill * ndot2) * scene.review_gain
+    (scene.review_ambient + scene.review_key * ndot * key_scale + scene.review_fill * ndot2) * scene.review_gain
+}
+
+struct ShadowWorld {
+    boxes: Vec<([f32; 3], [f32; 3])>,
+    dir: [f32; 3],
+    platform_radius: f32,
+    platform_height: f32,
+    platform_center: [f32; 2],
+}
+
+impl ShadowWorld {
+    fn build(content: &gemini_sim::content::Content) -> Self {
+        let scene = &content.arena_scene;
+        let mut boxes = Vec::new();
+        for cover in &content.arena.cover {
+            let half = [cover.size[0] * 0.5, cover.size[1] * 0.5, cover.size[2] * 0.5];
+            boxes.push((
+                [cover.pos.x - half[0], cover.pos.y - half[1], cover.pos.z - half[2]],
+                [cover.pos.x + half[0], cover.pos.y + half[1], cover.pos.z + half[2]],
+            ));
+        }
+        for nest in &scene.nests {
+            let Some(vent) = content.arena.vents.iter().find(|vent| vent.id == nest.vent) else {
+                continue;
+            };
+            let center = gemini_sim::scenery::nest_anchor(vent.pos.x, vent.pos.z, nest.outset, scene.nest_lift);
+            let reach = nest.size[0].max(nest.size[2]) * 0.5;
+            let hy = nest.size[1] * 0.5;
+            boxes.push((
+                [center[0] - reach, center[1] - hy, center[2] - reach],
+                [center[0] + reach, center[1] + hy, center[2] + reach],
+            ));
+        }
+        Self {
+            boxes,
+            dir: light_toward(scene.light.key_yaw_deg, scene.light.key_pitch_deg),
+            platform_radius: content.arena.platform.radius,
+            platform_height: content.arena.platform.height,
+            platform_center: [content.arena.platform.center.x, content.arena.platform.center.z],
+        }
+    }
+
+    fn occluded(&self, origin: [f32; 3]) -> bool {
+        let dir = self.dir;
+        for (min, max) in &self.boxes {
+            if ray_enters(origin, dir, *min, *max) {
+                return true;
+            }
+        }
+        ray_platform(
+            origin,
+            dir,
+            self.platform_center,
+            self.platform_radius,
+            self.platform_height,
+        )
+    }
+}
+
+fn ray_enters(origin: [f32; 3], dir: [f32; 3], min: [f32; 3], max: [f32; 3]) -> bool {
+    let mut tmin = 0.0_f32;
+    let mut tmax = 80.0_f32;
+    for axis in 0..3 {
+        if dir[axis].abs() < 1.0e-6 {
+            if origin[axis] < min[axis] || origin[axis] > max[axis] {
+                return false;
+            }
+            continue;
+        }
+        let inv = 1.0 / dir[axis];
+        let mut t1 = (min[axis] - origin[axis]) * inv;
+        let mut t2 = (max[axis] - origin[axis]) * inv;
+        if t1 > t2 {
+            std::mem::swap(&mut t1, &mut t2);
+        }
+        tmin = tmin.max(t1);
+        tmax = tmax.min(t2);
+        if tmin > tmax {
+            return false;
+        }
+    }
+    tmin >= 0.35 && tmax >= tmin
+}
+
+fn ray_platform(origin: [f32; 3], dir: [f32; 3], center: [f32; 2], radius: f32, height: f32) -> bool {
+    let x = origin[0] - center[0];
+    let z = origin[2] - center[1];
+    let r2 = x * x + z * z;
+    if r2 <= radius * radius && origin[1] >= -0.05 && origin[1] <= height + 0.05 {
+        return false;
+    }
+    let (dx, dz) = (dir[0], dir[2]);
+    let a = dx * dx + dz * dz;
+    if a > 1.0e-8 {
+        let b = 2.0 * (x * dx + z * dz);
+        let c = r2 - radius * radius;
+        let disc = b * b - 4.0 * a * c;
+        if disc >= 0.0 {
+            let root = disc.sqrt();
+            let inv = 0.5 / a;
+            for t in [(-b - root) * inv, (-b + root) * inv] {
+                if t < 0.35 {
+                    continue;
+                }
+                let y = origin[1] + t * dir[1];
+                if y >= 0.0 && y <= height {
+                    return true;
+                }
+            }
+        }
+    }
+    if dir[1].abs() > 1.0e-6 {
+        let t = (height - origin[1]) / dir[1];
+        if t >= 0.35 {
+            let hx = x + t * dx;
+            let hz = z + t * dz;
+            if hx * hx + hz * hz <= radius * radius {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn light_toward(yaw_deg: f32, pitch_deg: f32) -> [f32; 3] {
@@ -889,6 +1057,7 @@ fn paint_scenery(
     palette: &dyn Fn(&str) -> [f32; 4],
     cam: &crate::PaintCam,
     content: &gemini_sim::content::Content,
+    shadows: &ShadowWorld,
 ) {
     let albedo = palette(&piece.palette);
     let mesh = &piece.mesh;
@@ -899,7 +1068,8 @@ fn paint_scenery(
         let ia = tri[0] as usize;
         let ib = tri[1] as usize;
         let ic = tri[2] as usize;
-        let shade = scenery_shade(content, mesh.normals[ia], piece.glow);
+        let normal = mesh.normals[ia];
+        let shade = scenery_shade(content, normal, piece.glow);
         let rgb = [albedo[0] * shade, albedo[1] * shade, albedo[2] * shade];
         let Some(a) = project(mesh.positions[ia], cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
             continue;
@@ -910,7 +1080,27 @@ fn paint_scenery(
         let Some(c) = project(mesh.positions[ic], cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
             continue;
         };
-        fill_tri(color, depth, cam.w, cam.h, a, b, c, rgb);
+        if !piece.glow && normal[1] > 0.65 {
+            let dim = scenery_shade_shadow(content, normal);
+            let ratio = if shade > 1.0e-4 { dim / shade } else { 1.0 };
+            fill_shadow_tri(
+                color,
+                depth,
+                cam.w,
+                cam.h,
+                a,
+                b,
+                c,
+                mesh.positions[ia],
+                mesh.positions[ib],
+                mesh.positions[ic],
+                rgb,
+                ratio,
+                shadows,
+            );
+        } else {
+            fill_tri(color, depth, cam.w, cam.h, a, b, c, rgb);
+        }
     }
 }
 
@@ -964,8 +1154,9 @@ pub fn raster_arena(eye: [f32; 3], look: [f32; 3], fov_deg: f32, width: u32, hei
         fill: norm([0.55, 0.35, -0.45]),
     };
     let palette = |name: &str| content.palette.key(name);
+    let shadows = ShadowWorld::build(&content);
     for piece in crate::arena_pieces(&content) {
-        paint_scenery(&mut color, &mut depth, &piece, &palette, &cam, &content);
+        paint_scenery(&mut color, &mut depth, &piece, &palette, &cam, &content, &shadows);
     }
     fog_arena(&mut color, &depth, &content);
     color
@@ -1405,6 +1596,58 @@ fn fill_glow_tri(
             color[o] = out[0];
             color[o + 1] = out[1];
             color[o + 2] = out[2];
+        }
+    }
+}
+
+fn fill_shadow_tri(
+    color: &mut [u8],
+    depth: &mut [f32],
+    w: u32,
+    h: u32,
+    a: [f32; 3],
+    b: [f32; 3],
+    c: [f32; 3],
+    wa: [f32; 3],
+    wb: [f32; 3],
+    wc: [f32; 3],
+    rgb: [f32; 3],
+    shadow_ratio: f32,
+    shadows: &ShadowWorld,
+) {
+    let min_x = a[0].min(b[0]).min(c[0]).floor().max(0.0) as i32;
+    let max_x = a[0].max(b[0]).max(c[0]).ceil().min(w as f32 - 1.0) as i32;
+    let min_y = a[1].min(b[1]).min(c[1]).floor().max(0.0) as i32;
+    let max_y = a[1].max(b[1]).max(c[1]).ceil().min(h as f32 - 1.0) as i32;
+    let area = edge(a, b, c);
+    if area.abs() < 1e-4 {
+        return;
+    }
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let p = [x as f32 + 0.5, y as f32 + 0.5, 0.0];
+            let w0 = edge(b, c, p) / area;
+            let w1 = edge(c, a, p) / area;
+            let w2 = edge(a, b, p) / area;
+            if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                continue;
+            }
+            let z = a[2] * w0 + b[2] * w1 + c[2] * w2;
+            let idx = (y as u32 * w + x as u32) as usize;
+            if z >= depth[idx] {
+                continue;
+            }
+            depth[idx] = z;
+            let world = [
+                wa[0] * w0 + wb[0] * w1 + wc[0] * w2,
+                wa[1] * w0 + wb[1] * w1 + wc[1] * w2,
+                wa[2] * w0 + wb[2] * w1 + wc[2] * w2,
+            ];
+            let scale = if shadows.occluded(world) { shadow_ratio } else { 1.0 };
+            let o = idx * 3;
+            color[o] = byte(rgb[0] * scale);
+            color[o + 1] = byte(rgb[1] * scale);
+            color[o + 2] = byte(rgb[2] * scale);
         }
     }
 }

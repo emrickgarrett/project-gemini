@@ -27,7 +27,7 @@ pub use reveal_still::{paint_reveal, reveal_still_is_flat, still_color_stats};
 pub use pose::{pose, root_motion, AnimInput, Pose, Xform};
 pub use preview::{
     missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_arena, raster_arena_crowd, raster_bug, raster_crown, raster_embedded, raster_heroes_at_15m, raster_in_arena, raster_model, raster_rail_edge, raster_top,
-    raster_crowd, raster_viewmodel, still,
+    raster_crowd, raster_view_gun, raster_viewmodel, still,
     still_open, still_top, ViewmodelFrame,
 };
 pub use visual::{bug, catalog, flat_shaded, EnemyVisual, Gate, Joint, Part, ShotCamera};
@@ -961,6 +961,19 @@ mod tests {
                 let half = cover.size[axis] * 0.5;
                 assert!((min[axis] - (center[axis] - half)).abs() <= slack, "{} axis {axis} min", cover.id);
                 assert!((max[axis] - (center[axis] + half)).abs() <= slack, "{} axis {axis} max", cover.id);
+            }
+        }
+        let radius = content.arena.radius;
+        for piece in &built {
+            if piece.palette != "rim_violet" && piece.palette != "rim_violet_hi" {
+                continue;
+            }
+            for point in &piece.mesh.positions {
+                let distance = (point[0] * point[0] + point[2] * point[2]).sqrt();
+                assert!(
+                    distance + 1.0e-3 >= radius,
+                    "rim vertex at {distance:.3} is inside the play radius {radius}"
+                );
             }
         }
     }
