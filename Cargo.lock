@@ -2859,9 +2859,9 @@ name = "gemini-client"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "gemini-backend",
  "gemini-meshes",
  "gemini-proto",
+ "gemini-server",
  "gemini-sim",
  "toml 0.8.23",
  "wasm-bindgen",
@@ -2893,6 +2893,7 @@ dependencies = [
 name = "gemini-server"
 version = "0.1.0"
 dependencies = [
+ "gemini-backend",
  "gemini-proto",
  "gemini-sim",
 ]

@@ -34,16 +34,44 @@ jobs:
         run: |
           set -euo pipefail
           check() {
-            local pkg="$1"
-            if cargo tree -p "$pkg" -i gemini-backend --prefix none >"/tmp/tree-$pkg.txt" 2>"/tmp/tree-$pkg.err"; then
-              echo "$pkg depends on crates/backend"
-              cat "/tmp/tree-$pkg.txt"
+            local label="$1"
+            shift
+            if cargo tree "$@" -i gemini-backend --prefix none >"/tmp/tree.txt" 2>"/tmp/tree.err"; then
+              echo "$label links gemini-backend"
+              cat /tmp/tree.txt
               exit 1
             fi
+            echo "$label does not link gemini-backend"
           }
-          check gemini-sim
-          check gemini-client
-          echo "gemini-sim and gemini-client do not depend on gemini-backend"
+          check "gemini-sim" -p gemini-sim
+          check "default-features client" -p gemini-client
+          if ! cargo tree -p gemini-client --features dev-host -i gemini-backend --prefix none >"/tmp/tree-dev.txt"; then
+            echo "dev-host feature does not link gemini-backend"
+            exit 1
+          fi
+          echo "dev-host is the only client feature that links gemini-backend"
+          # Profiles do not change features. The release unit graph is the
+          # fingerprint cargo writes for `cargo build --release`.
+          rm -rf target/release/.fingerprint/gemini-client-*
+          cargo build -p gemini-client --release
+          python3 - << 'PY'
+          import glob, json, os, sys
+          def newest(pattern):
+              paths = glob.glob(pattern)
+              if not paths:
+                  sys.exit(f"missing {pattern}")
+              return max(paths, key=os.path.getmtime)
+          def assert_clean(path, label):
+              data = json.load(open(path))
+              names = [dep[1] for dep in data.get("deps", [])]
+              if "gemini_backend" in names:
+                  sys.exit(f"{label} links gemini_backend: {names}")
+              print(f"{label} does not link gemini_backend ({path})")
+          assert_clean(newest("target/debug/.fingerprint/gemini-client-*/test-bin-gemini-client.json"), "default-features client")
+          assert_clean(newest("target/release/.fingerprint/gemini-client-*/bin-gemini-client.json"), "release client")
+          PY
+      - name: dev stand-in host
+        run: cargo test -p gemini-server --features dev-host --lib -- --test-threads=8
       - name: backend does not build for wasm32
         run: |
           set +e

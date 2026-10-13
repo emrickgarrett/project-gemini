@@ -13,10 +13,9 @@ use bevy::ui::GlobalZIndex;
 use bevy::ui_widgets::{Activate, Button};
 use bevy::window::{CursorGrabMode, CursorOptions};
 
-use gemini_meshes::{paint_menu, Hit, MenuShot, PaintPrefs};
-use gemini_sim::content::{currency_reward, Content};
-#[cfg(not(target_arch = "wasm32"))]
-use gemini_sim::content::format_fixed;
+use gemini_meshes::{paint_menu_masked, Hit, MenuPaint, MenuShot, PaintPrefs};
+use gemini_proto::{CratePullFault, CratePullReply};
+use gemini_sim::content::{currency_reward, format_fixed, Content};
 use gemini_sim::reveal::RevealRun;
 use gemini_sim::sim::Phase;
 
@@ -61,26 +60,6 @@ pub struct ServerCrate {
     pub fakeout: Option<String>,
     pub failed: bool,
     pub reason: String,
-}
-
-/// Native wallet. The backend owns the balance. This client never assigns credits.
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Resource)]
-pub struct Wallet(gemini_backend::Account);
-
-#[cfg(not(target_arch = "wasm32"))]
-impl Wallet {
-    pub(crate) fn credits(&self) -> f32 {
-        self.0.credits()
-    }
-
-    pub(crate) fn since_legendary(&self, banner: &str) -> u32 {
-        self.0.since_legendary(banner)
-    }
-
-    pub(crate) fn pull_banner(&mut self, content: &Content) -> Result<gemini_backend::Pull, gemini_backend::PullError> {
-        self.0.pull(content, &content.banners.id)
-    }
 }
 
 #[derive(Resource, Clone, Copy, Debug, Default)]
@@ -138,10 +117,8 @@ pub fn register(app: &mut App) {
         .insert_resource(ResetNotice(notice))
         .init_resource::<Page>()
         .init_resource::<DebugHotkeys>()
-        .init_resource::<ServerCrate>();
-    #[cfg(not(target_arch = "wasm32"))]
-    app.insert_resource(Wallet(gemini_backend::Account::open(&content)));
-    app.init_resource::<PointerReady>()
+        .init_resource::<ServerCrate>()
+        .init_resource::<PointerReady>()
         .init_resource::<Soon>()
         .init_resource::<Dirty>()
         .init_resource::<Focus>()
@@ -484,7 +461,6 @@ pub(crate) fn apply(
     mut cursor: Query<&mut CursorOptions>,
     crate_box: Option<Res<ServerCrate>>,
     mut rank: ResMut<Account>,
-    #[cfg(not(target_arch = "wasm32"))] mut wallet: ResMut<Wallet>,
 ) {
     let Some(id) = action.0.take() else { return };
     let content = Content::embedded();
@@ -568,35 +544,28 @@ pub(crate) fn apply(
         }
         "pull" => {
             dirty.0 = true;
-            #[cfg(target_arch = "wasm32")]
-            {
-                let _ = rank.rank;
-                commands.insert_resource(ServerCrate {
-                    rarity: None,
-                    fakeout: None,
-                    failed: true,
-                    reason: content.ui.copy.pull_needs_server.clone(),
-                });
-                audio::ui_cue(&mut commands, &assets, &content, &prefs, error);
-            }
-            #[cfg(not(target_arch = "wasm32"))]
-            match wallet.0.pull(&content, &content.banners.id) {
-                Ok(pull) => {
-                    rank.rank = pull.rank;
-                    commands.insert_resource(ServerCrate {
-                        rarity: Some(pull.rarity),
-                        fakeout: pull.fakeout,
-                        failed: false,
-                        reason: String::new(),
-                    });
-                    audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
+            match crate::pull_host::round_trip(&content.banners.id) {
+                Ok(reply) => {
+                    let (crate_box, pulled_rank) = crate_from_reply(&content, &reply);
+                    if let Some(pulled_rank) = pulled_rank {
+                        rank.rank = pulled_rank;
+                    }
+                    let failed = crate_box.failed;
+                    commands.insert_resource(crate_box);
+                    let cue = if failed { error } else { confirm };
+                    audio::ui_cue(&mut commands, &assets, &content, &prefs, cue);
                 }
                 Err(err) => {
+                    eprintln!("crate pull failed: {err}");
                     commands.insert_resource(ServerCrate {
                         rarity: None,
                         fakeout: None,
                         failed: true,
-                        reason: pull_line(&content, &err),
+                        reason: if err.contains("corrupt") || err.contains("unreadable") {
+                            content.ui.copy.pull_failed.clone()
+                        } else {
+                            content.ui.copy.pull_needs_server.clone()
+                        },
                     });
                     audio::ui_cue(&mut commands, &assets, &content, &prefs, error);
                 }
@@ -777,7 +746,7 @@ pub(crate) fn rebuild(mut commands: Commands, mut dirty: ResMut<Dirty>, mut view
         return;
     };
     let live = matches!(shot, MenuShot::Pause { live: true, .. });
-    let (rgb, painted) = paint_menu(&content, &shot, width, height);
+    let MenuPaint { rgb, alpha, hits: painted } = paint_menu_masked(&content, &shot, width, height);
     view.hits.0 = painted;
     let target = view
         .menu_cam
@@ -803,7 +772,7 @@ pub(crate) fn rebuild(mut commands: Commands, mut dirty: ResMut<Dirty>, mut view
         ));
     }
     if let Some(images) = view.images.as_mut() {
-        let handle = images.add(image_from_rgb(&rgb, width, height, live));
+        let handle = images.add(image_from_rgba(&rgb, &alpha, width, height));
         commands.spawn((
             Node {
                 position_type: PositionType::Absolute,
@@ -943,28 +912,64 @@ fn paint_prefs(prefs: &Prefs) -> PaintPrefs {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn pull_line(content: &Content, err: &gemini_backend::PullError) -> String {
+pub(crate) fn crate_from_reply(content: &Content, reply: &CratePullReply) -> (ServerCrate, Option<u32>) {
     let copy = &content.ui.copy;
     let places = content.ui.layout.currency_decimals;
-    match err {
-        gemini_backend::PullError::Short { cost, have } => format!(
-            "{} {} {} {} {}",
-            copy.pull_need,
-            format_fixed(*cost, places),
-            copy.pull_credits,
-            copy.pull_have,
-            format_fixed(*have, places)
+    match &reply.fault {
+        None => {
+            let failed = reply.rarity.is_none();
+            (
+                ServerCrate {
+                    rarity: reply.rarity.clone(),
+                    fakeout: reply.fakeout.clone(),
+                    failed,
+                    reason: if failed { copy.pull_failed.clone() } else { String::new() },
+                },
+                (!failed).then_some(reply.rank),
+            )
+        }
+        Some(CratePullFault::Short { cost, have }) => (
+            ServerCrate {
+                rarity: None,
+                fakeout: None,
+                failed: true,
+                reason: format!(
+                    "{} {} {} {} {}",
+                    copy.pull_need,
+                    format_fixed(*cost, places),
+                    copy.pull_credits,
+                    copy.pull_have,
+                    format_fixed(*have, places)
+                ),
+            },
+            None,
         ),
-        gemini_backend::PullError::Banner => copy.pull_failed.clone(),
+        Some(CratePullFault::Banner) => (
+            ServerCrate {
+                rarity: None,
+                fakeout: None,
+                failed: true,
+                reason: copy.pull_failed.clone(),
+            },
+            None,
+        ),
+        Some(CratePullFault::Unavailable) => (
+            ServerCrate {
+                rarity: None,
+                fakeout: None,
+                failed: true,
+                reason: copy.pull_needs_server.clone(),
+            },
+            None,
+        ),
     }
 }
 
-fn image_from_rgb(rgb: &[u8], width: u32, height: u32, punch_clear: bool) -> Image {
+fn image_from_rgba(rgb: &[u8], alpha: &[u8], width: u32, height: u32) -> Image {
     let mut rgba = Vec::with_capacity(rgb.len() / 3 * 4);
-    for px in rgb.chunks_exact(3) {
-        let clear = punch_clear && px == [0, 0, 0];
-        rgba.extend_from_slice(&[px[0], px[1], px[2], if clear { 0 } else { 255 }]);
+    for (index, px) in rgb.chunks_exact(3).enumerate() {
+        let cover = alpha.get(index).copied().unwrap_or(255);
+        rgba.extend_from_slice(&[px[0], px[1], px[2], cover]);
     }
     Image::new(
         Extent3d { width, height, depth_or_array_layers: 1 },

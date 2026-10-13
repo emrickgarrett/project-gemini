@@ -13,6 +13,8 @@ default-run = "gemini-client"
 webgpu = ["bevy/webgpu"]
 # Still renderer. Off by default so the wasm client build does not compile it.
 pullshot = []
+# Local stand-in host. Off by default, so the ordinary client build does not link the account crate.
+dev-host = ["dep:gemini-server", "gemini-server/dev-host"]
 
 [lib]
 path = "src/lib.rs"
@@ -23,10 +25,7 @@ gemini-meshes = { path = "../meshes" }
 gemini-proto = { path = "../proto" }
 bevy = { version = "0.20", features = ["vorbis"] }
 toml = "0.8"
-
-# Native host only. Wasm must not link the backend, and this crate has no feature that grants currency.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-gemini-backend = { path = "../backend" }
+gemini-server = { path = "../server", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2.129"

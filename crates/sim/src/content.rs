@@ -465,6 +465,7 @@ fn validate_reveal_cues(reveal: &CrateReveal, audio: &AudioTable) -> Result<(), 
         let tier = reveal.tier(name).ok_or_else(|| format!("crate_reveal.toml: missing tier {name}"))?;
         ids.push(cue_stem(&tier.tease));
         ids.push(cue_stem(&tier.sting));
+        ids.push(format!("crate_{name}_hit"));
     }
     let fakeout = cue_stem(&reveal.fakeout_sfx);
     if !fakeout.is_empty() {

@@ -1,5 +1,7 @@
 /target
 **/*.rs.bk
+gemini-dev-account.bin
+gemini-dev-account.bin.partial
 web/pkg
 web/pkg-webgl2
 web/pkg-webgpu

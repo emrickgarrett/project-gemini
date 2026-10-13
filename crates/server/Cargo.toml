@@ -10,6 +10,11 @@ description = "Headless sim runner. M2 will host this behind a transport trait."
 name = "gemini-server"
 path = "src/main.rs"
 
+[features]
+# Local stand-in for crate pulls. Off unless a dev build asks for it.
+dev-host = ["dep:gemini-backend"]
+
 [dependencies]
 gemini-sim = { path = "../sim" }
 gemini-proto = { path = "../proto" }
+gemini-backend = { path = "../backend", optional = true }

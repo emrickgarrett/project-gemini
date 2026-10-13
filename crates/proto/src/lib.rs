@@ -50,6 +50,32 @@ pub struct Welcome {
     pub snapshot: Vec<u8>,
 }
 
+/// A crate pull. The host rolls. The client sends this and waits for [`CratePullReply`].
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CratePullRequest {
+    pub version: u32,
+    pub banner: String,
+}
+
+/// Why the host did not return a tier. The client prints copy from content. It does not roll.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum CratePullFault {
+    Short { cost: f32, have: f32 },
+    Banner,
+    /// The peer speaks this protocol and has no wallet.
+    Unavailable,
+}
+
+/// The host's answer to [`CratePullRequest`]. A later server sends the same bytes.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CratePullReply {
+    pub version: u32,
+    pub rarity: Option<String>,
+    pub fakeout: Option<String>,
+    pub rank: u32,
+    pub fault: Option<CratePullFault>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Packet {
     Hello(Hello),
@@ -60,6 +86,8 @@ pub enum Packet {
     Welcome(Welcome),
     /// Host entered away after the detect wait. Clients show the banner on their next tick.
     HostAway { version: u32 },
+    CratePull(CratePullRequest),
+    CratePullReply(CratePullReply),
 }
 
 impl Packet {

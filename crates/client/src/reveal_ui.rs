@@ -23,7 +23,9 @@ pub enum RevealFrom {
 pub(crate) struct RevealRoot;
 
 #[derive(Component)]
-pub(crate) struct RevealVoice;
+pub(crate) struct RevealVoice {
+    pub id: String,
+}
 
 pub fn tick(
     mut commands: Commands,
@@ -145,6 +147,6 @@ fn play_cue(commands: &mut Commands, assets: &AssetServer, content: &Content, id
     commands.spawn((
         AudioPlayer::new(assets.load::<AudioSource>(path.to_string())),
         PlaybackSettings::DESPAWN.with_volume(Volume::Linear(volume * bus)),
-        RevealVoice,
+        RevealVoice { id: id.to_string() },
     ));
 }

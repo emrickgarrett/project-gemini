@@ -1,5 +1,8 @@
 //! Player-hosted listen server. The sim stays socket-free; this crate owns TCP.
 
+#[cfg(feature = "dev-host")]
+pub mod dev_host;
+
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::time::Duration;

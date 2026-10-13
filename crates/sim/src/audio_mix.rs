@@ -197,11 +197,16 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
         } else {
             None
         };
+        let path = match row.get("path").and_then(|value| value.as_str()) {
+            Some(path) if !path.is_empty() => path.to_string(),
+            Some(_) => return Err(format!("{key} path is empty")),
+            None => format!("audio/sfx/{key}.ogg"),
+        };
         by_file.insert(
             key.clone(),
             SfxDef {
                 id: key.clone(),
-                path: format!("audio/sfx/{key}.ogg"),
+                path,
                 loudness: volume,
                 volume,
                 crowd: category == "swarm_bed",

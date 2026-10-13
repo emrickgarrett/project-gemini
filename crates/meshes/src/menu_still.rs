@@ -4,7 +4,7 @@
 use gemini_sim::content::{format_fixed, Content};
 
 use crate::away_still::paint_arena;
-use crate::glyph::{blit, measure};
+use crate::glyph::{blit, mask_begin, mask_end, mask_mark, measure};
 use crate::reveal_still::paint_stage;
 
 #[derive(Clone, Debug)]
@@ -84,9 +84,23 @@ impl Frame {
     }
 }
 
+pub struct MenuPaint {
+    pub rgb: Vec<u8>,
+    pub alpha: Vec<u8>,
+    pub hits: Vec<Hit>,
+}
+
 pub fn paint_menu(content: &Content, shot: &MenuShot, width: u32, height: u32) -> (Vec<u8>, Vec<Hit>) {
+    let painted = paint_menu_masked(content, shot, width, height);
+    (painted.rgb, painted.hits)
+}
+
+/// RGB plus a real coverage mask. Co-op pause leaves the backdrop at alpha 0.
+pub fn paint_menu_masked(content: &Content, shot: &MenuShot, width: u32, height: u32) -> MenuPaint {
     let frame = Frame::new(content, width.max(8), height.max(8));
     let mut rgb = vec![0u8; (frame.width * frame.height * 3) as usize];
+    let live = matches!(shot, MenuShot::Pause { live: true, .. });
+    mask_begin((frame.width * frame.height) as usize, if live { 0 } else { 255 });
     match shot {
         MenuShot::ClickToPlay | MenuShot::Pause { live: false, .. } => {
             paint_arena(&mut rgb, frame.width, frame.height, content);
@@ -114,7 +128,7 @@ pub fn paint_menu(content: &Content, shot: &MenuShot, width: u32, height: u32) -
         }
         MenuShot::ClickToPlay => paint_click(&mut rgb, content, frame),
     };
-    (rgb, hits)
+    MenuPaint { rgb, alpha: mask_end(), hits }
 }
 
 fn paint_title(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, notice: bool, native_quit: bool) -> Vec<Hit> {
@@ -857,6 +871,7 @@ fn put(rgb: &mut [u8], width: u32, height: u32, x: i32, y: i32, color: [u8; 3]) 
     let i = ((y as u32 * width) + x as u32) as usize * 3;
     if i + 2 < rgb.len() {
         rgb[i..i + 3].copy_from_slice(&color);
+        mask_mark(width, x, y);
     }
 }
 
@@ -1221,7 +1236,12 @@ mod tests {
         let bevel = bytes(&content, &content.ui.colors.bevel_light);
         let inset = (content.ui.layout.pause_outline_px * scale).round() as i32 + 1;
         assert_eq!(sample(&solo, 1280, x + pw / 2, y + inset), bevel, "the top bevel is the lit palette key");
-        assert_eq!(sample(&live, 1280, 0, 0), [0, 0, 0], "co-op pause leaves the backdrop clear");
+        assert_eq!(sample(&live, 1280, 0, 0), [0, 0, 0], "co-op pause leaves the backdrop unpainted");
+        let masked = paint_menu_masked(&content, &MenuShot::Pause { focus: 0, hero_id: content.hero.id.clone(), live: true }, 1280, 720);
+        assert_eq!(alpha_at(&masked.alpha, 1280, 0, 0), 0, "the co-op backdrop is a clear alpha mask");
+        assert_eq!(alpha_at(&masked.alpha, 1280, x + pw / 2, y + ph / 2), 255, "the panel stays opaque");
+        let center = sample(&masked.rgb, 1280, x + pw / 2, y + ph / 2);
+        assert_ne!(center, [0, 0, 0], "panel coverage does not depend on punching out black");
         assert_ne!(sample(&solo, 1280, 0, 0), [0, 0, 0], "solo pause keeps a dimmed still");
         let (failed, _) = paint_menu(
             &content,
@@ -1252,5 +1272,9 @@ mod tests {
     fn sample(rgb: &[u8], width: u32, x: i32, y: i32) -> [u8; 3] {
         let i = ((y as u32 * width) + x as u32) as usize * 3;
         [rgb[i], rgb[i + 1], rgb[i + 2]]
+    }
+
+    fn alpha_at(alpha: &[u8], width: u32, x: i32, y: i32) -> u8 {
+        alpha[(y as u32 * width + x as u32) as usize]
     }
 }
