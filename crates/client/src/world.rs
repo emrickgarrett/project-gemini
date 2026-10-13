@@ -251,6 +251,7 @@ pub fn scene(
             Tonemapping::TonyMcMapface,
             ColorGrading::default(),
             arena_fog(content),
+            shadow_filter(content),
             IsDefaultUiCamera,
             PlayPiece,
         ))
@@ -721,11 +722,15 @@ fn light_toward(yaw_deg: f32, pitch_deg: f32) -> bevy::math::Vec3 {
     bevy::math::Vec3::new(yaw.sin() * pitch.cos(), pitch.sin(), yaw.cos() * pitch.cos())
 }
 
+fn shadow_filter(content: &gemini_sim::content::Content) -> bevy::light::ShadowFilteringMethod {
+    match content.arena_scene.light.shadow_filter.as_str() {
+        "gaussian" => bevy::light::ShadowFilteringMethod::Gaussian,
+        other => panic!("shadow_filter {other} is unknown"),
+    }
+}
+
 fn spawn_arena_lights(commands: &mut Commands, content: &gemini_sim::content::Content) {
     let light = &content.arena_scene.light;
-    if light.shadow_filter != "gaussian" {
-        panic!("shadow_filter {} is unknown", light.shadow_filter);
-    }
     let key = content.palette.key(&light.key_color);
     let fill = content.palette.key(&light.fill_color);
     let ambient = content.palette.key(&light.ambient_color);
@@ -738,7 +743,6 @@ fn spawn_arena_lights(commands: &mut Commands, content: &gemini_sim::content::Co
                 shadow_maps_enabled: shadows,
                 ..default()
             },
-            bevy::light::ShadowFilteringMethod::Gaussian,
             Transform::from_rotation(Quat::from_rotation_arc(bevy::math::Vec3::NEG_Z, -toward)),
             PlayPiece,
         ));

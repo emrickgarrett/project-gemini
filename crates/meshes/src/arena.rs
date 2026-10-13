@@ -36,6 +36,7 @@ pub fn pieces(content: &Content) -> Vec<ArenaPiece> {
                 &platform.ramps,
                 platform.center.x,
                 platform.center.z,
+                scene.ramp_skip_pad,
             ),
             material,
         ));
@@ -51,7 +52,7 @@ pub fn pieces(content: &Content) -> Vec<ArenaPiece> {
         platform.radius,
         platform.height,
         &platform.ramps,
-        mat(scene_materials(content), "navy"),
+        mat(scene_materials(content), &scene.navy),
     ));
     out.push(trim_ring(content));
     for ramp in &platform.ramps {
@@ -62,7 +63,7 @@ pub fn pieces(content: &Content) -> Vec<ArenaPiece> {
                 ramp.width,
                 platform.height,
             ),
-            mat(scene_materials(content), "pale"),
+            mat(scene_materials(content), &scene.pale),
         ));
     }
     out.extend(panels(content));
@@ -77,7 +78,7 @@ pub fn pieces(content: &Content) -> Vec<ArenaPiece> {
             scene.vent_size,
             INK,
         );
-        out.push(piece(mesh, mat(scene_materials(content), "navy")));
+        out.push(piece(mesh, mat(scene_materials(content), &scene.navy)));
     }
     for cliff in &scene.cliffs {
         out.push(piece(
@@ -88,7 +89,7 @@ pub fn pieces(content: &Content) -> Vec<ArenaPiece> {
     for cover in &content.arena.cover {
         out.push(piece(
             cover_visual(content, cover),
-            mat(scene_materials(content), "boulder"),
+            mat(scene_materials(content), &scene.boulder),
         ));
     }
     for nest in &scene.nests {
@@ -150,6 +151,8 @@ pub fn cover_visual(content: &Content, cover: &Cover) -> MeshData {
         scene.cover_chamfer,
         scene.boulder_slices,
         scene.boulder_stacks,
+        scene.dome_radius_scale,
+        scene.dome_height_scale,
     );
     geom::translate(&mut mesh, [cover.pos.x, cover.pos.y, cover.pos.z]);
     mesh
@@ -256,8 +259,8 @@ fn deck_pieces(content: &Content) -> Vec<ArenaPiece> {
         );
     }
     vec![
-        piece(side, mat(scene_materials(content), "navy")),
-        piece(top, mat(scene_materials(content), "pale")),
+        piece(side, mat(scene_materials(content), &content.arena_scene.navy)),
+        piece(top, mat(scene_materials(content), &content.arena_scene.pale)),
     ]
 }
 
@@ -303,16 +306,15 @@ fn trim_ring(content: &Content) -> ArenaPiece {
             INK,
         );
     }
-    piece(mesh, mat(scene_materials(content), "trim"))
+    piece(mesh, mat(scene_materials(content), &scene.trim))
 }
 
 fn panels(content: &Content) -> Vec<ArenaPiece> {
     let scene = &content.arena_scene;
     let platform = &content.arena.platform;
-    let material = mat(scene_materials(content), "navy");
+    let material = mat(scene_materials(content), &scene.navy);
     let mut out = Vec::new();
-    let radius =
-        (platform.radius - scene.panel_length * 0.5 - scene.trim_outset).max(scene.panel_length);
+    let radius = platform.radius - scene.panel_length * 0.5 - scene.trim_outset;
     let y = platform.height + scene.panel_lift + scene.panel_thickness * 0.5;
     for i in 0..scene.panel_count {
         let ang = i as f32 / scene.panel_count as f32 * std::f32::consts::TAU;
@@ -324,7 +326,7 @@ fn panels(content: &Content) -> Vec<ArenaPiece> {
             [
                 scene.panel_length,
                 scene.panel_thickness,
-                scene.panel_thickness * 4.0,
+                scene.panel_thickness * scene.panel_depth_scale,
             ],
             INK,
         );
@@ -344,7 +346,7 @@ fn panels(content: &Content) -> Vec<ArenaPiece> {
 
 fn ledge_pad(content: &Content, x: f32, y: f32, z: f32) -> Vec<ArenaPiece> {
     let scene = &content.arena_scene;
-    let material = mat(scene_materials(content), "pale");
+    let material = mat(scene_materials(content), &scene.pale);
     let top = y - scene.ledge_size[1] * 0.5;
     let mut pad = MeshData::new();
     geom::box_mesh(&mut pad, [x, top, z], scene.ledge_size, INK);
@@ -354,15 +356,15 @@ fn ledge_pad(content: &Content, x: f32, y: f32, z: f32) -> Vec<ArenaPiece> {
         &mut skirt,
         [x, skirt_y, z],
         [
-            scene.ledge_size[0] * 0.82,
+            scene.ledge_size[0] * scene.ledge_skirt_scale,
             scene.ledge_thickness,
-            scene.ledge_size[2] * 0.82,
+            scene.ledge_size[2] * scene.ledge_skirt_scale,
         ],
         INK,
     );
     vec![
         piece(pad, material),
-        piece(skirt, mat(scene_materials(content), "navy")),
+        piece(skirt, mat(scene_materials(content), &scene.navy)),
     ]
 }
 
@@ -419,49 +421,59 @@ fn relay(content: &Content, tower: &gemini_sim::scenery::Tower) -> Vec<ArenaPiec
 
 fn prop_mesh(content: &Content, prop: &gemini_sim::scenery::Prop) -> MeshData {
     let scene = &content.arena_scene;
+    let shape = scene
+        .prop_meshes
+        .iter()
+        .find(|row| row.kind == prop.kind)
+        .unwrap_or_else(|| panic!("prop {} kind \"{}\" has no mesh", prop.id, prop.kind));
     let mut mesh = MeshData::new();
-    match prop.kind.as_str() {
-        "flora_stalk" => {
+    match shape.mesh.as_str() {
+        "cylinder" => {
             cylinder_upright(&mut mesh, prop.size, scene.flora_sides);
         }
-        "flora_bulb" => {
+        "bulb" => {
+            let chamfer = prop.size[0].min(prop.size[2]) * scene.bulb_chamfer_scale;
             rock_dome(
                 &mut mesh,
                 prop.size,
-                prop.size[0].min(prop.size[2]) * 0.2,
+                chamfer,
                 scene.flora_sides,
-                2,
+                scene.bulb_stacks,
+                scene.dome_radius_scale,
+                scene.dome_height_scale,
             );
+            geom::bevel_box(&mut mesh, prop.size, chamfer, INK);
+        }
+        "bevel" => {
             geom::bevel_box(
                 &mut mesh,
                 prop.size,
-                prop.size[0].min(prop.size[2]) * 0.2,
+                prop.size[0].min(prop.size[2]) * scene.clutter_chamfer_scale,
                 INK,
             );
         }
-        "rim_rock" | "pebble" | "rubble" => {
-            geom::bevel_box(
-                &mut mesh,
-                prop.size,
-                prop.size[0].min(prop.size[2]) * 0.18,
-                INK,
-            );
-        }
-        _ => {
+        "box" => {
             geom::box_mesh(&mut mesh, [0.0, 0.0, 0.0], prop.size, INK);
         }
+        other => panic!("prop {} mesh \"{other}\" is unknown", prop.id),
     }
     geom::rotate_y(&mut mesh, prop.yaw_deg.to_radians());
     geom::translate(&mut mesh, prop.pos);
     mesh
 }
 
-fn rock_dome(mesh: &mut MeshData, size: [f32; 3], chamfer: f32, slices: u32, stacks: u32) {
-    let hx = (size[0] * 0.5 - chamfer).max(0.05) * 0.62;
-    let hz = (size[2] * 0.5 - chamfer).max(0.05) * 0.62;
-    let hy = size[1] * 0.5 * 0.72;
-    let slices = slices.max(3);
-    let stacks = stacks.max(2);
+fn rock_dome(
+    mesh: &mut MeshData,
+    size: [f32; 3],
+    chamfer: f32,
+    slices: u32,
+    stacks: u32,
+    radius_scale: f32,
+    height_scale: f32,
+) {
+    let hx = (size[0] * 0.5 - chamfer) * radius_scale;
+    let hz = (size[2] * 0.5 - chamfer) * radius_scale;
+    let hy = size[1] * 0.5 * height_scale;
     let mut rings: Vec<Vec<[f32; 3]>> = Vec::new();
     for stack in 0..=stacks {
         let v = stack as f32 / stacks as f32;
@@ -513,6 +525,7 @@ fn annulus(
     ramps: &[Ramp],
     cx: f32,
     cz: f32,
+    ramp_skip_pad: f32,
 ) -> MeshData {
     let mut mesh = MeshData::new();
     for i in 0..sides {
@@ -523,7 +536,7 @@ fn annulus(
         let rad = (inner + outer) * 0.5;
         let x = cx + c * rad;
         let z = cz + s * rad;
-        if on_ramp(x, z, ramps) {
+        if on_ramp(x, z, ramps, ramp_skip_pad) {
             continue;
         }
         let point = |ang: f32, rad: f32| {
@@ -548,7 +561,7 @@ fn annulus(
     mesh
 }
 
-fn on_ramp(x: f32, z: f32, ramps: &[Ramp]) -> bool {
+fn on_ramp(x: f32, z: f32, ramps: &[Ramp], pad: f32) -> bool {
     for ramp in ramps {
         let abx = ramp.to.x - ramp.from.x;
         let abz = ramp.to.z - ramp.from.z;
@@ -557,7 +570,7 @@ fn on_ramp(x: f32, z: f32, ramps: &[Ramp]) -> bool {
             continue;
         }
         let t = ((x - ramp.from.x) * abx + (z - ramp.from.z) * abz) / len2;
-        if !(-0.02..=1.02).contains(&t) {
+        if t < -pad || t > 1.0 + pad {
             continue;
         }
         let clamped = t.clamp(0.0, 1.0);
@@ -569,19 +582,6 @@ fn on_ramp(x: f32, z: f32, ramps: &[Ramp]) -> bool {
         }
     }
     false
-}
-
-/// Ground disc kept with the dressing key. Arena pieces draw the floor, so stills do not use this.
-#[allow(dead_code)]
-pub fn review_ground(content: &Content) -> MeshData {
-    let mut mesh = MeshData::new();
-    disc(
-        &mut mesh,
-        [0.0, content.arena_dressing.review_ground_y, 0.0],
-        content.arena.radius,
-        content.arena_dressing.deck_sides,
-    );
-    mesh
 }
 
 fn curb(
@@ -694,17 +694,4 @@ fn ramp_wedge(from: [f32; 2], to: [f32; 2], width: f32, height: f32) -> MeshData
     geom::add_face(&mut mesh, a0, a1, a0g, INK);
     geom::add_face(&mut mesh, b0, b0g, b1, INK);
     mesh
-}
-
-fn disc(mesh: &mut MeshData, center: [f32; 3], radius: f32, sides: u32) {
-    let mut ring = Vec::new();
-    for i in 0..sides {
-        let a = i as f32 / sides as f32 * std::f32::consts::TAU;
-        let (s, c) = a.sin_cos();
-        ring.push([center[0] + c * radius, center[1], center[2] + s * radius]);
-    }
-    for i in 0..sides as usize {
-        let j = (i + 1) % sides as usize;
-        geom::add_face(mesh, center, ring[i], ring[j], INK);
-    }
 }

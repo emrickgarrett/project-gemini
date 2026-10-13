@@ -3367,6 +3367,27 @@ fn scenery_limits_fail_the_load() {
     let err = arena(&blocked).expect_err("cover on a lane");
     assert!(err.contains("boulder_ne"), "{err}");
     assert!(err.contains("blocks"), "{err}");
+    let sphere = base.arena_visual.replacen(
+        "kind = \"crack\"\nmesh = \"box\"",
+        "kind = \"crack\"\nmesh = \"sphere\"",
+        1,
+    );
+    let err = visual(&sphere).expect_err("prop mesh");
+    assert!(err.contains("sphere"), "{err}");
+    let orphan = base.arena_visual.replacen(
+        "kind = \"crack\"\npos =",
+        "kind = \"crate\"\npos =",
+        1,
+    );
+    let err = visual(&orphan).expect_err("prop kind");
+    assert!(err.contains("crate"), "{err}");
+    assert!(err.contains("mesh"), "{err}");
+    let missing_navy = base.arena_visual.replacen("navy = \"navy\"\n", "", 1);
+    let err = visual(&missing_navy).expect_err("navy key");
+    assert!(err.contains("navy"), "{err}");
+    let bad_navy = base.arena_visual.replacen("navy = \"navy\"", "navy = \"missing\"", 1);
+    let err = visual(&bad_navy).expect_err("navy material");
+    assert!(err.contains("missing"), "{err}");
 }
 
 fn sources_ranks<'a>(

@@ -31,12 +31,31 @@ trim_outset = 0.22
 trim_lift = 0.04
 panel_length = 2.4
 panel_thickness = 0.08
+panel_depth_scale = 4.0
 panel_lift = 0.03
 panel_count = 8
 vent_size = [1.4, 0.4, 1.4]
 vent_center_y = 0.2
 ledge_size = [2.4, 0.3, 2.4]
 ledge_thickness = 0.12
+ledge_skirt_scale = 0.82
+bulb_chamfer_scale = 0.2
+bulb_stacks = 2
+clutter_chamfer_scale = 0.18
+dome_radius_scale = 0.62
+dome_height_scale = 0.72
+ramp_skip_pad = 0.02
+min_floor_sides = 8
+min_slice_count = 3
+min_stack_count = 2
+min_panel_count = 1
+camera_fov_min = 1.0
+camera_fov_max = 170.0
+min_camera_pixels = 8
+navy = "navy"
+pale = "pale"
+trim = "trim"
+boulder = "boulder"
 max_triangles = 3800
 max_bytes = 410000
 sha256 = "a7c295a25e847cc41ecbaaeae9ae6c71af5eef087db089d8a1c7424c95653b5a"
@@ -45,6 +64,34 @@ review_key = 0.28
 review_fill = 0.12
 review_gain = 3.35
 exposure_ev = 1.0
+
+[[prop_mesh]]
+kind = "flora_stalk"
+mesh = "cylinder"
+
+[[prop_mesh]]
+kind = "flora_bulb"
+mesh = "bulb"
+
+[[prop_mesh]]
+kind = "rim_rock"
+mesh = "bevel"
+
+[[prop_mesh]]
+kind = "pebble"
+mesh = "bevel"
+
+[[prop_mesh]]
+kind = "rubble"
+mesh = "bevel"
+
+[[prop_mesh]]
+kind = "crack"
+mesh = "box"
+
+[[prop_mesh]]
+kind = "vein"
+mesh = "box"
 
 [light]
 key_color = "key_warm"

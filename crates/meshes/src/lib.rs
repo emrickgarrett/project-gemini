@@ -20,7 +20,7 @@ pub use cast::{
 
 pub use menu_still::{paint_menu, raster_hero_portrait, Hit, MenuShot, PaintPrefs};
 
-pub use arena::{cover_visual, pieces as arena_pieces, review_ground, scenery_fingerprint, ArenaPiece};
+pub use arena::{cover_visual, pieces as arena_pieces, scenery_fingerprint, ArenaPiece};
 pub use away_still::{paint_away, AwayShot};
 pub use reveal_still::{paint_reveal, reveal_still_is_flat, still_color_stats};
 

@@ -2450,12 +2450,32 @@ fn load_arena_dressing(text: &str) -> Result<(ArenaDressing, crate::scenery::Are
             "trim_lift",
             "panel_length",
             "panel_thickness",
+            "panel_depth_scale",
             "panel_lift",
             "panel_count",
             "vent_size",
             "vent_center_y",
             "ledge_size",
             "ledge_thickness",
+            "ledge_skirt_scale",
+            "bulb_chamfer_scale",
+            "bulb_stacks",
+            "clutter_chamfer_scale",
+            "dome_radius_scale",
+            "dome_height_scale",
+            "ramp_skip_pad",
+            "min_floor_sides",
+            "min_slice_count",
+            "min_stack_count",
+            "min_panel_count",
+            "camera_fov_min",
+            "camera_fov_max",
+            "min_camera_pixels",
+            "navy",
+            "pale",
+            "trim",
+            "boulder",
+            "prop_mesh",
             "max_triangles",
             "max_bytes",
             "sha256",
@@ -2959,15 +2979,19 @@ impl Arena {
     }
 
     pub fn shove_bug(&self, pos: &mut Vec3, radius: f32) {
-        if pos.y > self.platform.height - 0.5 || self.ramp_height(pos.x, pos.z).is_some() {
+        if pos.y > self.platform.height - self.scenery.deck_shove_drop
+            || self.ramp_height(pos.x, pos.z).is_some()
+        {
             self.push_cover(pos, radius);
             return;
         }
         if self.in_disc(pos.x, pos.z) {
             let dx = pos.x - self.platform.center.x;
             let dz = pos.z - self.platform.center.z;
-            let d = (dx * dx + dz * dz).sqrt().max(0.001);
-            let rim = self.platform.radius + 0.05;
+            let d = (dx * dx + dz * dz)
+                .sqrt()
+                .max(self.scenery.shove_center_epsilon);
+            let rim = self.platform.radius + self.scenery.shove_rim_outset;
             pos.x = self.platform.center.x + dx / d * rim;
             pos.z = self.platform.center.z + dz / d * rim;
         }

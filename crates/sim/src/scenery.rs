@@ -38,6 +38,9 @@ pub struct SceneryRules {
     pub luma_weights: [f32; 3],
     pub mover_height: f32,
     pub cover_solve_passes: u32,
+    pub deck_shove_drop: f32,
+    pub shove_rim_outset: f32,
+    pub shove_center_epsilon: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -83,12 +86,32 @@ pub struct ArenaScene {
     pub trim_lift: f32,
     pub panel_length: f32,
     pub panel_thickness: f32,
+    pub panel_depth_scale: f32,
     pub panel_lift: f32,
     pub panel_count: u32,
     pub vent_size: [f32; 3],
     pub vent_center_y: f32,
     pub ledge_size: [f32; 3],
     pub ledge_thickness: f32,
+    pub ledge_skirt_scale: f32,
+    pub bulb_chamfer_scale: f32,
+    pub bulb_stacks: u32,
+    pub clutter_chamfer_scale: f32,
+    pub dome_radius_scale: f32,
+    pub dome_height_scale: f32,
+    pub ramp_skip_pad: f32,
+    pub min_floor_sides: u32,
+    pub min_slice_count: u32,
+    pub min_stack_count: u32,
+    pub min_panel_count: u32,
+    pub camera_fov_min: f32,
+    pub camera_fov_max: f32,
+    pub min_camera_pixels: u32,
+    pub navy: String,
+    pub pale: String,
+    pub trim: String,
+    pub boulder: String,
+    pub prop_meshes: Vec<PropMesh>,
     pub max_triangles: u32,
     pub max_bytes: u32,
     pub sha256: String,
@@ -164,6 +187,12 @@ pub struct Prop {
     pub size: [f32; 3],
     pub yaw_deg: f32,
     pub material: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct PropMesh {
+    pub kind: String,
+    pub mesh: String,
 }
 
 #[derive(Clone, Debug)]
@@ -286,12 +315,32 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
         trim_lift: content::vis_f32(table, "trim_lift", what)?,
         panel_length: content::vis_f32(table, "panel_length", what)?,
         panel_thickness: content::vis_f32(table, "panel_thickness", what)?,
+        panel_depth_scale: content::vis_f32(table, "panel_depth_scale", what)?,
         panel_lift: content::vis_f32(table, "panel_lift", what)?,
         panel_count: content::vis_u32(table, "panel_count", what)?,
         vent_size: content::vis_vec3(table, "vent_size", what)?,
         vent_center_y: content::vis_f32(table, "vent_center_y", what)?,
         ledge_size: content::vis_vec3(table, "ledge_size", what)?,
         ledge_thickness: content::vis_f32(table, "ledge_thickness", what)?,
+        ledge_skirt_scale: content::vis_f32(table, "ledge_skirt_scale", what)?,
+        bulb_chamfer_scale: content::vis_f32(table, "bulb_chamfer_scale", what)?,
+        bulb_stacks: content::vis_u32(table, "bulb_stacks", what)?,
+        clutter_chamfer_scale: content::vis_f32(table, "clutter_chamfer_scale", what)?,
+        dome_radius_scale: content::vis_f32(table, "dome_radius_scale", what)?,
+        dome_height_scale: content::vis_f32(table, "dome_height_scale", what)?,
+        ramp_skip_pad: content::vis_f32(table, "ramp_skip_pad", what)?,
+        min_floor_sides: content::vis_u32(table, "min_floor_sides", what)?,
+        min_slice_count: content::vis_u32(table, "min_slice_count", what)?,
+        min_stack_count: content::vis_u32(table, "min_stack_count", what)?,
+        min_panel_count: content::vis_u32(table, "min_panel_count", what)?,
+        camera_fov_min: content::vis_f32(table, "camera_fov_min", what)?,
+        camera_fov_max: content::vis_f32(table, "camera_fov_max", what)?,
+        min_camera_pixels: content::vis_u32(table, "min_camera_pixels", what)?,
+        navy: content::vis_str(table, "navy", what)?.to_string(),
+        pale: content::vis_str(table, "pale", what)?.to_string(),
+        trim: content::vis_str(table, "trim", what)?.to_string(),
+        boulder: content::vis_str(table, "boulder", what)?.to_string(),
+        prop_meshes: load_named(table.get("prop_mesh").unwrap(), "prop_mesh", load_prop_mesh)?,
         max_triangles: content::vis_u32(table, "max_triangles", what)?,
         max_bytes: content::vis_u32(table, "max_bytes", what)?,
         sha256: content::vis_str(table, "sha256", what)?.to_ascii_lowercase(),
@@ -309,12 +358,23 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
         towers: load_named(table.get("tower").unwrap(), "tower", load_tower)?,
         cameras: load_named(table.get("camera").unwrap(), "camera", load_camera)?,
     };
-    if scene.floor_sides < 8
-        || scene.boulder_slices < 3
-        || scene.boulder_stacks < 2
-        || scene.nest_sides < 3
-        || scene.flora_sides < 3
-        || scene.panel_count < 1
+    if scene.min_floor_sides < 1
+        || scene.min_slice_count < 1
+        || scene.min_stack_count < 1
+        || scene.min_panel_count < 1
+        || scene.min_camera_pixels < 1
+        || !(scene.camera_fov_min > 0.0)
+        || !(scene.camera_fov_max > scene.camera_fov_min)
+    {
+        return Err("arena_visual.toml tessellation limits are out of range".into());
+    }
+    if scene.floor_sides < scene.min_floor_sides
+        || scene.boulder_slices < scene.min_slice_count
+        || scene.boulder_stacks < scene.min_stack_count
+        || scene.nest_sides < scene.min_slice_count
+        || scene.flora_sides < scene.min_slice_count
+        || scene.bulb_stacks < scene.min_stack_count
+        || scene.panel_count < scene.min_panel_count
     {
         return Err("arena_visual.toml tessellation counts are out of range".into());
     }
@@ -323,12 +383,23 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
         || !(scene.trim_outset > 0.0)
         || !(scene.panel_length > 0.0)
         || !(scene.panel_thickness > 0.0)
+        || !(scene.panel_depth_scale > 0.0)
         || !(scene.ledge_thickness > 0.0)
+        || !(scene.ledge_skirt_scale > 0.0)
+        || !(scene.bulb_chamfer_scale > 0.0)
+        || !(scene.clutter_chamfer_scale > 0.0)
+        || !(scene.dome_radius_scale > 0.0)
+        || !(scene.dome_height_scale > 0.0)
+        || scene.ramp_skip_pad < 0.0
         || scene.vent_size.iter().any(|n| !(*n > 0.0))
         || scene.ledge_size.iter().any(|n| !(*n > 0.0))
         || scene.max_triangles == 0
         || scene.max_bytes == 0
         || !(scene.review_gain > 0.0)
+        || scene.navy.is_empty()
+        || scene.pale.is_empty()
+        || scene.trim.is_empty()
+        || scene.boulder.is_empty()
     {
         return Err("arena_visual.toml scenery sizes must be > 0".into());
     }
@@ -536,6 +607,19 @@ pub fn validate(
         }
         Ok(())
     };
+    for (role, id) in [
+        ("navy", scene.navy.as_str()),
+        ("pale", scene.pale.as_str()),
+        ("trim", scene.trim.as_str()),
+        ("boulder", scene.boulder.as_str()),
+    ] {
+        require_mat(id, role)?;
+    }
+    let panel_radius = arena.platform.radius - scene.panel_length * 0.5 - scene.trim_outset;
+    if !(panel_radius > 0.0) {
+        return Err("panel ring radius must be > 0".into());
+    }
+    require_prop_meshes(scene)?;
     for floor in &scene.floors {
         require_mat(&floor.material, &format!("floor {}", floor.id))?;
         if floor.y.abs() > rules.overlap_epsilon {
@@ -587,6 +671,19 @@ pub fn validate(
                 prop.id, prop.size[1], rules.max_clutter_height
             ));
         }
+        if let Some(shape) = scene.prop_meshes.iter().find(|row| row.kind == prop.kind) {
+            let scale = match shape.mesh.as_str() {
+                "bulb" => scene.bulb_chamfer_scale,
+                "bevel" => scene.clutter_chamfer_scale,
+                _ => 0.0,
+            };
+            if scale > 0.0 && !chamfer_fits(prop.size, scale) {
+                return Err(format!(
+                    "prop {} chamfer does not fit inside its size",
+                    prop.id
+                ));
+            }
+        }
         if rules.outside_kinds.iter().any(|kind| kind == &prop.kind) {
             let reach = (prop.size[0] * prop.size[0] + prop.size[2] * prop.size[2]).sqrt() * 0.5;
             let dist = (prop.pos[0] * prop.pos[0] + prop.pos[2] * prop.pos[2]).sqrt();
@@ -610,7 +707,8 @@ pub fn validate(
         {
             return Err(format!("nest {} sizes are out of range", nest.id));
         }
-        let goo = material(&nest.goo).unwrap();
+        let goo = material(&nest.goo)
+            .ok_or_else(|| format!("nest {} goo material \"{}\" is missing", nest.id, nest.goo))?;
         if !goo.glow {
             return Err(format!("nest {} goo material must be glow", nest.id));
         }
@@ -634,7 +732,12 @@ pub fn validate(
                 return Err(format!("tower {} {name} size must be > 0", tower.id));
             }
         }
-        let beacon = material(&tower.beacon_material).unwrap();
+        let beacon = material(&tower.beacon_material).ok_or_else(|| {
+            format!(
+                "tower {} beacon material \"{}\" is missing",
+                tower.id, tower.beacon_material
+            )
+        })?;
         if !beacon.glow {
             return Err(format!("tower {} beacon must be a glow material", tower.id));
         }
@@ -645,7 +748,10 @@ pub fn validate(
         }
     }
     for camera in &scene.cameras {
-        if !(camera.fov > 1.0 && camera.fov < 170.0) || camera.width < 8 || camera.height < 8 {
+        if !(camera.fov > scene.camera_fov_min && camera.fov < scene.camera_fov_max)
+            || camera.width < scene.min_camera_pixels
+            || camera.height < scene.min_camera_pixels
+        {
             return Err(format!("camera {} is out of range", camera.id));
         }
     }
@@ -663,10 +769,13 @@ pub fn validate(
 
 fn cover_walkable_dirt(arena: &Arena, scene: &ArenaScene) -> Result<(), String> {
     let mut bands: Vec<&FloorBand> = scene.floors.iter().collect();
+    if bands.iter().any(|band| !band.inner.is_finite()) {
+        return Err("floor inner is not a finite number".into());
+    }
     bands.sort_by(|a, b| {
         a.inner
             .partial_cmp(&b.inner)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .expect("floor inner is finite")
     });
     let start = arena.platform.radius;
     let end = arena.radius;
@@ -695,10 +804,13 @@ fn abut_cliffs(cliffs: &[Cliff], epsilon: f32) -> Result<(), String> {
         return Err("arena_visual.toml is missing cliff".into());
     }
     let mut rows: Vec<&Cliff> = cliffs.iter().collect();
+    if rows.iter().any(|cliff| !cliff.angle_deg.is_finite()) {
+        return Err("cliff angle is not a finite number".into());
+    }
     rows.sort_by(|a, b| {
         a.angle_deg
             .partial_cmp(&b.angle_deg)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .expect("cliff angle is finite")
     });
     let mut cursor = rows[0].angle_deg;
     for cliff in &rows {
@@ -1042,10 +1154,45 @@ fn rgb_of(palette: &Palette, name: &str, owner: &str) -> Result<[f32; 3], String
     if digits.len() != 6 || !digits.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err(format!("{owner} color \"{name}\" must be #RRGGBB"));
     }
-    let channel = |index: usize| {
-        u8::from_str_radix(&digits[index..index + 2], 16).unwrap_or(0) as f32 / 255.0
+    let channel = |index: usize| -> Result<f32, String> {
+        u8::from_str_radix(&digits[index..index + 2], 16)
+            .map(|value| value as f32 / 255.0)
+            .map_err(|_| format!("{owner} color \"{name}\" must be #RRGGBB"))
     };
-    Ok([channel(0), channel(2), channel(4)])
+    Ok([channel(0)?, channel(2)?, channel(4)?])
+}
+
+fn chamfer_fits(size: [f32; 3], scale: f32) -> bool {
+    let span = size[0].min(size[2]);
+    let chamfer = span * scale;
+    chamfer > 0.0 && chamfer < span * 0.5
+}
+
+fn require_prop_meshes(scene: &ArenaScene) -> Result<(), String> {
+    if scene.prop_meshes.is_empty() {
+        return Err("arena_visual.toml is missing prop_mesh".into());
+    }
+    let mut kinds = std::collections::BTreeSet::new();
+    for row in &scene.prop_meshes {
+        if !kinds.insert(row.kind.clone()) {
+            return Err(format!("prop_mesh kind \"{}\" is duplicated", row.kind));
+        }
+        if !matches!(row.mesh.as_str(), "cylinder" | "bulb" | "bevel" | "box") {
+            return Err(format!(
+                "prop_mesh kind \"{}\" mesh \"{}\" is unknown",
+                row.kind, row.mesh
+            ));
+        }
+    }
+    for prop in &scene.props {
+        if !kinds.contains(&prop.kind) {
+            return Err(format!(
+                "prop {} kind \"{}\" has no mesh",
+                prop.id, prop.kind
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn luma(rgb: [f32; 3], weights: [f32; 3]) -> f32 {
@@ -1108,6 +1255,9 @@ fn load_rules(value: &toml::Value) -> Result<SceneryRules, String> {
             "luma_weights",
             "mover_height",
             "cover_solve_passes",
+            "deck_shove_drop",
+            "shove_rim_outset",
+            "shove_center_epsilon",
         ],
         "scenery",
     )?;
@@ -1129,6 +1279,13 @@ fn load_rules(value: &toml::Value) -> Result<SceneryRules, String> {
     let overlap_epsilon = content::num(table.get("overlap_epsilon").unwrap(), "overlap_epsilon")?;
     let spawn_clearance = content::num(table.get("spawn_clearance").unwrap(), "spawn_clearance")?;
     let mover_height = content::num(table.get("mover_height").unwrap(), "mover_height")?;
+    let deck_shove_drop = content::num(table.get("deck_shove_drop").unwrap(), "deck_shove_drop")?;
+    let shove_rim_outset =
+        content::num(table.get("shove_rim_outset").unwrap(), "shove_rim_outset")?;
+    let shove_center_epsilon = content::num(
+        table.get("shove_center_epsilon").unwrap(),
+        "shove_center_epsilon",
+    )?;
     let cover_tie = table
         .get("cover_tie")
         .and_then(|v| v.as_str())
@@ -1159,6 +1316,9 @@ fn load_rules(value: &toml::Value) -> Result<SceneryRules, String> {
         || overlap_epsilon < 0.0
         || spawn_clearance < 0.0
         || mover_height <= 0.0
+        || deck_shove_drop < 0.0
+        || shove_rim_outset < 0.0
+        || shove_center_epsilon <= 0.0
     {
         return Err("scenery clearances must be >= 0".into());
     }
@@ -1192,6 +1352,9 @@ fn load_rules(value: &toml::Value) -> Result<SceneryRules, String> {
         luma_weights,
         mover_height,
         cover_solve_passes: passes as u32,
+        deck_shove_drop,
+        shove_rim_outset,
+        shove_center_epsilon,
     })
 }
 
@@ -1240,6 +1403,14 @@ fn load_light(value: &toml::Value) -> Result<SceneLight, String> {
         return Err("light illuminance must be > 0".into());
     }
     Ok(light)
+}
+
+fn load_prop_mesh(table: &toml::map::Map<String, toml::Value>) -> Result<PropMesh, String> {
+    content::expect_keys(table, &["kind", "mesh"], "prop_mesh")?;
+    Ok(PropMesh {
+        kind: req_name(table, "kind")?,
+        mesh: req_name(table, "mesh")?,
+    })
 }
 
 fn load_surface(table: &toml::map::Map<String, toml::Value>) -> Result<Surface, String> {
