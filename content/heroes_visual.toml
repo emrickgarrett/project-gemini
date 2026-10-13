@@ -152,11 +152,15 @@ thumb_pitch = 0.85
 thumb_yaw = 0.9
 
 # Meshy static casts. `file` is under assets/. A missing or unknown file fails at load.
-# Rigged bodies, and the grip-origin guns from the rig handoff, are not in this set.
-# `triangles` and `bytes` are the budgets. `size` is the fitted height or gun length.
+# Bodies are the final_rig meshes with skin, joints, and clips removed. UVs and
+# positions are the rigged primitive. The rigged files stay off this branch.
+# Guns and the shield set `grip_root`. The glb must carry that node. There is
+# no +X butt fallback. `triangles` and `bytes` are the budgets. Body files stay
+# inside 1_100_000 bytes. `size` is the fitted height or gun length.
 # `at` places a body in front of the portrait camera, or a weapon's grip on that body.
 # `view` is the grip in viewmodel space, before characters.toml viewmodel_offset.
-# Gun grips sit on the +X butt. Brakk's shield grip is the handle.
+# A grip-rooted gun keeps the rig grip at the origin and the muzzle on -Z.
+# Brakk's shield grip is the handle.
 # Colors are palette.toml keys. Empty `rim` means no rim light.
 # `primary` `secondary` `accent` `fourth` are mask R G B A. They are not the UI
 # `hero_<id>` keys. Empty `accent` or `fourth` means that channel has no weight.
@@ -168,11 +172,11 @@ thumb_yaw = 0.9
 [[model]]
 id = "vex_body"
 file = "models/vex_body.glb"
-sha256 = "002b68cce8c3d0cc96c3c245949cb93db6f60cc2a8ca2e70119ef02c068eb372"
+sha256 = "c2c36be51fa436f638d85ddca43b7a1a991205618e34e297560a3795fe1e111b"
 mask = "masks/vex_body_mask_rgba.png"
 shade = "masks/vex_body_shade.png"
 triangles = 14000
-bytes = 1600000
+bytes = 1100000
 source = "Meshy"
 license = "Generated from Gorkasso's concepts"
 task = ""
@@ -183,6 +187,7 @@ accent = "hero_vex_accent"
 fourth = "hero_vex_glow"
 rim = ""
 fit = "hero"
+grip_root = false
 size = 1.84
 yaw_deg = 0.0
 at = [0.0, -0.92, -3.20]
@@ -208,6 +213,7 @@ accent = "gear_vex_gun_accent"
 fourth = ""
 rim = ""
 fit = "weapon"
+grip_root = true
 size = 0.78
 yaw_deg = 180.0
 at = [0.34, 1.08, 0.26]
@@ -217,11 +223,11 @@ view = [0.10, -0.05, -0.22]
 [[model]]
 id = "nyra_body"
 file = "models/nyra_body.glb"
-sha256 = "a26095ce1e9abbc30e3650dcfa4a3ea5ea49981c6fc9b87541cd384fec5d3bed"
+sha256 = "007e0a1334f06918f10ca8ef31e1e5d992a7db5483cc4ca4399fac01a8b34274"
 mask = "masks/nyra_body_mask_rgba.png"
 shade = "masks/nyra_body_shade.png"
 triangles = 14000
-bytes = 1600000
+bytes = 1100000
 source = "Meshy"
 license = "Generated from Gorkasso's concepts"
 task = "01a13151-0793-7293-ba7e-cf21b38cc17a"
@@ -232,6 +238,7 @@ accent = "hero_nyra_accent"
 fourth = "hero_nyra_glow"
 rim = ""
 fit = "hero"
+grip_root = false
 size = 1.74
 yaw_deg = 0.0
 at = [0.0, -0.87, -3.15]
@@ -257,6 +264,7 @@ accent = "gear_nyra_gun_accent"
 fourth = "gear_nyra_gun_glow"
 rim = ""
 fit = "weapon"
+grip_root = true
 size = 0.72
 yaw_deg = 180.0
 at = [0.26, 1.02, 0.22]
@@ -266,11 +274,11 @@ view = [0.08, -0.04, -0.20]
 [[model]]
 id = "brakk_body"
 file = "models/brakk_body.glb"
-sha256 = "63d60ce96427388257204c8f0d0b034d27530ec7be0a9828ee30caa250086bad"
+sha256 = "a82ac46954bcf6c096a388c12704f16412c58d42e6a39789c7c4b9eebd549fd0"
 mask = "masks/brakk_body_mask_rgba.png"
 shade = "masks/brakk_body_shade.png"
 triangles = 14000
-bytes = 1600000
+bytes = 1100000
 source = "Meshy"
 license = "Generated from Gorkasso's concepts"
 task = "01a13151-07c4-7020-aa98-9b0149cdc711"
@@ -281,6 +289,7 @@ accent = "hero_brakk_accent"
 fourth = "hero_brakk_glow"
 rim = ""
 fit = "hero"
+grip_root = false
 size = 1.96
 yaw_deg = 0.0
 at = [0.0, -0.98, -3.55]
@@ -306,6 +315,7 @@ accent = ""
 fourth = "gear_brakk_gun_glow"
 rim = ""
 fit = "weapon"
+grip_root = true
 size = 0.82
 yaw_deg = 180.0
 at = [0.46, 1.08, 0.28]
@@ -330,6 +340,7 @@ accent = "gear_brakk_shield_accent"
 fourth = ""
 rim = ""
 fit = "shield"
+grip_root = true
 size = 1.12
 yaw_deg = 0.0
 at = [-0.50, 1.20, 0.18]
@@ -339,11 +350,11 @@ view = [0.0, 0.0, 0.0]
 [[model]]
 id = "kip_body"
 file = "models/kip_body.glb"
-sha256 = "e5b345510cf6b1666df7d82713f34d3f846279ce874062c5fa3be50006893df9"
+sha256 = "2562de169c6690e7cf8deefe31da069facd6b5eb9fabf87c6c960ba0bffabe0d"
 mask = "masks/kip_body_mask_rgba.png"
 shade = "masks/kip_body_shade.png"
 triangles = 13000
-bytes = 1600000
+bytes = 1100000
 source = "Meshy"
 license = "Generated from Gorkasso's concepts"
 task = "01a13151-07a4-737d-80be-85f9da7898c6"
@@ -354,6 +365,7 @@ accent = "hero_kip_accent"
 fourth = "hero_kip_glow"
 rim = ""
 fit = "hero"
+grip_root = false
 size = 1.66
 yaw_deg = 0.0
 at = [0.0, -0.83, -3.10]
@@ -379,6 +391,7 @@ accent = "gear_kip_gun_accent"
 fourth = ""
 rim = ""
 fit = "weapon"
+grip_root = true
 size = 0.86
 yaw_deg = 180.0
 at = [0.26, 0.98, 0.20]

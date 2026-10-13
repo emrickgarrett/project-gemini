@@ -3,11 +3,12 @@
 //! A missing file, an unknown id, or a blown budget fails the load. There is no
 //! box-mesh fallback.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use gemini_sim::bugs::{hit_bounds, PartBounds};
 use gemini_sim::content::{CastModel, Content};
+use sha2::{Digest, Sha256};
 
 pub struct Tex {
     pub w: u32,
@@ -79,15 +80,48 @@ pub fn load_catalog() -> Result<Vec<CastMesh>, String> {
     let content = Content::embedded();
     let mut out = Vec::new();
     for spec in &content.models {
-        let bytes = model_bytes(&spec.id)?;
-        out.push(fit_model(bytes, spec, &content)?);
+        let bytes = read_checked_model(spec)?;
+        out.push(fit_model(&bytes, spec, &content)?);
     }
     Ok(out)
 }
 
-/// Disk read used by the missing-file check. The embedded bytes are what the client draws.
+/// Disk read used by the hash check. A missing file fails. There is no skip
+/// when the assets folder is absent.
 pub fn read_model_file(path: &Path) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|_| format!("missing model file {}", path.display()))
+}
+
+/// Lowercase SHA-256. The mesh load compares this to `CastModel.sha256`.
+pub fn sha256_hex(data: &[u8]) -> String {
+    let digest = Sha256::digest(data);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+fn assets_file(rel: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets").join(rel)
+}
+
+/// Read the shipped glb and reject a missing file or a hash that is not the one in content.
+fn read_checked_model(spec: &CastModel) -> Result<Vec<u8>, String> {
+    let path = assets_file(&spec.file);
+    let bytes = read_model_file(&path)?;
+    let got = sha256_hex(&bytes);
+    if got != spec.sha256 {
+        return Err(format!(
+            "{} mesh sha256 {got} does not match content {}",
+            spec.id, spec.sha256
+        ));
+    }
+    let embedded = model_bytes(&spec.id)?;
+    if embedded != bytes.as_slice() {
+        return Err(format!("{} embedded bytes differ from {}", spec.id, path.display()));
+    }
+    Ok(bytes)
 }
 
 pub fn model_bytes(id: &str) -> Result<&'static [u8], String> {
@@ -214,8 +248,8 @@ pub fn check_budget(id: &str, tris: usize, file_len: usize, tri_budget: u32, byt
 
 fn fit_model(bytes: &[u8], spec: &CastModel, content: &Content) -> Result<CastMesh, String> {
     check_budget(&spec.id, 0, bytes.len(), spec.triangles, spec.bytes)?;
-    let mut decoded = decode_glb(bytes, &spec.id)?;
-    drop_needles(&mut decoded);
+    let mut decoded = decode_glb(bytes, spec)?;
+    drop_needles(&mut decoded, content.cast.needle_extent, content.cast.needle_area);
     check_budget(&spec.id, decoded.tris, bytes.len(), spec.triangles, spec.bytes)?;
     match spec.fit.as_str() {
         "hitbox" => fit_hitbox(&mut decoded, spec, content)?,
@@ -278,7 +312,7 @@ struct RawMesh {
 /// A needle is a triangle whose longest edge is a large fraction of the model
 /// and whose area is almost zero. Kip's left hip had a fan of these, and they
 /// draw as stray straps. Real panels are not this thin.
-fn drop_needles(mesh: &mut RawMesh) {
+fn drop_needles(mesh: &mut RawMesh, extent_frac: f32, area_ratio: f32) {
     if mesh.positions.is_empty() || mesh.indices.is_empty() {
         return;
     }
@@ -302,7 +336,7 @@ fn drop_needles(mesh: &mut RawMesh) {
         let area = 0.5 * (cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]).sqrt();
         let longest = dist(a, b).max(dist(b, c)).max(dist(c, a));
         let ratio = area / (longest * longest).max(1.0e-12);
-        if longest > 0.12 * extent && ratio < 0.02 {
+        if longest > extent_frac * extent && ratio < area_ratio {
             continue;
         }
         keep.extend_from_slice(tri);
@@ -376,31 +410,16 @@ fn fit_height(mesh: &mut RawMesh, height: f32) -> Result<(), String> {
 }
 
 fn fit_weapon(mesh: &mut RawMesh, spec: &CastModel) -> Result<(), String> {
-    if mesh.gripped {
-        // The rig root already parks the grip at the origin with the muzzle on +Z.
-        // The shot axis is -Z, so turn the muzzle around and scale the length.
-        yaw_positions(&mut mesh.positions, &mut mesh.normals, 180.0);
-        let (mn, mx) = bounds(&mesh.positions);
-        let len = mx[2] - mn[2];
-        if len <= 1e-6 {
-            return Err(format!("{} has no length", spec.id));
-        }
-        let scale = spec.size / len;
-        for p in &mut mesh.positions {
-            for i in 0..3 {
-                p[i] *= scale;
-            }
-        }
-        return Ok(());
+    if !spec.grip_root || !mesh.gripped {
+        return Err(format!("{} is a weapon without a grip root", spec.id));
     }
+    // The rig root already parks the grip at the origin with the muzzle on +Z.
+    // The shot axis is -Z, so turn the muzzle around and scale the length.
+    yaw_positions(&mut mesh.positions, &mut mesh.normals, 180.0);
     let (mn, mx) = bounds(&mesh.positions);
-    let len = mx[0] - mn[0];
+    let len = mx[2] - mn[2];
     if len <= 1e-6 {
         return Err(format!("{} has no length", spec.id));
-    }
-    let grip = butt_grip(&mesh.positions, mx[0], len);
-    if grip[0] <= 0.0 {
-        return Err(format!("{} grip is not on the +x butt", spec.id));
     }
     let scale = spec.size / len;
     for p in &mut mesh.positions {
@@ -408,37 +427,12 @@ fn fit_weapon(mesh: &mut RawMesh, spec: &CastModel) -> Result<(), String> {
             p[i] *= scale;
         }
     }
-    let grip = [grip[0] * scale, grip[1] * scale, grip[2] * scale];
-    // -90° about Y sends the +X butt to +Z and the muzzle (-X) down -Z.
-    yaw_positions(&mut mesh.positions, &mut mesh.normals, -90.0);
-    let grip = yaw_point(grip, -90.0);
-    for p in &mut mesh.positions {
-        p[0] -= grip[0];
-        p[1] -= grip[1];
-        p[2] -= grip[2];
-    }
     Ok(())
 }
 
 fn fit_shield(mesh: &mut RawMesh, spec: &CastModel) -> Result<(), String> {
-    if mesh.gripped {
-        let (mn, mx) = bounds(&mesh.positions);
-        let h = mx[1] - mn[1];
-        if h <= 1e-6 {
-            return Err(format!("{} shield height is zero", spec.id));
-        }
-        let scale = spec.size / h;
-        for p in &mut mesh.positions {
-            for i in 0..3 {
-                p[i] *= scale;
-            }
-        }
-        return Ok(());
-    }
-    let handle = spec.grip;
-    let near = mesh.positions.iter().any(|p| dist(*p, handle) < 0.03);
-    if !near {
-        return Err(format!("{} shield handle {:?} is not on the mesh", spec.id, handle));
+    if !spec.grip_root || !mesh.gripped {
+        return Err(format!("{} is a shield without a grip root", spec.id));
     }
     let (mn, mx) = bounds(&mesh.positions);
     let h = mx[1] - mn[1];
@@ -451,35 +445,7 @@ fn fit_shield(mesh: &mut RawMesh, spec: &CastModel) -> Result<(), String> {
             p[i] *= scale;
         }
     }
-    let handle = [handle[0] * scale, handle[1] * scale, handle[2] * scale];
-    if spec.yaw_deg != 0.0 {
-        yaw_positions(&mut mesh.positions, &mut mesh.normals, spec.yaw_deg);
-    }
-    let handle = yaw_point(handle, spec.yaw_deg);
-    for p in &mut mesh.positions {
-        p[0] -= handle[0];
-        p[1] -= handle[1];
-        p[2] -= handle[2];
-    }
     Ok(())
-}
-
-fn butt_grip(positions: &[[f32; 3]], max_x: f32, len: f32) -> [f32; 3] {
-    let mut acc = [0.0; 3];
-    let mut n = 0.0;
-    let cut = max_x - len * 0.04;
-    for p in positions {
-        if p[0] >= cut {
-            acc[0] += p[0];
-            acc[1] += p[1];
-            acc[2] += p[2];
-            n += 1.0;
-        }
-    }
-    if n < 1.0 {
-        return [max_x, 0.0, 0.0];
-    }
-    [acc[0] / n, acc[1] / n, acc[2] / n]
 }
 
 fn yaw_about_center(positions: &mut [[f32; 3]], normals: &mut [[f32; 3]], yaw_deg: f32) {
@@ -627,7 +593,8 @@ pub fn seat_glow(positions: &[[f32; 3]], indices: &[u32], center: [f32; 3], radi
     closest
 }
 
-fn decode_glb(bytes: &[u8], id: &str) -> Result<RawMesh, String> {
+fn decode_glb(bytes: &[u8], spec: &CastModel) -> Result<RawMesh, String> {
+    let id = spec.id.as_str();
     if bytes.len() < 20 || &bytes[0..4] != b"glTF" {
         return Err(format!("{id} is not a glb"));
     }
@@ -671,7 +638,14 @@ fn decode_glb(bytes: &[u8], id: &str) -> Result<RawMesh, String> {
     let mask = read_image(&doc, bin, mask_tex, id)?;
     let mut positions = positions;
     let mut normals = normals;
-    let gripped = apply_grip_root(&doc, &mut positions, &mut normals);
+    let gripped = if spec.grip_root {
+        apply_grip_root(&doc, &mut positions, &mut normals, id)?;
+        true
+    } else if grip_node_present(&doc) {
+        return Err(format!("{id} has a grip root but content does not declare grip_root"));
+    } else {
+        false
+    };
     Ok(RawMesh {
         positions,
         normals,
@@ -684,29 +658,60 @@ fn decode_glb(bytes: &[u8], id: &str) -> Result<RawMesh, String> {
     })
 }
 
-/// `final_rig` parents the mesh under a grip root: grip at the origin, muzzle on +Z.
-/// Bodies and bugs have no such node. The matrix is column-major, matching glTF.
-fn apply_grip_root(doc: &serde_json::Value, positions: &mut [[f32; 3]], normals: &mut [[f32; 3]]) -> bool {
-    let Some(nodes) = doc["nodes"].as_array() else {
-        return false;
-    };
-    let Some(node) = nodes.iter().find(|node| {
-        node["name"]
-            .as_str()
-            .unwrap_or("")
-            .ends_with("grip_root")
-    }) else {
-        return false;
-    };
-    let Some(list) = node["matrix"].as_array() else {
-        return false;
-    };
+fn grip_node_present(doc: &serde_json::Value) -> bool {
+    doc["nodes"].as_array().is_some_and(|nodes| {
+        nodes.iter().any(|node| {
+            node["name"]
+                .as_str()
+                .is_some_and(|name| name.ends_with("grip_root"))
+        })
+    })
+}
+
+/// `final_rig` parents a grip-rooted mesh under `*_grip_root`: grip at the origin, muzzle on +Z.
+/// The matrix is column-major, matching glTF. A missing or non-finite matrix fails the load.
+fn apply_grip_root(
+    doc: &serde_json::Value,
+    positions: &mut [[f32; 3]],
+    normals: &mut [[f32; 3]],
+    id: &str,
+) -> Result<(), String> {
+    let nodes = doc["nodes"]
+        .as_array()
+        .ok_or_else(|| format!("{id} glb has no nodes"))?;
+    let mut found = None;
+    for node in nodes {
+        let Some(name) = node["name"].as_str() else {
+            continue;
+        };
+        if !name.ends_with("grip_root") {
+            continue;
+        }
+        if found.is_some() {
+            return Err(format!("{id} has more than one grip root"));
+        }
+        found = Some(node);
+    }
+    let node = found.ok_or_else(|| format!("{id} is missing a grip root"))?;
+    let list = node["matrix"]
+        .as_array()
+        .ok_or_else(|| format!("{id} grip root has no matrix"))?;
     if list.len() != 16 {
-        return false;
+        return Err(format!("{id} grip root matrix must be 16 numbers"));
     }
     let mut m = [0.0f32; 16];
     for (i, value) in list.iter().enumerate() {
-        m[i] = value.as_f64().unwrap_or(0.0) as f32;
+        let n = value
+            .as_f64()
+            .ok_or_else(|| format!("{id} grip root matrix is not a number"))?;
+        if !n.is_finite() {
+            return Err(format!("{id} grip root matrix is not finite"));
+        }
+        m[i] = n as f32;
+    }
+    let column = |base: usize| (m[base] * m[base] + m[base + 1] * m[base + 1] + m[base + 2] * m[base + 2]).sqrt();
+    if column(0) < 1.0e-4 || column(4) < 1.0e-4 || column(8) < 1.0e-4 {
+        return Err(format!("{id} grip root matrix is degenerate"));
     }
     for p in positions.iter_mut() {
         let x = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12];
@@ -720,7 +725,7 @@ fn apply_grip_root(doc: &serde_json::Value, positions: &mut [[f32; 3]], normals:
         let z = m[2] * n[0] + m[6] * n[1] + m[10] * n[2];
         *n = norm([x, y, z]);
     }
-    true
+    Ok(())
 }
 
 fn read_image(doc: &serde_json::Value, bin: &[u8], texture: usize, id: &str) -> Result<Tex, String> {
@@ -1594,7 +1599,109 @@ mod tests {
             assert!(mx[2] > 0.05, "{id} stock extends behind the grip, max z {}", mx[2]);
             assert!(mn[2] < -0.2, "{id} muzzle points down -z, min z {}", mn[2]);
             assert!(mn[2].abs() > mx[2], "{id} muzzle is the long end");
+            let spec = content.models.iter().find(|model| model.id == id).unwrap();
+            assert!(spec.grip_root, "{id} is declared grip-rooted");
         }
+    }
+
+    #[test]
+    fn a_missing_or_undeclared_grip_root_fails_the_load() {
+        let gun = model_bytes("vex_gun").unwrap();
+        let err = decode_glb(gun, &model_spec("swarmer")).expect_err("bug bytes are not a gun");
+        assert!(err.contains("swarmer") || err.contains("grip") || err.contains("primitive"), "{err}");
+        let spec = model_spec("vex_gun");
+        let mut bare = spec.clone();
+        bare.grip_root = false;
+        let err = decode_glb(gun, &bare).expect_err("undeclared grip");
+        assert!(err.contains("grip_root"), "{err}");
+        let mut body = model_spec("vex_body");
+        body.grip_root = true;
+        let err = decode_glb(model_bytes("vex_body").unwrap(), &body).expect_err("body has no grip");
+        assert!(err.contains("missing a grip root"), "{err}");
+    }
+
+    #[test]
+    fn a_wrong_mesh_sha256_fails_the_load() {
+        let bytes = model_bytes("vex_gun").unwrap();
+        let spec = model_spec("vex_gun");
+        assert_eq!(sha256_hex(bytes), spec.sha256);
+        let mut bad = spec.clone();
+        bad.sha256 = "0".repeat(64);
+        let err = read_checked_model(&bad).expect_err("bad sha");
+        assert!(err.contains("vex_gun") && err.contains("sha256"), "{err}");
+        let mut gone = spec;
+        gone.file = "models/not_a_model.glb".into();
+        let missing = read_checked_model(&gone).expect_err("missing file");
+        assert!(missing.contains("missing"), "{missing}");
+    }
+
+    /// TEXCOORD_0 and POSITION bytes from the final_rig body, before skin and clips were removed.
+    #[test]
+    fn static_body_uvs_match_the_final_rig_source() {
+        let expect = [
+            (
+                "vex_body",
+                "b178d21f181e12217df3a8890bc40eca5e8c0327ee391ef600e2337db1ce70dd",
+                "d3d498b5afb41ca2581a5958d8d1d2cde163d0691151185c07c7ed324e136703",
+            ),
+            (
+                "nyra_body",
+                "51be9f77045125c8f4d875e440267870dd44c10a6f32eb838696e927b339bb47",
+                "fd20c3811ecb37e2fa5b5b2d572bbfeae01506d26f8b68db9e7ab123bc542237",
+            ),
+            (
+                "brakk_body",
+                "12c2b676936831a8b852c557414f0519c6be95554dd24c257566b9685442ce77",
+                "df594989f83292dbbb20a9c762432e5c611feb262a1bb2752c67090d8dd6422d",
+            ),
+            (
+                "kip_body",
+                "205e16ecb4d826d10d4f6d8ef03587eeb346f056adfaa91770ee01a52f53d256",
+                "64de8d43e34d0e453cf2f41623e3d4b5f3f6b689310caac8fff9c6415b2618f8",
+            ),
+        ];
+        for (id, uv_hash, pos_hash) in expect {
+            let spec = model_spec(id);
+            assert!(!spec.grip_root, "{id} is static");
+            assert_eq!(spec.bytes, 1_100_000, "{id} budget");
+            let bytes = model_bytes(id).unwrap();
+            assert!(bytes.len() <= spec.bytes as usize, "{id} file {}", bytes.len());
+            let (doc, bin) = glb_parts(bytes, id);
+            assert!(doc.get("skins").is_none(), "{id} still has a skin");
+            assert!(doc.get("animations").is_none(), "{id} still has clips");
+            let prim = &doc["meshes"][0]["primitives"][0];
+            let attrs = &prim["attributes"];
+            assert!(attrs.get("JOINTS_0").is_none() && attrs.get("WEIGHTS_0").is_none(), "{id}");
+            let uv = attr_bytes(&doc, bin, attrs["TEXCOORD_0"].as_u64().unwrap() as usize);
+            let pos = attr_bytes(&doc, bin, attrs["POSITION"].as_u64().unwrap() as usize);
+            assert_eq!(sha256_hex(&uv), uv_hash, "{id} uvs moved off the final_rig source");
+            assert_eq!(sha256_hex(&pos), pos_hash, "{id} positions moved off the final_rig source");
+        }
+    }
+
+    fn model_spec(id: &str) -> CastModel {
+        Content::embedded()
+            .models
+            .into_iter()
+            .find(|model| model.id == id)
+            .unwrap_or_else(|| panic!("{id}"))
+    }
+
+    fn glb_parts(bytes: &[u8], id: &str) -> (serde_json::Value, &[u8]) {
+        let json_len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+        let json_end = 20 + json_len;
+        let doc: serde_json::Value = serde_json::from_slice(&bytes[20..json_end]).unwrap_or_else(|err| panic!("{id} {err}"));
+        let bin_len = u32::from_le_bytes(bytes[json_end..json_end + 4].try_into().unwrap()) as usize;
+        let bin_start = json_end + 8;
+        (doc, &bytes[bin_start..bin_start + bin_len])
+    }
+
+    fn attr_bytes(doc: &serde_json::Value, bin: &[u8], accessor: usize) -> Vec<u8> {
+        let view = doc["accessors"][accessor]["bufferView"].as_u64().unwrap() as usize;
+        let v = &doc["bufferViews"][view];
+        let off = v["byteOffset"].as_u64().unwrap_or(0) as usize;
+        let len = v["byteLength"].as_u64().unwrap() as usize;
+        bin[off..off + len].to_vec()
     }
 
     #[test]
@@ -2152,6 +2259,23 @@ mod tests {
 
     #[test]
     fn stray_needles_are_dropped() {
+        let look = &Content::embedded().cast;
+        let text = include_str!("../../../content/cast.toml");
+        let read = |key: &str| -> f32 {
+            text.lines()
+                .find(|line| line.starts_with(key))
+                .unwrap_or_else(|| panic!("{key}"))
+                .split('=')
+                .nth(1)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap()
+        };
+        assert!((look.needle_extent - read("needle_extent")).abs() < 1.0e-6);
+        assert!((look.needle_area - read("needle_area")).abs() < 1.0e-6);
+        let extent_frac = look.needle_extent;
+        let area_ratio = look.needle_area;
         for mesh in casts() {
             let (mn, mx) = bounds(&mesh.positions);
             let extent = (mx[0] - mn[0]).max(mx[1] - mn[1]).max(mx[2] - mn[2]).max(1.0e-6);
@@ -2170,7 +2294,7 @@ mod tests {
                 let longest = dist(a, b).max(dist(b, c)).max(dist(c, a));
                 let ratio = area / (longest * longest).max(1.0e-12);
                 assert!(
-                    !(longest > 0.12 * extent && ratio < 0.02),
+                    !(longest > extent_frac * extent && ratio < area_ratio),
                     "{} still has a needle",
                     mesh.id
                 );

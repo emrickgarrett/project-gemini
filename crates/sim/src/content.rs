@@ -158,7 +158,6 @@ impl Content {
         let mesh_ids: Vec<String> = heroes_visual.meshes.iter().map(|mesh| mesh.id.clone()).collect();
         let (mut hero, guns, roster, heroes, warnings) = load_characters(src.hero, &mesh_ids)?;
         require_cast_roster(&models, &heroes, &bugs)?;
-        validate_model_sha256(&models)?;
         let cast = load_cast_look(include_str!("../../../content/cast.toml"), &palette)?;
         for mesh in &heroes_visual.meshes {
             if !heroes.iter().any(|card| card.portrait.mesh == mesh.id) {
@@ -417,67 +416,6 @@ impl Content {
 
 fn parse<T: for<'de> Deserialize<'de>>(name: &str, text: &str) -> Result<T, String> {
     toml::from_str(text).map_err(|err| format!("{name}: {err}"))
-}
-
-/// SHA-256 of a shipped glb, lowercase hex. Loading rejects a mesh whose bytes differ.
-pub fn sha256_hex(data: &[u8]) -> String {
-    const K: [u32; 64] = [
-        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-        0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-        0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-        0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-        0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-        0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-        0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
-    ];
-    let mut state = [
-        0x6a09e667u32, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
-    ];
-    let bit_len = (data.len() as u64).wrapping_mul(8);
-    let mut msg = Vec::with_capacity(data.len() + 72);
-    msg.extend_from_slice(data);
-    msg.push(0x80);
-    while msg.len() % 64 != 56 {
-        msg.push(0);
-    }
-    msg.extend_from_slice(&bit_len.to_be_bytes());
-    for chunk in msg.chunks_exact(64) {
-        let mut w = [0u32; 64];
-        for i in 0..16 {
-            w[i] = u32::from_be_bytes([chunk[i * 4], chunk[i * 4 + 1], chunk[i * 4 + 2], chunk[i * 4 + 3]]);
-        }
-        for i in 16..64 {
-            let s0 = w[i - 15].rotate_right(7) ^ w[i - 15].rotate_right(18) ^ (w[i - 15] >> 3);
-            let s1 = w[i - 2].rotate_right(17) ^ w[i - 2].rotate_right(19) ^ (w[i - 2] >> 10);
-            w[i] = w[i - 16].wrapping_add(s0).wrapping_add(w[i - 7]).wrapping_add(s1);
-        }
-        let mut h = state;
-        for i in 0..64 {
-            let s1 = h[4].rotate_right(6) ^ h[4].rotate_right(11) ^ h[4].rotate_right(25);
-            let ch = (h[4] & h[5]) ^ (!h[4] & h[6]);
-            let t1 = h[7].wrapping_add(s1).wrapping_add(ch).wrapping_add(K[i]).wrapping_add(w[i]);
-            let s0 = h[0].rotate_right(2) ^ h[0].rotate_right(13) ^ h[0].rotate_right(22);
-            let maj = (h[0] & h[1]) ^ (h[0] & h[2]) ^ (h[1] & h[2]);
-            let t2 = s0.wrapping_add(maj);
-            h[7] = h[6];
-            h[6] = h[5];
-            h[5] = h[4];
-            h[4] = h[3].wrapping_add(t1);
-            h[3] = h[2];
-            h[2] = h[1];
-            h[1] = h[0];
-            h[0] = t1.wrapping_add(t2);
-        }
-        for i in 0..8 {
-            state[i] = state[i].wrapping_add(h[i]);
-        }
-    }
-    let mut out = String::with_capacity(64);
-    for word in state {
-        out.push_str(&format!("{word:08x}"));
-    }
-    out
 }
 
 fn fnv_cat(parts: &[&str]) -> u64 {
@@ -1394,8 +1332,10 @@ pub struct CastModel {
     /// Hero id for a weapon. Empty on bodies, shields, and bugs.
     pub hero: String,
     pub file: String,
-    /// SHA-256 of the shipped glb. Loading fails when the file bytes differ.
+    /// SHA-256 of the shipped glb. The mesh crate checks the file bytes.
     pub sha256: String,
+    /// The glb parents the mesh under a `*_grip_root` node. Guns and the shield.
+    pub grip_root: bool,
     /// Cleaned mask PNG under assets/. Red is accent, green is glow.
     pub mask: String,
     pub triangles: u32,
@@ -1446,6 +1386,14 @@ pub struct CastLook {
     pub glow_falloff: f32,
     /// How much of the painted sac shows through at the glow's edge. The core stays solid.
     pub glow_show_through: f32,
+    /// Radial distance, in radii, inside which a glow core is pulled forward.
+    pub glow_core_perp: f32,
+    /// Closest a pulled glow core may sit to the camera, in the same units as the radius.
+    pub glow_core_depth: f32,
+    /// Longest edge, as a fraction of the model extent, before a triangle can be a needle.
+    pub needle_extent: f32,
+    /// Area over longest-edge squared below which that long triangle is a needle.
+    pub needle_area: f32,
     pub review_yaw_deg: f32,
     pub review_elev_deg: f32,
     pub review_distance: f32,
@@ -1896,8 +1844,8 @@ fn load_model_rows(
         let fit_peek = map.get("fit").and_then(|v| v.as_str()).unwrap_or("");
         let channeled = matches!(fit_peek, "hero" | "weapon" | "shield");
         let mut keys = vec![
-            "id", "file", "sha256", "mask", "triangles", "bytes", "source", "license", "task", "base", "accent", "rim", "fit", "size",
-            "yaw_deg", "at", "grip", "view",
+            "id", "file", "sha256", "mask", "triangles", "bytes", "source", "license", "task", "base", "accent", "rim", "fit",
+            "grip_root", "size", "yaw_deg", "at", "grip", "view",
         ];
         if channeled {
             keys.extend(["primary", "secondary", "fourth", "shade"]);
@@ -1943,6 +1891,13 @@ fn load_model_rows(
         let fit = vis_str(map, "fit", &format!("{what} {id}"))?.to_string();
         if !matches!(fit.as_str(), "hero" | "hitbox" | "weapon" | "shield") {
             return Err(format!("{what} {id} fit \"{fit}\" is unknown"));
+        }
+        let grip_root = vis_bool(map, "grip_root", &format!("{what} {id}"))?;
+        if grip_root && !matches!(fit.as_str(), "weapon" | "shield") {
+            return Err(format!("{what} {id} grip_root is only for a weapon or a shield"));
+        }
+        if !grip_root && matches!(fit.as_str(), "weapon" | "shield") {
+            return Err(format!("{what} {id} needs grip_root; there is no +X fallback"));
         }
         let size = vis_f32(map, "size", &format!("{what} {id}"))?;
         if fit != "hitbox" && !(size > 0.0) {
@@ -2007,6 +1962,7 @@ fn load_model_rows(
             glow: if channeled { String::new() } else { color("glow")? },
             rim: color("rim")?,
             fit,
+            grip_root,
             size,
             yaw_deg,
             at: vis_vec3(map, "at", &format!("{what} model"))?,
@@ -2015,25 +1971,6 @@ fn load_model_rows(
         });
     }
     Ok(models)
-}
-
-fn validate_model_sha256(models: &[CastModel]) -> Result<(), String> {
-    let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
-    if !assets.is_dir() {
-        return Ok(());
-    }
-    for model in models {
-        let path = assets.join(&model.file);
-        let bytes = std::fs::read(&path).map_err(|err| format!("{} mesh {}: {err}", model.id, path.display()))?;
-        let got = sha256_hex(&bytes);
-        if got != model.sha256 {
-            return Err(format!(
-                "{} mesh sha256 {got} does not match content {}",
-                model.id, model.sha256
-            ));
-        }
-    }
-    Ok(())
 }
 
 fn require_cast_roster(models: &[CastModel], heroes: &[HeroCard], bugs: &crate::bugs::BugBook) -> Result<(), String> {
@@ -2085,6 +2022,10 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
             "pod_glow_per_glow",
             "glow_falloff",
             "glow_show_through",
+            "glow_core_perp",
+            "glow_core_depth",
+            "needle_extent",
+            "needle_area",
             "review_yaw_deg",
             "review_elev_deg",
             "review_distance",
@@ -2138,6 +2079,22 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
     if !(glow_show_through >= 0.0 && glow_show_through < 1.0) {
         return Err("cast.toml glow_show_through must be >= 0 and < 1".into());
     }
+    let glow_core_perp = vis_f32(table, "glow_core_perp", "cast.toml")?;
+    let glow_core_depth = vis_f32(table, "glow_core_depth", "cast.toml")?;
+    if !(glow_core_perp > 0.0 && glow_core_perp <= 1.0) {
+        return Err("cast.toml glow_core_perp must be > 0 and <= 1".into());
+    }
+    if !(glow_core_depth > 0.0 && glow_core_depth < 1.0) {
+        return Err("cast.toml glow_core_depth must be > 0 and < 1".into());
+    }
+    let needle_extent = vis_f32(table, "needle_extent", "cast.toml")?;
+    let needle_area = vis_f32(table, "needle_area", "cast.toml")?;
+    if !(needle_extent > 0.0 && needle_extent <= 1.0) {
+        return Err("cast.toml needle_extent must be > 0 and <= 1".into());
+    }
+    if !(needle_area > 0.0 && needle_area < 1.0) {
+        return Err("cast.toml needle_area must be > 0 and < 1".into());
+    }
     let review_yaw_deg = vis_f32(table, "review_yaw_deg", "cast.toml")?;
     let review_elev_deg = vis_f32(table, "review_elev_deg", "cast.toml")?;
     let review_distance = vis_f32(table, "review_distance", "cast.toml")?;
@@ -2157,6 +2114,10 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
         pod_glow_per_glow,
         glow_falloff,
         glow_show_through,
+        glow_core_perp,
+        glow_core_depth,
+        needle_extent,
+        needle_area,
         review_yaw_deg,
         review_elev_deg,
         review_distance,

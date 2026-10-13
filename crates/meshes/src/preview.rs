@@ -742,6 +742,8 @@ fn paint_feedback_parts(
                     rgb,
                     look.glow_falloff,
                     look.glow_show_through,
+                    look.glow_core_perp,
+                    look.glow_core_depth,
                 );
             } else {
                 fill_tri(color, depth, cam.w, cam.h, projected[0], projected[1], projected[2], rgb);
@@ -1182,6 +1184,8 @@ fn fill_glow_tri(
     rgb: [f32; 3],
     falloff: f32,
     show_through: f32,
+    core_perp: f32,
+    core_depth: f32,
 ) {
     let min_x = a[0].min(b[0]).min(c[0]).floor().max(0.0) as i32;
     let max_x = a[0].max(b[0]).max(c[0]).ceil().min(w as f32 - 1.0) as i32;
@@ -1214,8 +1218,8 @@ fn fill_glow_tri(
             let cover = glow_cover(perp, falloff, show_through);
             // The core sits on the cast. Pull it forward by its own radius so a
             // shell that overhangs the pole does not hide the palette texel.
-            if perp < 0.25 {
-                z = (z - radius).max(0.05);
+            if perp < core_perp {
+                z = (z - radius).max(core_depth);
             }
             if z >= depth[idx] {
                 continue;
