@@ -28,8 +28,7 @@ jobs:
           sudo apt-get install -y pkg-config libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libvulkan-dev libasound2-dev libudev-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev ffmpeg
       - name: tests
         run: cargo test --workspace --no-fail-fast -- --skip vex_fp_stills_stay_near_the_polished_reference
-      - name: vex reference drift (expected red until a new reference is signed off)
-        continue-on-error: true
+      - name: vex reference drift
         run: cargo test -p gemini-meshes --bin bugshots -- vex_fp_stills_stay_near_the_polished_reference -- --nocapture
       - name: sim and client do not depend on backend
         run: |
