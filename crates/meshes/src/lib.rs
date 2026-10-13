@@ -26,7 +26,7 @@ pub use reveal_still::{paint_reveal, reveal_still_is_flat, still_color_stats};
 
 pub use pose::{pose, root_motion, AnimInput, Pose, Xform};
 pub use preview::{
-    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_heroes_at_15m, raster_in_arena, raster_model, raster_rail_edge, raster_top,
+    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_embedded, raster_heroes_at_15m, raster_in_arena, raster_model, raster_rail_edge, raster_top,
     raster_crowd, raster_viewmodel, still,
     still_open, still_top, ViewmodelFrame,
 };
@@ -664,14 +664,10 @@ mod tests {
         );
         assert!(charged.xforms[p0].glow > posed.xforms[p0].glow + 1.0);
 
-        let vein = bug("hive_tyrant").parts.iter().find(|p| p.name == "vein0").unwrap();
-        let thick = vein
-            .mesh
-            .positions
-            .iter()
-            .map(|p| (p[0] * p[0] + p[2] * p[2]).sqrt())
-            .fold(0.0_f32, f32::max);
-        assert!(thick < 0.06, "leg spike thickness {thick}");
+        assert!(
+            bug("hive_tyrant").parts.iter().all(|part| !part.name.starts_with("vein")),
+            "hive lime veins are leftover glow geometry, not projectiles"
+        );
     }
 
     #[test]

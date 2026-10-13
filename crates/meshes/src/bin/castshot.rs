@@ -11,7 +11,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
-use gemini_meshes::{raster_heroes_at_15m, raster_in_arena, raster_model};
+use gemini_meshes::{raster_embedded, raster_heroes_at_15m, raster_in_arena, raster_model};
 
 const IDS: &[&str] = &[
     "vex_body",
@@ -60,6 +60,13 @@ fn main() {
         let path = out.join(format!("{id}.png"));
         sheet.save(&path).expect("write png");
         println!("wrote {}", path.display());
+        if id.ends_with("_gun") {
+            let embedded = raster_embedded(id, panel, panel);
+            let embedded_img = image::RgbImage::from_raw(panel, panel, embedded).expect("embedded");
+            let embedded_path = out.join(format!("{id}_embedded.png"));
+            embedded_img.save(&embedded_path).expect("write embedded");
+            println!("wrote {}", embedded_path.display());
+        }
     }
     let arena = 1024u32;
     let party = raster_heroes_at_15m(arena, arena);

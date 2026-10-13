@@ -59,6 +59,62 @@ pub fn raster_model(id: &str, width: u32, height: u32) -> Vec<u8> {
     draw_model(mesh, &palette, width, height, eye, target, look.review_fov_deg, BG)
 }
 
+/// The same review camera and `sample4` path as `raster_model`, reading the glb
+/// baseColorTexture instead of the mask palette. A coherent gun means the mesh
+/// UVs match that texture. Noise means the mesh or the reader is wrong.
+pub fn raster_embedded(id: &str, width: u32, height: u32) -> Vec<u8> {
+    let content = gemini_sim::content::Content::embedded();
+    let look = &content.cast;
+    let mesh = crate::cast(id);
+    let yaw = if mesh.fit == "weapon" {
+        look.review_yaw_deg - 90.0
+    } else {
+        look.review_yaw_deg
+    };
+    let (eye, target) = review_eye(&mesh.positions, yaw, look.review_elev_deg, look.review_distance);
+    let w = width.max(8);
+    let h = height.max(8);
+    let mut color = Vec::with_capacity((w * h * 3) as usize);
+    for _ in 0..(w * h) {
+        color.extend_from_slice(&BG);
+    }
+    let mut depth = vec![f32::INFINITY; (w * h) as usize];
+    let forward = norm(sub(target, eye));
+    let hint = if forward[1].abs() > 0.92 { [0.0, 0.0, 1.0] } else { [0.0, 1.0, 0.0] };
+    let right = norm(cross(forward, hint));
+    let up = cross(right, forward);
+    let fov = look.review_fov_deg.to_radians();
+    let cam = crate::PaintCam {
+        eye,
+        right,
+        up,
+        forward,
+        focal: 1.0 / (fov * 0.5).tan(),
+        aspect: w as f32 / h as f32,
+        w,
+        h,
+        key: norm([-0.2, 0.92, 0.28]),
+        fill: norm([0.55, 0.35, -0.45]),
+    };
+    let palette = palette_of();
+    crate::cast::paint_embedded_base(
+        &mut color,
+        &mut depth,
+        &mesh,
+        crate::Placement {
+            pre_yaw: 0.0,
+            pre_shift: [0.0, 0.0, 0.0],
+            yaw_deg: 0.0,
+            lean: 0.0,
+            pivot: [0.0, 0.0, 0.0],
+            shift: [0.0, 0.0, 0.0],
+        },
+        &palette,
+        &cam,
+    );
+    color
+}
+
 /// Same orbit as `render.py`: eye sits `distance` radii from the bounds center.
 fn review_eye(positions: &[[f32; 3]], yaw_deg: f32, elev_deg: f32, distance: f32) -> ([f32; 3], [f32; 3]) {
     let (mn, mx) = mesh_bounds(positions);
@@ -224,9 +280,10 @@ pub fn raster_viewmodel_yaw(width: u32, height: u32, frame: &ViewmodelFrame, yaw
     let shift = frame.offset;
     let orange = frame.accent;
     // Gloves stay procedural. The rifle is the fitted cast, grip at the origin, muzzle down -Z.
+    // Cobalt here is the old untextured rifle receiver plus the sleeve. It draws as a
+    // blue blob over the cast gun. The gloves that stay are the teal and white pieces.
     let mut parts = vec![
         (shifted(&vm.teal, shift), palette("hero_teal"), false),
-        (shifted(&vm.cobalt, shift), palette("hero_cobalt"), false),
         (shifted(&vm.white, shift), palette("hero_white"), false),
     ];
     if yaw_deg != 0.0 || pitch_deg != 0.0 {

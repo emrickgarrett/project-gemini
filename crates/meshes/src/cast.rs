@@ -271,6 +271,8 @@ struct RawMesh {
     base: Tex,
     mask: Tex,
     tris: usize,
+    /// `final_rig` puts the grip at the origin. The primitive itself stays in Meshy's +X layout.
+    gripped: bool,
 }
 
 /// A needle is a triangle whose longest edge is a large fraction of the model
@@ -374,6 +376,23 @@ fn fit_height(mesh: &mut RawMesh, height: f32) -> Result<(), String> {
 }
 
 fn fit_weapon(mesh: &mut RawMesh, spec: &CastModel) -> Result<(), String> {
+    if mesh.gripped {
+        // The rig root already parks the grip at the origin with the muzzle on +Z.
+        // The shot axis is -Z, so turn the muzzle around and scale the length.
+        yaw_positions(&mut mesh.positions, &mut mesh.normals, 180.0);
+        let (mn, mx) = bounds(&mesh.positions);
+        let len = mx[2] - mn[2];
+        if len <= 1e-6 {
+            return Err(format!("{} has no length", spec.id));
+        }
+        let scale = spec.size / len;
+        for p in &mut mesh.positions {
+            for i in 0..3 {
+                p[i] *= scale;
+            }
+        }
+        return Ok(());
+    }
     let (mn, mx) = bounds(&mesh.positions);
     let len = mx[0] - mn[0];
     if len <= 1e-6 {
@@ -402,6 +421,20 @@ fn fit_weapon(mesh: &mut RawMesh, spec: &CastModel) -> Result<(), String> {
 }
 
 fn fit_shield(mesh: &mut RawMesh, spec: &CastModel) -> Result<(), String> {
+    if mesh.gripped {
+        let (mn, mx) = bounds(&mesh.positions);
+        let h = mx[1] - mn[1];
+        if h <= 1e-6 {
+            return Err(format!("{} shield height is zero", spec.id));
+        }
+        let scale = spec.size / h;
+        for p in &mut mesh.positions {
+            for i in 0..3 {
+                p[i] *= scale;
+            }
+        }
+        return Ok(());
+    }
     let handle = spec.grip;
     let near = mesh.positions.iter().any(|p| dist(*p, handle) < 0.03);
     if !near {
@@ -578,9 +611,11 @@ fn closest_on_triangle(p: [f32; 3], a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f
     ]
 }
 
-/// Pull a glow center onto the cast when it floats clear of the surface.
+/// Pull a floating glow center onto the cast surface.
 /// A center already within `radius` stays put, so a snapped hit does not move.
-/// The result is tangent: the gap equals `radius`.
+/// One that floats clear of the surface lands on the closest point, the same
+/// way the other hit zones sit on the mesh. Stopping at a tangent leaves sky
+/// under the sphere.
 pub fn seat_glow(positions: &[[f32; 3]], indices: &[u32], center: [f32; 3], radius: f32) -> [f32; 3] {
     if radius <= 0.0 || positions.is_empty() || indices.is_empty() {
         return center;
@@ -589,12 +624,7 @@ pub fn seat_glow(positions: &[[f32; 3]], indices: &[u32], center: [f32; 3], radi
     if gap <= radius || gap < 1.0e-5 {
         return center;
     }
-    let t = radius / gap;
-    [
-        closest[0] + (center[0] - closest[0]) * t,
-        closest[1] + (center[1] - closest[1]) * t,
-        closest[2] + (center[2] - closest[2]) * t,
-    ]
+    closest
 }
 
 fn decode_glb(bytes: &[u8], id: &str) -> Result<RawMesh, String> {
@@ -639,6 +669,9 @@ fn decode_glb(bytes: &[u8], id: &str) -> Result<RawMesh, String> {
         .ok_or_else(|| format!("{id} has no accent mask"))? as usize;
     let base = read_image(&doc, bin, base_tex, id)?;
     let mask = read_image(&doc, bin, mask_tex, id)?;
+    let mut positions = positions;
+    let mut normals = normals;
+    let gripped = apply_grip_root(&doc, &mut positions, &mut normals);
     Ok(RawMesh {
         positions,
         normals,
@@ -647,7 +680,47 @@ fn decode_glb(bytes: &[u8], id: &str) -> Result<RawMesh, String> {
         base,
         mask,
         tris,
+        gripped,
     })
+}
+
+/// `final_rig` parents the mesh under a grip root: grip at the origin, muzzle on +Z.
+/// Bodies and bugs have no such node. The matrix is column-major, matching glTF.
+fn apply_grip_root(doc: &serde_json::Value, positions: &mut [[f32; 3]], normals: &mut [[f32; 3]]) -> bool {
+    let Some(nodes) = doc["nodes"].as_array() else {
+        return false;
+    };
+    let Some(node) = nodes.iter().find(|node| {
+        node["name"]
+            .as_str()
+            .unwrap_or("")
+            .ends_with("grip_root")
+    }) else {
+        return false;
+    };
+    let Some(list) = node["matrix"].as_array() else {
+        return false;
+    };
+    if list.len() != 16 {
+        return false;
+    }
+    let mut m = [0.0f32; 16];
+    for (i, value) in list.iter().enumerate() {
+        m[i] = value.as_f64().unwrap_or(0.0) as f32;
+    }
+    for p in positions.iter_mut() {
+        let x = m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12];
+        let y = m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13];
+        let z = m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14];
+        *p = [x, y, z];
+    }
+    for n in normals.iter_mut() {
+        let x = m[0] * n[0] + m[4] * n[1] + m[8] * n[2];
+        let y = m[1] * n[0] + m[5] * n[1] + m[9] * n[2];
+        let z = m[2] * n[0] + m[6] * n[1] + m[10] * n[2];
+        *n = norm([x, y, z]);
+    }
+    true
 }
 
 fn read_image(doc: &serde_json::Value, bin: &[u8], texture: usize, id: &str) -> Result<Tex, String> {
@@ -831,6 +904,9 @@ struct PaintTint {
     overdrive_channel: Option<usize>,
     overdrive_toward: [f32; 3],
     overdrive_gain: [f32; 3],
+    /// Sample the glb baseColorTexture through `sample4` and write those texels.
+    /// The mask palette is not applied. This is the mesh-versus-reader check.
+    embedded_base: bool,
 }
 
 fn paint_tint(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> PaintTint {
@@ -881,7 +957,24 @@ fn paint_tint(mesh: &CastMesh, palette: &dyn Fn(&str) -> [f32; 4]) -> PaintTint 
         overdrive_channel: None,
         overdrive_toward: [0.0, 0.0, 0.0],
         overdrive_gain: Content::embedded().cast.overdrive_emissive_gain,
+        embedded_base: false,
     }
+}
+
+/// The glb's own baseColorTexture, through the same triangle walk and `sample4` as `paint`.
+pub fn paint_embedded_base(
+    color: &mut [u8],
+    depth: &mut [f32],
+    mesh: &CastMesh,
+    place: Placement,
+    palette: &dyn Fn(&str) -> [f32; 4],
+    cam: &PaintCam,
+) {
+    let mut job = paint_tint(mesh, palette);
+    job.embedded_base = true;
+    let xform = |p: [f32; 3]| place_point(p, &place);
+    let rotate_n = |n: [f32; 3]| place_normal(n, &place);
+    paint_tris(color, depth, None, mesh, &xform, &rotate_n, cam, &job, false);
 }
 
 fn channel_emissive(key: &str) -> bool {
@@ -1182,7 +1275,10 @@ fn fill_textured(
                 let nd = norm(n);
                 let facing = (nd[0] * view[0] + nd[1] * view[1] + nd[2] * view[2]).clamp(0.0, 1.0);
                 let fresnel = (1.0 - facing).powf(2.0);
-                let texel = if job.channeled {
+                let texel = if job.embedded_base {
+                    let px = sample4(&mesh.base, uv);
+                    [px[0], px[1], px[2]]
+                } else if job.channeled {
                     // The shade map is the lighting. Emissive stays in the client texture.
                     let shade_srgb = sample(&mesh.shade, uv)[0];
                     let weights = sample4(&mesh.mask, uv);
@@ -1495,8 +1591,9 @@ mod tests {
             let (mn, mx) = bounds(&gun.positions);
             let gripped = gun.positions.iter().any(|p| dist(*p, [0.0, 0.0, 0.0]) < 0.04);
             assert!(gripped, "{id} grip is at the origin");
-            assert!(mx[2] > -0.02 && mx[2] < 0.2, "{id} butt stays on +z, max z {}", mx[2]);
+            assert!(mx[2] > 0.05, "{id} stock extends behind the grip, max z {}", mx[2]);
             assert!(mn[2] < -0.2, "{id} muzzle points down -z, min z {}", mn[2]);
+            assert!(mn[2].abs() > mx[2], "{id} muzzle is the long end");
         }
     }
 
@@ -1967,6 +2064,92 @@ mod tests {
         }
     }
 
+    /// Painted stock and rail texels, read off Gorkasso's masks and then frozen.
+    /// Stock is the centroid of the largest secondary island. Rail is the centroid
+    /// of the largest accent island. Brakk's mask has no accent, so it has no rail
+    /// point. Mesh vertices that read the texel have to sit on that panel: the
+    /// stock is the rear quarter of the gun, the rail is the top of the barrel.
+    /// These coordinates are not moved when a mesh misses them.
+    #[test]
+    fn gun_rail_and_stock_sample_the_painted_panels() {
+        // (id, stock uv, rail uv). Pixel on the 512² mask is uv * 511.
+        // vex stock (375, 362), rail (101, 108)
+        // nyra stock (62, 252), rail (381, 275)
+        // kip stock (219, 405), rail (65, 443)
+        // brakk stock (440, 439); no accent island
+        let panels: &[(&str, [f32; 2], Option<[f32; 2]>)] = &[
+            ("vex_gun", [0.7339, 0.7084], Some([0.1977, 0.2114])),
+            ("nyra_gun", [0.1213, 0.4932], Some([0.7456, 0.5382])),
+            ("kip_gun", [0.4286, 0.7926], Some([0.1272, 0.8669])),
+            ("brakk_gun", [0.8611, 0.8591], None),
+        ];
+        let content = Content::embedded();
+        let guns: Vec<_> = content.models.iter().filter(|model| model.fit == "weapon").collect();
+        assert_eq!(guns.len(), panels.len(), "every gun has a frozen panel texel");
+        for (id, stock_uv, rail_uv) in panels {
+            let spec = guns.iter().find(|model| model.id == *id).expect(id);
+            let mesh = cast(id);
+            let (mn, mx) = bounds(&mesh.positions);
+            let len = mx[2] - mn[2];
+            let height = mx[1] - mn[1];
+            assert!(len > 0.2 && height > 0.05, "{id} has no barrel");
+            assert_channel(&mesh.mask, *stock_uv, 1, id, "stock");
+            let stock_hits = readers(&mesh, *stock_uv);
+            assert!(stock_hits.len() >= 4, "{id} stock texel has no nearby vertices");
+            let rear = stock_hits.iter().filter(|p| (p[2] - mn[2]) / len >= 0.75).count();
+            let share = rear * 100 / stock_hits.len();
+            assert!(
+                share >= 55,
+                "{id} stock texel sits on {share}% of {} nearby vertices, need the rear quarter",
+                stock_hits.len()
+            );
+            if spec.accent.is_empty() {
+                assert!(rail_uv.is_none(), "{id} has no accent, so it has no rail texel");
+                continue;
+            }
+            let rail_uv = rail_uv.expect("accent gun");
+            assert_channel(&mesh.mask, rail_uv, 2, id, "rail");
+            let rail_hits = readers(&mesh, rail_uv);
+            assert!(rail_hits.len() >= 4, "{id} rail texel has no nearby vertices");
+            let top = rail_hits.iter().filter(|p| (p[1] - mn[1]) / height >= 0.72).count();
+            let share = top * 100 / rail_hits.len();
+            assert!(
+                share >= 55,
+                "{id} rail texel sits on {share}% of {} nearby vertices, need the top of the barrel",
+                rail_hits.len()
+            );
+        }
+    }
+
+    fn assert_channel(mask: &Tex, uv: [f32; 2], channel: usize, id: &str, panel: &str) {
+        let sample = sample4(mask, uv);
+        let bytes = [
+            (sample[0] * 255.0).round() as u8,
+            (sample[1] * 255.0).round() as u8,
+            (sample[2] * 255.0).round() as u8,
+            (sample[3] * 255.0).round() as u8,
+        ];
+        assert_eq!(
+            strict_channel(&bytes, 180),
+            Some(channel),
+            "{id} {panel} uv {uv:?} is not channel {channel} ({bytes:?})"
+        );
+    }
+
+    /// Vertices whose UV is within 0.04 of the frozen texel. That is about 20 px on the 512² mask.
+    fn readers(mesh: &CastMesh, uv: [f32; 2]) -> Vec<[f32; 3]> {
+        mesh.positions
+            .iter()
+            .zip(mesh.uvs.iter())
+            .filter(|(_, t)| {
+                let du = t[0] - uv[0];
+                let dv = t[1] - uv[1];
+                du * du + dv * dv <= 0.04 * 0.04
+            })
+            .map(|(p, _)| *p)
+            .collect()
+    }
+
     #[test]
     fn stray_needles_are_dropped() {
         for mesh in casts() {
@@ -2010,7 +2193,7 @@ mod tests {
         assert!(gap > radius, "hive cannon gap {gap:.3} should float clear of the cast");
         let seated = seat_glow(&mesh.positions, &mesh.indices, center, radius);
         let seated_gap = closest_on_mesh(&mesh.positions, &mesh.indices, seated).1;
-        assert!((seated_gap - radius).abs() < 1.0e-3, "seated gap {seated_gap:.4}");
+        assert!(seated_gap < 1.0e-3, "the cannon center sits on the cast, gap {seated_gap:.4}");
         assert!(dist(seated, center) > 0.2, "the cannon actually moves onto the cast");
     }
 

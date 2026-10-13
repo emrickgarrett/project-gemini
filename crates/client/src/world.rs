@@ -318,9 +318,9 @@ pub fn scene(
     let gain = content.cast.overdrive_emissive_gain;
     gun_hot_src.emissive = LinearRgba::rgb(toward[0] * gain[0], toward[1] * gain[1], toward[2] * gain[2]);
     let gun_hot = materials.add(gun_hot_src);
+    // The cobalt piece is the untextured procedural receiver. The cast gun replaces it.
     let pieces = [
         (upload(&mut meshes, &vm.teal), mat_of(&bank, "hero_teal", false, false), hands, None),
-        (upload(&mut meshes, &vm.cobalt), mat_of(&bank, "hero_cobalt", false, false), hands, None),
         (upload(&mut meshes, &vm.white), mat_of(&bank, "hero_white", false, false), hands, None),
         (
             gun_mesh,

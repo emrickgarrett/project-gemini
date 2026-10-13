@@ -8,6 +8,7 @@
 [[model]]
 id = "swarmer"
 file = "models/swarmer.glb"
+sha256 = "b1cb949ed55dc3dd5ce0a5a0e8d828867efabcbdc5f6739bf7c184975681c3ea"
 mask = "masks/swarmer_mask.png"
 triangles = 7200
 bytes = 1100000
@@ -28,6 +29,7 @@ view = [0.0, 0.0, 0.0]
 [[model]]
 id = "spitter"
 file = "models/spitter.glb"
+sha256 = "c3ab090267e0ee4e522d19dd2eb1a231fbb1d7c3b36169ee16c10008a308070f"
 mask = "masks/spitter_mask.png"
 triangles = 8000
 bytes = 1100000
@@ -48,6 +50,7 @@ view = [0.0, 0.0, 0.0]
 [[model]]
 id = "brute"
 file = "models/brute.glb"
+sha256 = "f55c8ccaf85f8a49ddc96c6d16de4215ed769d8b508d390de5a400851c11a528"
 mask = "masks/brute_mask.png"
 triangles = 16500
 bytes = 1100000
@@ -68,6 +71,7 @@ view = [0.0, 0.0, 0.0]
 [[model]]
 id = "brood_mother"
 file = "models/brood_mother.glb"
+sha256 = "98b986694a2f8e422debb93a23c2e5d03ebaafe8bb90bf7e88e21c498f808d03"
 mask = "masks/brood_mother_mask.png"
 triangles = 16000
 bytes = 1100000
@@ -88,6 +92,7 @@ view = [0.0, 0.0, 0.0]
 [[model]]
 id = "hive_tyrant"
 file = "models/hive_tyrant.glb"
+sha256 = "c1f44e49404248bab70ed99e2d7659f8fca100953bef49e6ea2840526345253c"
 mask = "masks/hive_tyrant_mask.png"
 triangles = 16500
 bytes = 1100000

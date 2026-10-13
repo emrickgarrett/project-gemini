@@ -3285,3 +3285,17 @@ fn sources_ranks<'a>(
         arena_visual: base.arena_visual,
     }
 }
+
+#[test]
+fn a_wrong_mesh_sha256_fails_the_load() {
+    let base = gemini_sim::content::embedded_sources();
+    let bad = base.heroes_visual.replacen(
+        "9dcc4e3425301804820e7ebb7588b7d2425b42d3b15e3347bdadb20fd7e56510",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        1,
+    );
+    let mut sources = base;
+    sources.heroes_visual = &bad;
+    let err = gemini_sim::content::Content::parse(&sources).expect_err("bad sha");
+    assert!(err.contains("vex_gun") && err.contains("sha256"), "{err}");
+}
