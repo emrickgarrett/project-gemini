@@ -96,6 +96,8 @@ pub struct ArenaScene {
     pub ledge_thickness: f32,
     pub ledge_skirt_scale: f32,
     pub ledge_plinth_run: f32,
+    pub ledge_plinth_sides: u32,
+    pub ledge_plinth_steps: u32,
     pub bulb_chamfer_scale: f32,
     pub bulb_stacks: u32,
     pub clutter_chamfer_scale: f32,
@@ -258,7 +260,12 @@ pub struct Tower {
     pub mast: [f32; 3],
     pub head: [f32; 3],
     pub beacon: [f32; 3],
+    pub cage: [f32; 3],
+    pub cage_thickness: f32,
+    pub cage_bars: u32,
+    pub cage_rings: u32,
     pub material: String,
+    pub cage_material: String,
     pub beacon_material: String,
 }
 
@@ -383,6 +390,8 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
         ledge_thickness: content::vis_f32(table, "ledge_thickness", what)?,
         ledge_skirt_scale: content::vis_f32(table, "ledge_skirt_scale", what)?,
         ledge_plinth_run: content::vis_f32(table, "ledge_plinth_run", what)?,
+        ledge_plinth_sides: content::vis_u32(table, "ledge_plinth_sides", what)?,
+        ledge_plinth_steps: content::vis_u32(table, "ledge_plinth_steps", what)?,
         bulb_chamfer_scale: content::vis_f32(table, "bulb_chamfer_scale", what)?,
         bulb_stacks: content::vis_u32(table, "bulb_stacks", what)?,
         clutter_chamfer_scale: content::vis_f32(table, "clutter_chamfer_scale", what)?,
@@ -497,6 +506,8 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
         || !(scene.ledge_thickness > 0.0)
         || !(scene.ledge_skirt_scale > 0.0)
         || !(scene.ledge_plinth_run > 0.0)
+        || scene.ledge_plinth_sides < 3
+        || scene.ledge_plinth_steps < 1
         || !(scene.bulb_chamfer_scale > 0.0)
         || !(scene.clutter_chamfer_scale > 0.0)
         || !(scene.dome_radius_scale > 0.0)
@@ -855,6 +866,7 @@ pub fn validate(
     }
     for tower in &scene.towers {
         require_mat(&tower.material, &format!("tower {}", tower.id))?;
+        require_mat(&tower.cage_material, &format!("tower {}", tower.id))?;
         require_mat(&tower.beacon_material, &format!("tower {}", tower.id))?;
         if !arena.ledges.iter().any(|ledge| ledge.id == tower.ledge) {
             return Err(format!(
@@ -867,10 +879,17 @@ pub fn validate(
             ("mast", tower.mast),
             ("head", tower.head),
             ("beacon", tower.beacon),
+            ("cage", tower.cage),
         ] {
             if size.iter().any(|n| !(*n > 0.0)) {
                 return Err(format!("tower {} {name} size must be > 0", tower.id));
             }
+        }
+        if !(tower.cage_thickness > 0.0) || tower.cage_bars < 4 || tower.cage_rings < 2 {
+            return Err(format!(
+                "tower {} cage needs a positive bar thickness, at least 4 bars, and at least 2 rings",
+                tower.id
+            ));
         }
         let beacon = material(&tower.beacon_material).ok_or_else(|| {
             format!(
@@ -881,6 +900,46 @@ pub fn validate(
         if !beacon.glow {
             return Err(format!("tower {} beacon must be a glow material", tower.id));
         }
+    }
+    let floor_y = scene
+        .floors
+        .iter()
+        .map(|floor| floor.y)
+        .fold(f32::MAX, f32::min);
+    for ledge in &arena.ledges {
+        let top = ledge.pos.y - scene.ledge_size[1] - scene.ledge_thickness;
+        if !(top > floor_y) {
+            return Err(format!(
+                "ledge {} plinth top {top} is at or below the floor {floor_y}",
+                ledge.id
+            ));
+        }
+        let dist = (ledge.pos.x * ledge.pos.x + ledge.pos.z * ledge.pos.z).sqrt();
+        let bearing = ledge.pos.x.atan2(ledge.pos.z).to_degrees().rem_euclid(360.0);
+        let Some(cliff) = scene.cliffs.iter().find(|cliff| {
+            let delta = (bearing - cliff.angle_deg.rem_euclid(360.0)).rem_euclid(360.0);
+            delta < cliff.span_deg
+        }) else {
+            return Err(format!("ledge {} has no rim cliff to blend into", ledge.id));
+        };
+        if !(dist < cliff.inner) {
+            return Err(format!(
+                "ledge {} is outside the rim, so its outcrop cannot blend into the rock",
+                ledge.id
+            ));
+        }
+    }
+    let lowest_rim = scene
+        .cliffs
+        .iter()
+        .map(|cliff| cliff.inner_height.min(cliff.outer_height))
+        .fold(f32::MAX, f32::min)
+        * scene.rim_inner_scale
+        - scene.chunk_size[1];
+    if lowest_rim < floor_y {
+        return Err(format!(
+            "rim slope dips through the floor; lowest rock is {lowest_rim}, floor is {floor_y}"
+        ));
     }
     for id in &rules.required_cameras {
         if !scene.cameras.iter().any(|camera| camera.id == *id) {
@@ -1717,7 +1776,12 @@ fn load_tower(table: &toml::map::Map<String, toml::Value>) -> Result<Tower, Stri
             "mast",
             "head",
             "beacon",
+            "cage",
+            "cage_thickness",
+            "cage_bars",
+            "cage_rings",
             "material",
+            "cage_material",
             "beacon_material",
         ],
         "tower",
@@ -1729,7 +1793,12 @@ fn load_tower(table: &toml::map::Map<String, toml::Value>) -> Result<Tower, Stri
         mast: content::nums3(table.get("mast").unwrap(), "mast")?,
         head: content::nums3(table.get("head").unwrap(), "head")?,
         beacon: content::nums3(table.get("beacon").unwrap(), "beacon")?,
+        cage: content::nums3(table.get("cage").unwrap(), "cage")?,
+        cage_thickness: content::vis_f32(table, "cage_thickness", "tower")?,
+        cage_bars: content::vis_u32(table, "cage_bars", "tower")?,
+        cage_rings: content::vis_u32(table, "cage_rings", "tower")?,
         material: req_name(table, "material")?,
+        cage_material: req_name(table, "cage_material")?,
         beacon_material: req_name(table, "beacon_material")?,
     })
 }

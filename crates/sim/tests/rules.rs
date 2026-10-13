@@ -3360,7 +3360,7 @@ fn scenery_limits_fail_the_load() {
     let hue = base.palette.replacen("nest_brass = \"#2D3222\"", "nest_brass = \"#3A3010\"", 1);
     let err = palette(&hue).expect_err("hue");
     assert!(err.contains("hue"), "{err}");
-    let bright = base.palette.replacen("platform_pale = \"#383632\"", "platform_pale = \"#FFFFFF\"", 1);
+    let bright = base.palette.replacen("platform_pale = \"#373732\"", "platform_pale = \"#FFFFFF\"", 1);
     let err = palette(&bright).expect_err("luma");
     assert!(err.contains("luma"), "{err}");
     let dense = base.arena.replacen("fog_end = 118.0", "fog_end = 100.0", 1);
@@ -3395,6 +3395,21 @@ fn scenery_limits_fail_the_load() {
     let err = visual(&orphan).expect_err("prop kind");
     assert!(err.contains("crate"), "{err}");
     assert!(err.contains("mesh"), "{err}");
+    let sunk = base.arena.replacen(
+        "id = \"tower\"\npos = [22, 12, 22]",
+        "id = \"tower\"\npos = [22, 0.2, 22]",
+        1,
+    );
+    let err = arena(&sunk).expect_err("plinth");
+    assert!(err.contains("plinth"), "{err}");
+    assert!(err.contains("tower"), "{err}");
+    let dipped = base.arena_visual.replacen(
+        "chunk_size = [1.6, 0.18, 1.3]",
+        "chunk_size = [1.6, 8.0, 1.3]",
+        1,
+    );
+    let err = visual(&dipped).expect_err("rim floor");
+    assert!(err.contains("floor"), "{err}");
     let missing_navy = base.arena_visual.replacen("navy = \"navy\"\n", "", 1);
     let err = visual(&missing_navy).expect_err("navy key");
     assert!(err.contains("navy"), "{err}");

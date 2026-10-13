@@ -534,7 +534,7 @@ fn ledge_pad(content: &Content, x: f32, y: f32, z: f32) -> Vec<ArenaPiece> {
     ]
 }
 
-/// Rock under a jetpack pad, wide at the dirt and narrow at the slab, so the pad sits on the ground.
+/// Faceted spur from the rim in to the pad. The load rejects a pad that does not clear the floor.
 fn ledge_plinth(content: &Content, x: f32, y: f32, z: f32) -> MeshData {
     let scene = &content.arena_scene;
     let floor_y = scene
@@ -543,26 +543,73 @@ fn ledge_plinth(content: &Content, x: f32, y: f32, z: f32) -> MeshData {
         .map(|floor| floor.y)
         .fold(f32::MAX, f32::min);
     let top_y = y - scene.ledge_size[1] - scene.ledge_thickness;
-    let mut mesh = MeshData::new();
     if !(top_y > floor_y) {
-        return mesh;
+        panic!("ledge plinth top {top_y} is at or below the floor {floor_y}");
     }
-    let rise = top_y - floor_y;
-    let top_r = (scene.ledge_size[0] * scene.ledge_size[0] + scene.ledge_size[2] * scene.ledge_size[2]).sqrt()
+    let pad_r = (x * x + z * z).sqrt();
+    let bearing = x.atan2(z);
+    let bearing_deg = bearing.to_degrees().rem_euclid(360.0);
+    let cliff = scene
+        .cliffs
+        .iter()
+        .find(|cliff| {
+            let delta = (bearing_deg - cliff.angle_deg.rem_euclid(360.0)).rem_euclid(360.0);
+            delta < cliff.span_deg
+        })
+        .unwrap_or_else(|| panic!("ledge plinth at {bearing_deg} deg has no rim cliff"));
+    if !(pad_r < cliff.inner) {
+        panic!("ledge plinth at ({x}, {z}) is outside the rim");
+    }
+    let sides = scene.ledge_plinth_sides;
+    let steps = scene.ledge_plinth_steps;
+    let seat = (scene.ledge_size[0] * scene.ledge_size[0] + scene.ledge_size[2] * scene.ledge_size[2]).sqrt()
         * 0.5;
-    let bot_r = top_r + rise * scene.ledge_plinth_run;
-    let sides = scene.boulder_slices;
-    for i in 0..sides {
-        let a0 = i as f32 / sides as f32 * std::f32::consts::TAU;
-        let a1 = (i + 1) as f32 / sides as f32 * std::f32::consts::TAU;
+    let rim_h = cliff.inner_height * scene.rim_inner_scale;
+    let mut rings = Vec::with_capacity(steps as usize + 1);
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let radius = cliff.inner + (pad_r - cliff.inner) * t;
+        let (s, c) = bearing.sin_cos();
+        let half = seat + (cliff.inner - pad_r) * (1.0 - t) * scene.ledge_plinth_run;
+        let hy = rim_h + (top_y - rim_h) * t;
+        rings.push((s * radius, c * radius, half, hy));
+    }
+    let mut mesh = MeshData::new();
+    for step in 0..steps as usize {
+        let (cx0, cz0, half0, hy0) = rings[step];
+        let (cx1, cz1, half1, hy1) = rings[step + 1];
+        let y_bottom = if step == 0 { floor_y } else { hy0 };
+        let spin = if step % 2 == 0 {
+            0.0
+        } else {
+            scene.rim_stagger_deg.to_radians()
+        };
+        for k in 0..sides {
+            let a0 = bearing + spin + k as f32 / sides as f32 * std::f32::consts::TAU;
+            let a1 = bearing + spin + (k + 1) as f32 / sides as f32 * std::f32::consts::TAU;
+            let (s0, c0) = a0.sin_cos();
+            let (s1, c1) = a1.sin_cos();
+            geom::add_quad(
+                &mut mesh,
+                [cx0 + s0 * half0, y_bottom, cz0 + c0 * half0],
+                [cx0 + s1 * half0, y_bottom, cz0 + c1 * half0],
+                [cx1 + s1 * half1, hy1, cz1 + c1 * half1],
+                [cx1 + s0 * half1, hy1, cz1 + c0 * half1],
+                INK,
+            );
+        }
+    }
+    let (cx, cz, half, hy) = rings[steps as usize];
+    for k in 0..sides {
+        let a0 = bearing + k as f32 / sides as f32 * std::f32::consts::TAU;
+        let a1 = bearing + (k + 1) as f32 / sides as f32 * std::f32::consts::TAU;
         let (s0, c0) = a0.sin_cos();
         let (s1, c1) = a1.sin_cos();
-        geom::add_quad(
+        geom::add_face(
             &mut mesh,
-            [x + s0 * bot_r, floor_y, z + c0 * bot_r],
-            [x + s1 * bot_r, floor_y, z + c1 * bot_r],
-            [x + s1 * top_r, top_y, z + c1 * top_r],
-            [x + s0 * top_r, top_y, z + c0 * top_r],
+            [cx, hy, cz],
+            [cx + s0 * half, hy, cz + c0 * half],
+            [cx + s1 * half, hy, cz + c1 * half],
             INK,
         );
     }
@@ -603,7 +650,8 @@ fn rim_pile(content: &Content, cliff: &gemini_sim::scenery::Cliff) -> MeshData {
         for row in 0..=rows {
             let v = row as f32 / rows as f32;
             let radial = cliff.inner + (cliff.outer - cliff.inner) * v * scene.rim_fill;
-            let y = (toe + (crest - toe) * v - dip).max(floor_y);
+            // Load rejects a nest dip that would cross the floor, so this height is not clamped.
+            let y = toe + (crest - toe) * v - dip;
             let facet = if row > 0 && row < rows && i > 0 && i < splits {
                 scene.rim_stagger_deg * if row % 2 == 0 { 1.0 } else { -1.0 }
             } else {
@@ -621,6 +669,7 @@ fn rim_pile(content: &Content, cliff: &gemini_sim::scenery::Cliff) -> MeshData {
             let c = grid[(i + 1) * cols + row + 1];
             geom::add_quad(&mut mesh, a, b, c, d, INK);
         }
+        // Skirt faces are the rock's ground contact, from the slope edge down to the floor.
         let inner = grid[i * cols];
         let inner_next = grid[(i + 1) * cols];
         geom::add_quad(
@@ -761,8 +810,10 @@ fn relay(content: &Content, tower: &gemini_sim::scenery::Tower) -> Vec<ArenaPiec
         .find(|ledge| ledge.id == tower.ledge)
         .unwrap_or_else(|| panic!("tower {} ledge", tower.id));
     let material = mat(scene_materials(content), &tower.material);
+    let cage_mat = mat(scene_materials(content), &tower.cage_material);
     let beacon = mat(scene_materials(content), &tower.beacon_material);
-    let mut y = ledge.pos.y - content.arena_scene.ledge_thickness;
+    let origin = ledge.pos.y - content.arena_scene.ledge_thickness;
+    let mut y = origin;
     let mut out = Vec::new();
     for (size, glow) in [
         (tower.base, false),
@@ -776,7 +827,71 @@ fn relay(content: &Content, tower: &gemini_sim::scenery::Tower) -> Vec<ArenaPiec
         out.push(piece(mesh, if glow { beacon } else { material }));
         y += size[1];
     }
+    out.extend(tower_cage(
+        tower,
+        [ledge.pos.x, origin + tower.base[1], ledge.pos.z],
+        cage_mat,
+    ));
     out
+}
+
+/// Corner and edge bars plus horizontal rings, sized from the tower table.
+fn tower_cage(
+    tower: &gemini_sim::scenery::Tower,
+    origin: [f32; 3],
+    material: &gemini_sim::scenery::SceneMaterial,
+) -> Vec<ArenaPiece> {
+    let mut posts = MeshData::new();
+    let mut rings = MeshData::new();
+    let perim = 2.0 * (tower.cage[0] + tower.cage[2]);
+    for i in 0..tower.cage_bars {
+        let [px, pz] = rect_edge(tower.cage[0], tower.cage[2], perim * i as f32 / tower.cage_bars as f32);
+        geom::box_mesh(
+            &mut posts,
+            [
+                origin[0] + px,
+                origin[1] + tower.cage[1] * 0.5,
+                origin[2] + pz,
+            ],
+            [tower.cage_thickness, tower.cage[1], tower.cage_thickness],
+            INK,
+        );
+    }
+    let hx = tower.cage[0] * 0.5;
+    let hz = tower.cage[2] * 0.5;
+    for ring in 0..tower.cage_rings {
+        let t = ring as f32 / (tower.cage_rings - 1) as f32;
+        let y = origin[1] + tower.cage[1] * t;
+        for (center, size) in [
+            ([origin[0], y, origin[2] - hz], [tower.cage[0], tower.cage_thickness, tower.cage_thickness]),
+            ([origin[0], y, origin[2] + hz], [tower.cage[0], tower.cage_thickness, tower.cage_thickness]),
+            ([origin[0] - hx, y, origin[2]], [tower.cage_thickness, tower.cage_thickness, tower.cage[2]]),
+            ([origin[0] + hx, y, origin[2]], [tower.cage_thickness, tower.cage_thickness, tower.cage[2]]),
+        ] {
+            geom::box_mesh(&mut rings, center, size, INK);
+        }
+    }
+    vec![piece(posts, material), piece(rings, material)]
+}
+
+fn rect_edge(width: f32, depth: f32, distance: f32) -> [f32; 2] {
+    let perim = 2.0 * (width + depth);
+    let mut d = distance.rem_euclid(perim);
+    let hx = width * 0.5;
+    let hz = depth * 0.5;
+    if d <= width {
+        return [-hx + d, -hz];
+    }
+    d -= width;
+    if d <= depth {
+        return [hx, -hz + d];
+    }
+    d -= depth;
+    if d <= width {
+        return [hx - d, hz];
+    }
+    d -= width;
+    [-hx, hz - d]
 }
 
 fn prop_mesh(content: &Content, prop: &gemini_sim::scenery::Prop) -> MeshData {
