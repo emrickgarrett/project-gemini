@@ -20,7 +20,6 @@ rail_still_side = 3.20
 rail_still_fov = 72.0
 rail_still_inset = 1.40
 
-# Beacon lamps pulse on this period. The beacon_pulse one-shot fires once per cycle of the same key.
 beacon_glow_period = 1.8
 
 floor_sides = 24
