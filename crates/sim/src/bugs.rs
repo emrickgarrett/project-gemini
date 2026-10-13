@@ -3,6 +3,8 @@
 //! name is missing or does not resolve. Size and the damage multiplier stay
 //! on `hitbox`. The mesh crate is not consulted.
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 
 use crate::content::EnemyKind;
@@ -77,6 +79,11 @@ pub struct BugVisual {
     pub grown_color: String,
     #[serde(default)]
     pub parts: Vec<VisualPart>,
+    /// Named points on the cast, in the fitted hitbox frame. A weak-point
+    /// anchor may name one. The mesh load rejects a center that is not on
+    /// that cast.
+    #[serde(default)]
+    pub points: BTreeMap<String, [f32; 3]>,
     pub anim: VisualAnim,
 }
 
@@ -289,10 +296,6 @@ pub fn require_glow_hit_centers(book: &BugBook) -> Result<(), String> {
             let Some(center) = hit_center_named(row, &part.name) else {
                 return Err(format!("{bug} {} glow has no weak point", part.name));
             };
-            // The cannon sits on the tail chain. Its visual offset is not the world center.
-            if part.at.as_deref() == Some("tail_end") {
-                continue;
-            }
             if part.offset != center {
                 return Err(format!(
                     "{bug} {} glow is not on its hit center",
@@ -512,19 +515,12 @@ fn anchor_name(shape: &ShapeDef) -> Option<&str> {
     }
 }
 
-/// Hitbox anchor that follows the procedural tail chain, not the cast mesh.
-pub const PROCEDURAL_TAIL_ANCHOR: &str = "procedural_tail";
-
-/// Local center of a visual part. `None` when the part is missing or has no anchor.
+/// Local center of a named cast point or a visual part. `None` when the name is neither.
 pub fn visual_anchor(visual: &BugVisual, name: &str) -> Option<[f32; 3]> {
-    if name == PROCEDURAL_TAIL_ANCHOR {
-        let part = tail_end_part(visual)?;
-        return tail_end(visual, part);
+    if let Some(point) = visual.points.get(name) {
+        return Some(*point);
     }
     let part = part_named(visual, name)?;
-    if part.at.as_deref() == Some("tail_end") {
-        return tail_end(visual, part);
-    }
     // `[0, 0, 0]` is the serde default for an omitted offset, not a placed part.
     if part.offset != [0.0, 0.0, 0.0] {
         return Some(part.offset);
@@ -603,21 +599,19 @@ pub fn resolved_offset(visual: &BugVisual, shape: &ShapeDef) -> Result<[f32; 3],
     let Some(name) = anchor_name(shape) else {
         return Err("weak point has no anchor name".into());
     };
-    visual_anchor(visual, name).ok_or_else(|| format!("anchor \"{name}\" does not resolve to a visual part"))
-}
-
-fn tail_end_part(visual: &BugVisual) -> Option<&VisualPart> {
-    visual.parts.iter().find(|part| part.at.as_deref() == Some("tail_end"))
+    visual_anchor(visual, name).ok_or_else(|| format!("anchor \"{name}\" is not on the cast and does not resolve"))
 }
 
 /// Volume of the glowing part named in the visual table.
+/// A cast point uses the emissive part that sits on that point.
 pub fn glow_bounds(visual: &BugVisual, name: &str) -> Option<PartBounds> {
-    let part = if name == PROCEDURAL_TAIL_ANCHOR {
-        tail_end_part(visual)?
-    } else {
-        part_named(visual, name)?
-    };
     let center = visual_anchor(visual, name)?;
+    let part = part_named(visual, name).or_else(|| {
+        visual
+            .parts
+            .iter()
+            .find(|part| part.emissive && part.offset == center)
+    })?;
     let half = if part.size.is_empty() {
         let host_name = part.on.as_deref().unwrap_or("");
         let host = part_named(visual, host_name)?;
@@ -661,69 +655,3 @@ fn size_extents(size: &[f32]) -> Option<[f32; 3]> {
     }
 }
 
-/// Cannon center for `at = "tail_end"`. Pitch, joint, segment length, gap, and
-/// the segment cap are the tail part's fields. A chain with no cap, scale, or
-/// joint is not an anchor.
-/// Cannon center at `time`, including the tail's sway. Time 0 is the rest pose baked at load.
-pub fn cannon_center(visual: &BugVisual, time: f32) -> Option<[f32; 3]> {
-    let cannon = part_named(visual, "cannon")?;
-    tail_end_at(visual, cannon, time)
-}
-
-fn tail_end(visual: &BugVisual, cannon: &VisualPart) -> Option<[f32; 3]> {
-    tail_end_at(visual, cannon, 0.0)
-}
-
-fn tail_end_at(visual: &BugVisual, cannon: &VisualPart, time: f32) -> Option<[f32; 3]> {
-    let tail = part_named(visual, "tail")?;
-    if tail.segment_cap == 0 || tail.segment_scale <= 0.0 || tail.joint_span <= 0.0 {
-        return None;
-    }
-    let len = tail.size.get(1).copied()?;
-    let count = tail.count.max(1).min(tail.segment_cap);
-    let step = tail.curl_deg.to_radians() / count as f32;
-
-    let mut pos = [0.0_f32, 0.0, 0.0];
-    let mut rot = [0.0_f32, 0.0, 0.0, 1.0];
-    for i in 0..count {
-        let local_pos = if i == 0 {
-            tail.offset
-        } else {
-            [0.0, -len * tail.joint_span, 0.0]
-        };
-        let sway = (time * tail.sway_rate + i as f32 * tail.sway_spread).sin() * tail.sway_amp;
-        let pitch = (if i == 0 { tail.base_pitch } else { step * tail.curl_share }) + sway;
-        pos = add3(pos, rotate_q(rot, local_pos));
-        rot = quat_mul(rot, quat_x(pitch));
-    }
-    let gem_r = cannon.size.first().copied().filter(|r| *r > 0.0)? * 0.5;
-    let along = [0.0, -(len * tail.segment_scale + gem_r + tail.tip_gap), 0.0];
-    Some(add3(pos, rotate_q(rot, along)))
-}
-
-fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-fn quat_x(angle: f32) -> [f32; 4] {
-    let (s, c) = (angle * 0.5).sin_cos();
-    [s, 0.0, 0.0, c]
-}
-
-fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
-    let [ax, ay, az, aw] = a;
-    let [bx, by, bz, bw] = b;
-    [
-        aw * bx + ax * bw + ay * bz - az * by,
-        aw * by - ax * bz + ay * bw + az * bx,
-        aw * bz + ax * by - ay * bx + az * bw,
-        aw * bw - ax * bx - ay * by - az * bz,
-    ]
-}
-
-fn rotate_q(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
-    let qv = [v[0], v[1], v[2], 0.0];
-    let inv = [-q[0], -q[1], -q[2], q[3]];
-    let r = quat_mul(quat_mul(q, qv), inv);
-    [r[0], r[1], r[2]]
-}

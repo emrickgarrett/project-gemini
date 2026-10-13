@@ -272,6 +272,11 @@ pub fn raster_viewmodel(width: u32, height: u32, frame: &ViewmodelFrame) -> Vec<
     raster_viewmodel_yaw(width, height, frame, 0.0, 0.0)
 }
 
+/// Look yaw and pitch orbit this point. The gloves and the gun share it.
+/// The gun's authored view pitch stays on the grip, in mesh space, which is
+/// the same origin while this pivot is the camera.
+const VIEW_PIVOT: [f32; 3] = [0.0, 0.0, 0.0];
+
 /// Same still, with the posed viewmodel turned. Zero yaw and pitch is the unrotated raster.
 pub fn raster_viewmodel_yaw(width: u32, height: u32, frame: &ViewmodelFrame, yaw_deg: f32, pitch_deg: f32) -> Vec<u8> {
     let glove = gemini_sim::content::Content::embedded().heroes_visual.glove;
@@ -282,15 +287,18 @@ pub fn raster_viewmodel_yaw(width: u32, height: u32, frame: &ViewmodelFrame, yaw
     // Gloves stay procedural. The rifle is the fitted cast, grip at the origin, muzzle down -Z.
     // Cobalt here is the old untextured rifle receiver plus the sleeve. It draws as a
     // blue blob over the cast gun. The gloves that stay are the teal and white pieces.
-    let mut parts = vec![
+    // Yaw and pitch turn the camera about VIEW_PIVOT. The gloves are not spun on
+    // their own center.
+    let parts = vec![
         (shifted(&vm.teal, shift), palette("hero_teal"), false),
         (shifted(&vm.white, shift), palette("hero_white"), false),
     ];
-    if yaw_deg != 0.0 || pitch_deg != 0.0 {
-        for (mesh, _, _) in &mut parts {
-            *mesh = crate::portrait::turn_mesh(mesh, yaw_deg, pitch_deg);
-        }
-    }
+    let (forward, right, up) = view_look(yaw_deg, pitch_deg);
+    let target = [
+        VIEW_PIVOT[0] + forward[0],
+        VIEW_PIVOT[1] + forward[1],
+        VIEW_PIVOT[2] + forward[2],
+    ];
     let w = width.max(8);
     let h = height.max(8);
     let mut color = Vec::with_capacity((w * h * 3) as usize);
@@ -298,15 +306,18 @@ pub fn raster_viewmodel_yaw(width: u32, height: u32, frame: &ViewmodelFrame, yaw
         color.extend_from_slice(&BG);
     }
     let mut depth = vec![f32::INFINITY; (w * h) as usize];
-    draw_parts_into(&mut color, &mut depth, &parts, [0.0, 0.0, 0.0], [0.0, 0.0, -1.0], frame.fov, w, h);
-    paint_view_gun(&mut color, &mut depth, frame, yaw_deg, pitch_deg, w, h);
+    draw_parts_into(&mut color, &mut depth, &parts, VIEW_PIVOT, target, frame.fov, w, h);
+    paint_view_gun(&mut color, &mut depth, frame, w, h, (forward, right, up));
     let mut rgb = color;
     if frame.overdrive {
         edge_tint(&mut rgb, w, h, orange);
         let local = crate::muzzle_local();
         let tip = [shift[0] + local[0], shift[1] + local[1], shift[2] + local[2]];
         let moved = crate::muzzle_on_barrel(tip, frame.fov, w as f32, h as f32, frame.glow_tip_px);
-        if let Some(screen) = crate::project_view(moved, frame.fov, w as f32, h as f32) {
+        let fov = frame.fov.to_radians();
+        let aspect = w as f32 / h as f32;
+        let focal = 1.0 / (fov * 0.5).tan();
+        if let Some(screen) = project(moved, VIEW_PIVOT, right, up, forward, focal, aspect, w, h) {
             let radius = crate::radius_px(frame.glow_radius, screen[2], frame.fov, h as f32);
             paint_muzzle_bloom(&mut rgb, w, h, screen[0], screen[1], radius, frame.glow_core, frame.glow_falloff, frame.glow_color);
         }
@@ -391,7 +402,27 @@ fn shifted(mesh: &crate::MeshData, by: [f32; 3]) -> crate::MeshData {
     copy
 }
 
-fn paint_view_gun(color: &mut [u8], depth: &mut [f32], frame: &ViewmodelFrame, yaw_deg: f32, pitch_deg: f32, w: u32, h: u32) {
+/// Camera at `VIEW_PIVOT`, looking down -Z, then yawed and pitched.
+/// Zero of both is the unrotated first-person basis.
+fn view_look(yaw_deg: f32, pitch_deg: f32) -> ([f32; 3], [f32; 3], [f32; 3]) {
+    let (ys, yc) = yaw_deg.to_radians().sin_cos();
+    let (ps, pc) = pitch_deg.to_radians().sin_cos();
+    let z1 = -yc;
+    let forward = norm([ys * -1.0, -ps * z1, pc * z1]);
+    let hint = if forward[1].abs() > 0.92 { [0.0, 0.0, 1.0] } else { [0.0, 1.0, 0.0] };
+    let right = norm(cross(forward, hint));
+    let up = cross(right, forward);
+    (forward, right, up)
+}
+
+fn paint_view_gun(
+    color: &mut [u8],
+    depth: &mut [f32],
+    frame: &ViewmodelFrame,
+    w: u32,
+    h: u32,
+    look: ([f32; 3], [f32; 3], [f32; 3]),
+) {
     let content = gemini_sim::content::Content::embedded();
     let hero = content.hero.id.as_str();
     let gun = crate::cast(&format!("{hero}_gun"));
@@ -406,19 +437,19 @@ fn paint_view_gun(color: &mut [u8], depth: &mut [f32], frame: &ViewmodelFrame, y
         model.view[1] + shift[1],
         model.view[2] + shift[2],
     ];
-    // Mesh origin is the grip. Pitch there, then move to the viewmodel grip.
+    // Mesh origin is the grip. view_pitch turns there, then the rifle moves to
+    // the viewmodel grip. Look yaw and pitch use VIEW_PIVOT, the same point as
+    // the glove camera, and are not added onto the grip.
     let place = crate::Placement {
         pre_yaw: 0.0,
         pre_shift: [0.0, 0.0, 0.0],
-        yaw_deg,
-        lean: (pitch_deg + model.view_pitch_deg).to_radians(),
-        pivot: [0.0, 0.0, 0.0],
+        yaw_deg: 0.0,
+        lean: model.view_pitch_deg.to_radians(),
+        pivot: VIEW_PIVOT,
         shift: grip,
     };
-    let eye = [0.0, 0.0, 0.0];
-    let forward = [0.0, 0.0, -1.0];
-    let right = [1.0, 0.0, 0.0];
-    let up = [0.0, 1.0, 0.0];
+    let eye = VIEW_PIVOT;
+    let (forward, right, up) = look;
     let fov = frame.fov.to_radians();
     let aspect = w as f32 / h as f32;
     let cam = crate::PaintCam {

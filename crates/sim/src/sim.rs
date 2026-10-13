@@ -222,7 +222,7 @@ pub struct Enemy {
     pub spawn_count: u32,
     pub spawn_interval: f32,
     pub alive: bool,
-    /// Seconds of pose time. The cannon hitbox walks the tail at this time.
+    /// Seconds of pose time.
     #[serde(default)]
     pub anim_time: f32,
     #[serde(default)]
@@ -3031,11 +3031,7 @@ fn gather_enemy_hits(
         }
         if let Some(cannon) = &book.hitbox.cannon {
             if crate::bugs::phase_allows(cannon.active_phase, enemy.phase) {
-                let mut placed = cannon.clone();
-                if let Some(center) = crate::bugs::cannon_center(&book.visual, enemy.anim_time) {
-                    placed.offset = center;
-                }
-                if let Some(t) = shape_hit(&placed, enemy, p0, p1, projectile.radius, 1.0) {
+                if let Some(t) = shape_hit(cannon, enemy, p0, p1, projectile.radius, 1.0) {
                     consider(&mut best, t, HitSpot::Tail);
                 }
             }

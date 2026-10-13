@@ -991,9 +991,9 @@ fn cast_hit_centers_stay_on_the_moved_anchors() {
     );
     assert!((core.radius - 0.70).abs() < 1.0e-4, "hive core radius {}", core.radius);
     let cannon = hive.hitbox.cannon.as_ref().expect("hive cannon");
-    assert_eq!(cannon.anchor, gemini_sim::bugs::PROCEDURAL_TAIL_ANCHOR);
+    assert_eq!(cannon.anchor, "tail_tip");
     assert!(
-        near(cannon.offset, [0.0, 6.1933675, -0.72942567]),
+        near(cannon.offset, [-0.00517016, 5.0, -0.70474398]),
         "cannon {:?}",
         cannon.offset
     );
@@ -1107,8 +1107,8 @@ fn missing_weakpoint_anchor_fails_content_load() {
     assert!(err.contains("glow has no weak point"), "{err}");
 
     let wide = bugs.replacen(
-        "name=\"cannon\", part=\"cannon\",  shape=\"sphere\",  size=[0.7,0.7,0.7], at=\"tail_end\", color=\"spitter_glow\", emissive=true, phase_max=1, visual_radius=0.40",
-        "name=\"cannon\", part=\"cannon\",  shape=\"sphere\",  size=[0.7,0.7,0.7], at=\"tail_end\", color=\"spitter_glow\", emissive=true, phase_max=1, visual_radius=0.90",
+        "name=\"cannon\", part=\"cannon\",  shape=\"sphere\",  size=[0.7,0.7,0.7], offset=[-0.00517016, 5.0, -0.70474398], color=\"spitter_glow\", emissive=true, phase_max=1, visual_radius=0.40",
+        "name=\"cannon\", part=\"cannon\",  shape=\"sphere\",  size=[0.7,0.7,0.7], offset=[-0.00517016, 5.0, -0.70474398], color=\"spitter_glow\", emissive=true, phase_max=1, visual_radius=0.90",
         1,
     );
     assert_ne!(wide, bugs, "a wider cannon must change the table");

@@ -211,17 +211,13 @@ fn sculpt(id: &str, row: &Row) -> Result<EnemyVisual, String> {
     Ok(baked)
 }
 
-/// Glow origins are the weak-point hit centers. A parented cannon keeps its
-/// tail-local offset; that chain is the same center. Eyes stay on their own mark.
+/// Glow origins are the weak-point hit centers. Eyes stay on their own mark.
 fn place_glows_on_hit_centers(id: &str, parts: &mut [Part]) -> Result<(), String> {
     let content = gemini_sim::content::Content::embedded();
     let Some((_, row)) = content.bugs.rows().into_iter().find(|(bug, _)| *bug == id) else {
         return Err(format!("{id} has no hitbox"));
     };
     for (_, shape) in row.hitbox.anchored() {
-        if shape.anchor == gemini_sim::bugs::PROCEDURAL_TAIL_ANCHOR {
-            continue;
-        }
         let name = if shape.name.is_empty() {
             shape.anchor.as_str()
         } else {
@@ -340,7 +336,7 @@ fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cat
     match spec.part.as_str() {
         "pod" | "bud" => return add_sac_orbs(parts, id, spec, dens, catalog),
         "crown" => return add_crown(parts, id, spec, dens),
-        "cannon" => return add_cannon(parts, id, spec, dens, catalog),
+        "cannon" => return add_cannon(parts, id, spec, dens),
         _ => {}
     }
     let gate = spec.gate();
@@ -836,15 +832,8 @@ fn add_tail(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) -> Resul
     Ok(())
 }
 
-fn add_cannon(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalog: &[VPart]) -> Result<(), String> {
-    let tail = catalog.iter().find(|part| part.name == "tail").ok_or_else(|| format!("{id} cannon has no tail part"))?;
-    if tail.segment_scale <= 0.0 {
-        return Err(format!("{id} cannon tail is missing segment_scale"));
-    }
-    let len = tail.size.get(1).copied().filter(|n| *n > 0.0).ok_or_else(|| format!("{id} cannon tail is missing its length"))?;
-    let parent = parts.iter().rposition(|p| p.name.starts_with("tail")).ok_or_else(|| format!("{id} cannon has no tail segments"))?;
+fn add_cannon(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) -> Result<(), String> {
     let rad = glow_radius(id, spec)?;
-    let tip_gap = tail.tip_gap;
     let mut mesh = gem_mesh([rad, rad, rad * 0.92], dens);
     // The barrel stays inside the glow sphere, so the mesh is no bigger than visual_radius.
     let tip_r = rad * 0.32;
@@ -854,19 +843,10 @@ fn add_cannon(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalo
     geom::rotate_x(&mut nozzle, std::f32::consts::FRAC_PI_2);
     geom::translate(&mut nozzle, [0.0, barrel - along, 0.0]);
     geom::append(&mut mesh, &nozzle);
-    // The hit center uses the authored size. A missing size must not fall back to the glow radius.
-    let place_r = spec
-        .size
-        .first()
-        .copied()
-        .filter(|n| *n > 0.0)
-        .expect("cannon size is missing a positive radius; refusing to fall back to the glow radius")
-        * 0.5;
-    let pos = [0.0, -(len * tail.segment_scale + place_r + tip_gap), 0.0];
     parts.push(Part {
         name: "cannon".into(),
-        parent: Some(parent),
-        rest_pos: pos,
+        parent: None,
+        rest_pos: spec.offset,
         rest_euler: [0.0, 0.0, 0.0],
         mesh: Arc::new(mesh),
         palette: spec.color.clone(),

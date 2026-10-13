@@ -181,6 +181,9 @@ fn shade_png(id: &str) -> Result<&'static [u8], String> {
 /// 252 is 0.99 × 255. Every texel of a channel mask must carry at least this much R+G+B+A.
 pub const MASK_MIN_BYTE_SUM: u16 = 252;
 
+/// 5 cm. A weak-point center farther than this from the cast surface fails the load.
+pub const HIT_SURFACE_GAP_M: f32 = 0.05;
+
 pub fn ensure_mask_weight(mask: &Tex, id: &str) -> Result<(), String> {
     let pixels = (mask.w as usize).saturating_mul(mask.h as usize);
     if pixels == 0 || mask.rgba.len() != pixels * 4 {
@@ -214,9 +217,8 @@ fn ensure_shade_hue_free(shade: &Tex, id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn ensure_weighted_channels(mask: &Tex, keys: [&str; 4], id: &str) -> Result<(), String> {
+fn ensure_weighted_channels(mask: &Tex, keys: [&str; 4], id: &str, palette: &gemini_sim::content::Palette) -> Result<(), String> {
     let names = ["R", "G", "B", "A"];
-    let palette = Content::embedded().palette;
     for (i, px) in mask.rgba.chunks_exact(4).enumerate() {
         for channel in 0..4 {
             if px[channel] == 0 {
@@ -278,6 +280,9 @@ fn fit_model(bytes: &[u8], spec: &CastModel, content: &Content) -> Result<CastMe
     if spec.yaw_deg != 0.0 && spec.fit != "weapon" {
         yaw_about_center(&mut decoded.positions, &mut decoded.normals, spec.yaw_deg);
     }
+    if spec.fit == "hitbox" {
+        require_weak_anchors_on_cast(&decoded, spec, content)?;
+    }
     decoded.mask = decode_mask(mask_png(&spec.id)?, &spec.id)?;
     let shade = if spec.fit == "hitbox" {
         Tex { w: 0, h: 0, rgba: Vec::new() }
@@ -289,6 +294,7 @@ fn fit_model(bytes: &[u8], spec: &CastModel, content: &Content) -> Result<CastMe
             &decoded.mask,
             [&spec.primary, &spec.secondary, &spec.accent, &spec.fourth],
             &spec.id,
+            &content.palette,
         )?;
         shade
     };
@@ -397,6 +403,44 @@ fn fit_hitbox(mesh: &mut RawMesh, spec: &CastModel, content: &Content) -> Result
     }
     let (mn, mx) = bounds(&mesh.positions);
     require_hitbox_fill(&spec.id, sub(mx, mn), hs, content.cast.hitbox_fill)?;
+    Ok(())
+}
+
+/// Every weak-point center has to sit on this cast. The procedural tail is not a surface.
+fn require_weak_anchors_on_cast(mesh: &RawMesh, spec: &CastModel, content: &Content) -> Result<(), String> {
+    let Some((_, row)) = content.bugs.rows().into_iter().find(|(id, _)| *id == spec.id) else {
+        return Err(format!("{} has no hitbox", spec.id));
+    };
+    for (slot, shape) in row.hitbox.anchored() {
+        require_point_on_cast(&spec.id, slot, &shape.anchor, &mesh.positions, &mesh.indices, shape.offset)?;
+    }
+    for (index, place) in row.hitbox.pods.iter().enumerate() {
+        require_point_on_cast(
+            &spec.id,
+            "pod",
+            &format!("pod{index}"),
+            &mesh.positions,
+            &mesh.indices,
+            place.offset,
+        )?;
+    }
+    Ok(())
+}
+
+fn require_point_on_cast(
+    id: &str,
+    slot: &str,
+    anchor: &str,
+    positions: &[[f32; 3]],
+    indices: &[u32],
+    point: [f32; 3],
+) -> Result<(), String> {
+    let gap = closest_on_mesh(positions, indices, point).1;
+    if gap > HIT_SURFACE_GAP_M {
+        return Err(format!(
+            "{id} {slot} anchor \"{anchor}\" is {gap:.3} m off the cast, limit {HIT_SURFACE_GAP_M:.2}"
+        ));
+    }
     Ok(())
 }
 
@@ -1668,13 +1712,15 @@ fn fill_textured(
                     let px = sample4(&mesh.base, uv);
                     [px[0], px[1], px[2]]
                 } else if job.channeled {
-                    // Shade scales the albedo. An emissive slot is added on top so a
-                    // status light reads in the still, the same color the client emits.
+                    // Shade scales the albedo. Emissive is added in linear, then
+                    // encoded back to sRGB, so a status light is not an sRGB sum.
                     let shade_srgb = sample(&mesh.shade, uv)[0];
                     let weights = sample4(&mesh.mask, uv);
-                    let (mut albedo, emit) = tint_channels(shade_srgb, weights, job.channels, job.emissive, job.shade_mid_lin, false);
+                    let (albedo_srgb, emit_srgb) = tint_channels(shade_srgb, weights, job.channels, job.emissive, job.shade_mid_lin, false);
+                    let mut albedo = [0.0_f32; 3];
                     for k in 0..3 {
-                        albedo[k] = (albedo[k] + emit[k]).min(1.0);
+                        let summed = srgb_to_linear(albedo_srgb[k]) + srgb_to_linear(emit_srgb[k]);
+                        albedo[k] = linear_to_srgb(summed).clamp(0.0, 1.0);
                     }
                     if let Some(channel) = job.overdrive_channel {
                         brighten_channel(albedo, weights, channel, job.overdrive_toward, job.overdrive_gain)
@@ -1838,9 +1884,6 @@ mod tests {
     use super::*;
     use gemini_sim::bugs::PartBounds;
 
-    /// 5 cm. The fit test's bar for a hit center off the cast.
-    const HIT_SURFACE_GAP_M: f32 = 0.05;
-
     #[test]
     fn budgets_grips_and_hitboxes_hold() {
         let loaded = load_catalog().expect("casts");
@@ -1929,24 +1972,45 @@ mod tests {
     /// A magenta mass in the crown band is the core sitting in the spikes.
     #[test]
     fn the_tyrant_core_glow_sits_on_the_chest_not_the_crown() {
+        let glow = Content::embedded().palette.key("spitter_glow");
+        let magenta = [
+            (glow[0] * 255.0).round() as u8,
+            (glow[1] * 255.0).round() as u8,
+            (glow[2] * 255.0).round() as u8,
+        ];
         let far = crate::raster_in_arena("hive_tyrant", 1024, 1024);
-        let (crown, chest) = exact_magenta_bands(&far, 1024, 180, 480, 500, 640);
+        // The tail-tip cannon is a short band at the top of the cast (15 m y 240–256,
+        // close-up y 320–352). Magenta above that band is the old floating disc.
+        // Magenta between the cannon and the chest is a core sitting in the spikes.
+        let (sky, chest) = exact_magenta_bands(&far, 1024, magenta, 0, 230, 500, 640);
+        let (spikes, _) = exact_magenta_bands(&far, 1024, magenta, 270, 480, 500, 640);
         assert!(chest > 400, "chest gem glow is missing at 15 m ({chest} px)");
-        assert!(crown < 40, "15 m crown still holds a magenta cloud ({crown} px)");
+        assert!(sky < 40, "15 m still holds a magenta disc above the tail ({sky} px)");
+        assert!(spikes < 40, "15 m spikes hold a magenta cloud ({spikes} px)");
         let close = crate::raster_bug("hive_tyrant", 1024, 1024);
-        let (spikes, gem) = exact_magenta_bands(&close, 1024, 320, 480, 500, 640);
+        let (above, gem) = exact_magenta_bands(&close, 1024, magenta, 0, 310, 500, 640);
+        let (head, _) = exact_magenta_bands(&close, 1024, magenta, 360, 480, 500, 640);
         assert!(gem > 200, "close-up chest glow is missing ({gem} px)");
-        assert!(spikes < 20, "close-up spikes hold a magenta cloud ({spikes} px)");
+        assert!(above < 20, "close-up holds a magenta disc above the tail ({above} px)");
+        assert!(head < 20, "close-up spikes hold a magenta cloud ({head} px)");
     }
 
-    fn exact_magenta_bands(rgb: &[u8], width: u32, crown_y0: u32, crown_y1: u32, chest_y0: u32, chest_y1: u32) -> (u32, u32) {
+    fn exact_magenta_bands(
+        rgb: &[u8],
+        width: u32,
+        magenta: [u8; 3],
+        crown_y0: u32,
+        crown_y1: u32,
+        chest_y0: u32,
+        chest_y1: u32,
+    ) -> (u32, u32) {
         let mut crown = 0u32;
         let mut chest = 0u32;
         let height = rgb.len() as u32 / (width * 3);
         for y in 0..height {
             for x in 0..width {
                 let i = ((y * width + x) * 3) as usize;
-                if rgb[i] == 255 && rgb[i + 1] == 43 && rgb[i + 2] == 214 {
+                if rgb[i] == magenta[0] && rgb[i + 1] == magenta[1] && rgb[i + 2] == magenta[2] {
                     if y >= crown_y0 && y < crown_y1 {
                         crown += 1;
                     } else if y >= chest_y0 && y < chest_y1 {
@@ -1961,10 +2025,12 @@ mod tests {
     #[test]
     fn a_texel_on_an_undefined_palette_slot_fails_the_load() {
         let accent = Tex { w: 1, h: 1, rgba: vec![0, 0, 255, 0] };
+        let palette = &Content::embedded().palette;
         let err = ensure_weighted_channels(
             &accent,
             ["gear_vex_gun_primary", "gear_vex_gun_secondary", "", ""],
             "synthetic",
+            palette,
         )
         .expect_err("empty accent");
         assert!(err.contains("(0,0)"), "{err}");
@@ -1974,6 +2040,7 @@ mod tests {
             &known,
             ["gear_vex_gun_primary", "gear_vex_gun_secondary", "", "gear_brakk_gun_glow"],
             "synthetic",
+            palette,
         )
         .expect("a defined fourth slot loads");
         let bogus = Tex { w: 2, h: 1, rgba: vec![0, 0, 0, 0, 0, 0, 0, 40] };
@@ -1981,6 +2048,7 @@ mod tests {
             &bogus,
             ["gear_vex_gun_primary", "gear_vex_gun_secondary", "", "not_a_palette_key"],
             "synthetic",
+            palette,
         )
         .expect_err("unknown key");
         assert!(err.contains("(1,0)"), "{err}");
@@ -2214,38 +2282,7 @@ mod tests {
             let posed = rest_pose(visual);
             let mut glow = Vec::new();
             for (slot, shape) in row.hitbox.anchored() {
-                let gap = if shape.anchor == gemini_sim::bugs::PROCEDURAL_TAIL_ANCHOR {
-                    let seated = gemini_sim::bugs::visual_anchor(&row.visual, &shape.anchor).unwrap_or_else(|| {
-                        panic!("{id} {slot} anchor {} did not resolve", shape.anchor)
-                    });
-                    let chain = dist(shape.offset, seated);
-                    let mesh_gap = tail_surface_gap(visual, &posed, shape.offset);
-                    let tail = row.visual.parts.iter().find(|part| part.name == "tail").expect("tail");
-                    let gem = row
-                        .visual
-                        .parts
-                        .iter()
-                        .find(|part| part.at.as_deref() == Some("tail_end"))
-                        .expect("tail end");
-                    let place_r = gem
-                        .size
-                        .first()
-                        .copied()
-                        .expect("tail end is missing a size; refusing to fall back to a zero radius")
-                        * 0.5;
-                    let seat = place_r + tail.tip_gap;
-                    if mesh_gap > seat + HIT_SURFACE_GAP_M {
-                        gaps.push((
-                            id.to_string(),
-                            slot.to_string(),
-                            shape.offset,
-                            mesh_gap,
-                        ));
-                    }
-                    chain
-                } else {
-                    surface_gap(&mesh.positions, &mesh.indices, shape.offset)
-                };
+                let gap = surface_gap(&mesh.positions, &mesh.indices, shape.offset);
                 gaps.push((id.to_string(), slot.to_string(), shape.offset, gap));
                 glow.push(glow_sits_on_hit(id, visual, &posed, slot, shape));
             }
@@ -2405,7 +2442,7 @@ mod tests {
         let authored = content_visual_radius(id, name);
         assert!(authored > 0.0, "{id} {name} glow is missing visual_radius");
         let fit_r = glow_fit_radius(shape);
-        if shape.anchor == gemini_sim::bugs::PROCEDURAL_TAIL_ANCHOR {
+        if slot == "cannon" {
             // The tail glow authors `tail_glow_radius`. That cap is smaller than
             // 70% of the cannon hit sphere, and the other glows still fill 70%.
             let cap = Content::embedded().cast.tail_glow_radius;
@@ -2471,27 +2508,6 @@ mod tests {
 
     fn surface_gap(positions: &[[f32; 3]], indices: &[u32], point: [f32; 3]) -> f32 {
         closest_on_mesh(positions, indices, point).1
-    }
-
-    fn tail_surface_gap(visual: &crate::EnemyVisual, posed: &crate::pose::Pose, point: [f32; 3]) -> f32 {
-        let mut best = f32::MAX;
-        for (part, xf) in visual.parts.iter().zip(posed.xforms.iter()) {
-            if !part.name.starts_with("tail") {
-                continue;
-            }
-            let positions: Vec<[f32; 3]> = part
-                .mesh
-                .positions
-                .iter()
-                .map(|p| {
-                    let p = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
-                    let p = crate::pose::rotate_vec(xf.rot, p);
-                    [p[0] + xf.pos[0], p[1] + xf.pos[1], p[2] + xf.pos[2]]
-                })
-                .collect();
-            best = best.min(surface_gap(&positions, &part.mesh.indices, point));
-        }
-        best
     }
 
     /// Independent of `sample4`. `flip_v` is the bottom-left row this reader must not use.
@@ -2845,7 +2861,35 @@ mod tests {
         assert!((radius - authored).abs() < 1.0e-2, "cannon mesh {radius:.3} is not the authored radius {authored:.3}");
         let mesh = cast("hive_tyrant");
         let gap = closest_on_mesh(&mesh.positions, &mesh.indices, center).1;
-        assert!(gap > radius, "hive cannon gap {gap:.3} stays on the tail, not the body cast");
+        assert!(
+            gap <= HIT_SURFACE_GAP_M,
+            "hive cannon gap {gap:.3} is off the cast (limit {HIT_SURFACE_GAP_M:.2})"
+        );
+    }
+
+    #[test]
+    fn an_anchor_off_the_cast_fails_the_load() {
+        let mesh = cast("hive_tyrant");
+        let err = require_point_on_cast(
+            "hive_tyrant",
+            "cannon",
+            "procedural_tail",
+            &mesh.positions,
+            &mesh.indices,
+            [0.0, 6.1933675, -0.72942567],
+        )
+        .expect_err("the old cannon center floats above the cast");
+        assert!(err.contains("off the cast"), "{err}");
+        assert!(err.contains("procedural_tail"), "{err}");
+        require_point_on_cast(
+            "hive_tyrant",
+            "cannon",
+            "tail_tip",
+            &mesh.positions,
+            &mesh.indices,
+            [-0.00517016, 5.0, -0.70474398],
+        )
+        .expect("the named tail tip is on the cast");
     }
 
     #[test]
