@@ -197,11 +197,19 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
         } else {
             None
         };
+        let path = match row.get("path") {
+            Some(value) => {
+                let path = value.as_str().filter(|path| !path.is_empty()).ok_or_else(|| format!("{key} path is empty"))?;
+                path.to_string()
+            }
+            // Rows that omit path live at audio/sfx/{key}.ogg. A path key is used as written.
+            None => format!("audio/sfx/{key}.ogg"),
+        };
         by_file.insert(
             key.clone(),
             SfxDef {
                 id: key.clone(),
-                path: format!("audio/sfx/{key}.ogg"),
+                path,
                 loudness: volume,
                 volume,
                 crowd: category == "swarm_bed",
@@ -347,6 +355,57 @@ is_warning = true
         }
         let alias = include_str!("../../../content/audio_mix.toml");
         assert!(alias.contains("hit = \"acid_impact\""));
+    }
+
+    #[test]
+    fn a_bad_path_does_not_fall_back_to_the_sfx_folder() {
+        let text = r#"
+voice_cap = 8
+crowd_radius = 1.0
+crowd_full_count = 1
+min_distance = 1.0
+critical = []
+
+[alias]
+
+[beep]
+path = ""
+volume_db = 0
+pitch_rand_semitones = 0
+max_instances = 1
+loop = false
+category = "ui"
+stealable = false
+flat = true
+"#;
+        let err = load_mix(text).expect_err("empty path");
+        assert!(err.contains("beep"), "{err}");
+        assert!(err.contains("path"), "{err}");
+    }
+
+    /// Native only. Wasm has no assets directory beside the crate.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn every_mix_row_names_a_file_under_assets() {
+        let audio = load_mix(include_str!("../../../content/audio_mix.toml")).expect("audio mix");
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+        let mut ids = Vec::new();
+        for row in audio.sfx.iter() {
+            ids.push(row.id.as_str());
+            let file = root.join(&row.path);
+            assert!(file.is_file(), "{} -> {}", row.id, file.display());
+        }
+        for row in audio.sting.iter() {
+            ids.push(row.id.as_str());
+            let file = root.join(&row.path);
+            assert!(file.is_file(), "sting {} -> {}", row.id, file.display());
+        }
+        for id in ["crate_common_hit", "crate_rare_hit", "crate_epic_hit", "crate_legendary_hit"] {
+            assert!(ids.contains(&id), "{id} is not a mix row");
+            let row = audio.sfx.iter().find(|row| row.id == id).unwrap();
+            assert_eq!(row.path, format!("audio/stings/{id}.ogg"));
+            assert_ne!(row.path, format!("audio/sfx/{id}.ogg"));
+        }
     }
 }
 

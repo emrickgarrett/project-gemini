@@ -1,6 +1,7 @@
 //! Amber wave bar, teal crosshair, fuel and health arcs. Magenta only on a boss weak point.
 
 use bevy::picking::hover::Hovered;
+use bevy::picking::Pickable;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, Button};
 use bevy::window::{CursorGrabMode, CursorOptions};
@@ -51,7 +52,7 @@ pub fn draw(
     time: Res<Time>,
     // Only the root. Despawning it already despawns `HudNode` children.
     old: Query<Entity, (With<HudNode>, Without<ChildOf>)>,
-    camera: Query<(&Camera, &GlobalTransform), With<IsDefaultUiCamera>>,
+    camera: Query<(&Camera, &GlobalTransform), (With<Camera3d>, Without<crate::world::ViewmodelCamera>)>,
     mut floaters: Query<(Entity, &mut Floater, &mut Node), Without<HudFill>>,
     mut shape: Local<HudShape>,
     mut labels: Query<&mut Text, With<HudLabel>>,
@@ -165,6 +166,8 @@ pub fn draw(
             },
             HudNode,
             PlayPiece,
+            // The root covers the screen. It must not eat pause-menu clicks.
+            Pickable::IGNORE,
         ))
         .id();
     if overdrive {

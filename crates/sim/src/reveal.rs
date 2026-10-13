@@ -58,6 +58,11 @@ pub fn plan(content: &Content, rarity: &str, fakeout: Option<&str>) -> Result<Re
         if content.crate_reveal.tier(tease).is_none() {
             return Err(format!("unknown fakeout {tease}"));
         }
+        let from = tier_index(rarity).ok_or_else(|| format!("unknown rarity {rarity}"))?;
+        let to = tier_index(tease).ok_or_else(|| format!("unknown fakeout {tease}"))?;
+        if to != from + 1 {
+            return Err(format!("fakeout {tease} is not one tier above {rarity}"));
+        }
     }
     let sting = format!("crate_{rarity}");
     let sting_from_table = file_stem(&tier.sting);
@@ -105,26 +110,25 @@ impl RevealRun {
     /// Move the clock forward by real elapsed seconds and return the cues that fire.
     pub fn advance(&mut self, dt: f32) -> Vec<String> {
         self.time += dt.max(0.0);
-        self.take_due(false)
+        self.take_due()
     }
 
-    /// Jump to the card. The sting still fires. A skipped fakeout does not.
+    /// Jump to the card. Only the rolled tier's hit plays. The full sting does not.
     pub fn skip(&mut self) -> Vec<String> {
         self.time = self.plan.card_at;
-        self.take_due(true)
+        for played in &mut self.played {
+            *played = true;
+        }
+        vec![format!("crate_{}_hit", self.plan.rarity)]
     }
 
-    fn take_due(&mut self, skip: bool) -> Vec<String> {
-        let sting = format!("crate_{}", self.plan.rarity);
+    fn take_due(&mut self) -> Vec<String> {
         let mut fired = Vec::new();
         for (i, cue) in self.plan.cues.iter().enumerate() {
             if self.played[i] || cue.at > self.time {
                 continue;
             }
             self.played[i] = true;
-            if skip && cue.id != sting {
-                continue;
-            }
             fired.push(cue.id.clone());
         }
         fired
@@ -171,6 +175,10 @@ fn span(t: f32, window: [f32; 2]) -> f32 {
         return if t >= window[1] { 1.0 } else { 0.0 };
     }
     ((t - window[0]) / (window[1] - window[0])).clamp(0.0, 1.0)
+}
+
+fn tier_index(id: &str) -> Option<usize> {
+    ["common", "rare", "epic", "legendary"].iter().position(|tier| *tier == id)
 }
 
 fn file_stem(path: &str) -> String {
@@ -248,13 +256,75 @@ mod tests {
     }
 
     #[test]
-    fn skip_plays_the_sting_and_skips_the_fakeout() {
+    fn storyboard_timings_and_a_one_tier_fakeout() {
         let content = Content::embedded();
-        let mut run = RevealRun::start(&content, "rare", Some("epic")).unwrap();
-        let fired = run.skip();
-        assert_eq!(fired, vec!["crate_rare".to_string()]);
-        assert!((run.time - run.plan.card_at).abs() < 1e-4);
-        let again = run.advance(1.0);
-        assert!(again.is_empty(), "cues do not replay {again:?}");
+        let cards = [("common", [3.6, 4.2], 4.2), ("rare", [3.6, 5.0], 5.0), ("epic", [3.6, 5.3], 5.3)];
+        for (rarity, rise, card) in cards {
+            let tier = content.crate_reveal.tier(rarity).unwrap();
+            assert_eq!(tier.drop, [0.0, 2.0], "{rarity}");
+            assert_eq!(tier.crack, [2.0, 3.5], "{rarity}");
+            assert_eq!(tier.burst, 3.5, "{rarity}");
+            assert_eq!(tier.rise, rise, "{rarity}");
+            assert_eq!(tier.card, card, "{rarity}");
+            assert!(tier.freeze.is_none(), "{rarity}");
+        }
+        let legendary = &content.crate_reveal.legendary;
+        let freeze = legendary.freeze.expect("legendary freeze");
+        assert!((freeze[1] - freeze[0] - 1.0).abs() < 1e-4, "legendary freeze is one second");
+        assert_eq!(legendary.drop, [0.0, 2.0]);
+        assert_eq!(legendary.crack, [2.0, 3.5]);
+        assert_eq!(freeze, [3.5, 4.5]);
+        assert_eq!(legendary.burst, 4.5);
+        assert_eq!(legendary.rise, [4.6, 6.5]);
+        assert_eq!(legendary.card, 6.5);
+        assert!(plan(&content, "common", Some("epic")).is_err(), "a fake-out cannot skip a tier");
+        assert!(plan(&content, "rare", Some("epic")).is_ok());
+        let silver = content.palette.hex("rarity_common").unwrap();
+        let blue = content.palette.hex("rarity_rare").unwrap();
+        let purple = content.palette.hex("rarity_epic").unwrap();
+        let gold = content.palette.hex("rarity_legendary").unwrap();
+        assert_eq!(silver, "#C0C7D0");
+        assert_eq!(blue, "#3B82F6");
+        assert_eq!(purple, "#A855F7");
+        assert_eq!(gold, "#FACC15");
+    }
+
+    #[test]
+    fn skip_plays_exactly_one_hit_for_the_rolled_tier() {
+        let content = Content::embedded();
+        let cases = [
+            ("common", None),
+            ("rare", Some("epic")),
+            ("epic", Some("legendary")),
+            ("legendary", None),
+        ];
+        for (rarity, fakeout) in cases {
+            let mut run = RevealRun::start(&content, rarity, fakeout).unwrap();
+            let _ = run.advance(0.05);
+            let fired = run.skip();
+            assert_eq!(fired, vec![format!("crate_{rarity}_hit")], "{rarity} skip {fired:?}");
+            assert!(fired.iter().all(|id| id != &format!("crate_{rarity}")), "the full sting must not play");
+            assert!((run.time - run.plan.card_at).abs() < 1e-4);
+            let again = run.advance(30.0);
+            assert!(again.is_empty(), "{rarity} cues replayed {again:?}");
+            let hit = format!("crate_{rarity}_hit");
+            let row = content.sfx(&hit).unwrap_or_else(|| panic!("{hit} mix row"));
+            assert!(row.category_ui, "{hit} is a UI sound");
+            let sting_vol = content.cue_volume(&format!("crate_{rarity}")).unwrap();
+            assert!((content.cue_volume(&hit).unwrap() - sting_vol).abs() < 1e-4);
+            let bytes = std::fs::read(
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets").join(content.cue_path(&hit).unwrap()),
+            )
+            .unwrap();
+            let seconds = crate::ogg::vorbis_seconds(&bytes).unwrap_or_else(|| panic!("{hit} duration"));
+            let expect = match rarity {
+                "common" => 0.31,
+                "rare" => 0.51,
+                "epic" => 0.71,
+                "legendary" => 0.96,
+                _ => unreachable!(),
+            };
+            assert!((seconds - expect).abs() < 0.03, "{hit} is {seconds}s, expected about {expect}");
+        }
     }
 }

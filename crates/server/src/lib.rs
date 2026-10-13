@@ -1,5 +1,11 @@
 //! Player-hosted listen server. The sim stays socket-free; this crate owns TCP.
 
+#[cfg(all(feature = "dev-host", not(debug_assertions)))]
+compile_error!("dev-host is a debug stand-in and cannot be built in release");
+
+#[cfg(feature = "dev-host")]
+pub mod dev_host;
+
 use std::io;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::time::Duration;

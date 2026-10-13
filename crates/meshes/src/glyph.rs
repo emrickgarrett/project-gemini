@@ -76,6 +76,35 @@ pub fn measure(text: &str, scale: u32, advance: u32) -> u32 {
     text.chars().count() as u32 * advance.max(1) * scale.max(1)
 }
 
+thread_local! {
+    static MASK: std::cell::RefCell<Option<Vec<u8>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Start a coverage mask. `fill` is the backdrop. Each written pixel becomes opaque.
+pub fn mask_begin(pixels: usize, fill: u8) {
+    MASK.with(|mask| *mask.borrow_mut() = Some(vec![fill; pixels]));
+}
+
+pub fn mask_end() -> Vec<u8> {
+    MASK.with(|mask| mask.borrow_mut().take().unwrap_or_default())
+}
+
+pub fn mask_mark(width: u32, x: i32, y: i32) {
+    if x < 0 || y < 0 || width == 0 {
+        return;
+    }
+    MASK.with(|mask| {
+        let mut slot = mask.borrow_mut();
+        let Some(alpha) = slot.as_mut() else {
+            return;
+        };
+        let i = (y as u32).saturating_mul(width) as usize + x as usize;
+        if i < alpha.len() {
+            alpha[i] = 255;
+        }
+    });
+}
+
 pub fn blit(rgb: &mut [u8], width: u32, height: u32, x: i32, y: i32, text: &str, ink: [u8; 3], scale: u32, advance: u32) {
     let scale = scale.max(1);
     let advance = advance.max(1);
@@ -107,5 +136,6 @@ fn put(rgb: &mut [u8], width: u32, height: u32, x: i32, y: i32, color: [u8; 3]) 
     let i = ((y as u32 * width) + x as u32) as usize * 3;
     if i + 2 < rgb.len() {
         rgb[i..i + 3].copy_from_slice(&color);
+        mask_mark(width, x, y);
     }
 }

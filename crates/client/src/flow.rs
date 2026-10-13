@@ -8,17 +8,20 @@ use bevy::input::gamepad::{Gamepad, GamepadButton};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::picking::hover::Hovered;
+use bevy::picking::Pickable;
+use bevy::ui::GlobalZIndex;
 use bevy::ui_widgets::{Activate, Button};
 use bevy::window::{CursorGrabMode, CursorOptions};
 
-use gemini_meshes::{paint_menu, Hit, MenuShot, PaintPrefs};
-use gemini_sim::content::{currency_reward, Content};
+use gemini_meshes::{paint_menu_masked, Hit, MenuPaint, MenuShot, PaintPrefs};
+use gemini_proto::{CratePullFault, CratePullReply};
+use gemini_sim::content::{currency_reward, format_fixed, Content};
 use gemini_sim::reveal::RevealRun;
 use gemini_sim::sim::Phase;
 
 use crate::audio;
 use crate::reveal_ui::{self, RevealPlayback};
-use crate::session::{Game, PauseMenu, PendingDifficulty};
+use crate::session::{Account, Game, PauseMenu, PendingDifficulty};
 use crate::settings::{self, Loaded, Prefs};
 use crate::AppState;
 
@@ -56,6 +59,7 @@ pub struct ServerCrate {
     pub rarity: Option<String>,
     pub fakeout: Option<String>,
     pub failed: bool,
+    pub reason: String,
 }
 
 #[derive(Resource, Clone, Copy, Debug, Default)]
@@ -88,7 +92,7 @@ pub(crate) struct MenuRoot;
 pub(crate) struct MenuCamera;
 
 #[derive(Component)]
-pub(crate) struct HitButton(String);
+pub(crate) struct HitButton(pub(crate) String);
 
 #[derive(Resource)]
 pub struct PendingHero(pub String);
@@ -456,6 +460,7 @@ pub(crate) fn apply(
     assets: Res<AssetServer>,
     mut cursor: Query<&mut CursorOptions>,
     crate_box: Option<Res<ServerCrate>>,
+    mut rank: ResMut<Account>,
 ) {
     let Some(id) = action.0.take() else { return };
     let content = Content::embedded();
@@ -538,19 +543,56 @@ pub(crate) fn apply(
             audio::ui_cue(&mut commands, &assets, &content, &prefs, back_cue);
         }
         "pull" => {
-            // The client does not roll. A tier appears only when a server result is already in ServerCrate.
-            commands.insert_resource(ServerCrate { rarity: None, fakeout: None, failed: true });
             dirty.0 = true;
-            audio::ui_cue(&mut commands, &assets, &content, &prefs, error);
+            match crate::pull_host::round_trip(&content.banners.id) {
+                Ok(reply) => {
+                    let (crate_box, pulled_rank) = crate_from_reply(&content, &reply);
+                    if let Some(pulled_rank) = pulled_rank {
+                        rank.rank = pulled_rank;
+                    }
+                    let failed = crate_box.failed;
+                    commands.insert_resource(crate_box);
+                    let cue = if failed { error } else { confirm };
+                    audio::ui_cue(&mut commands, &assets, &content, &prefs, cue);
+                }
+                Err(err) => {
+                    eprintln!("crate pull failed: {err}");
+                    let reason = match &err {
+                        crate::pull_host::PullHostError::Corrupt(_) | crate::pull_host::PullHostError::Unreadable(_) => {
+                            content.ui.copy.pull_failed.clone()
+                        }
+                        crate::pull_host::PullHostError::Unavailable(_) => content.ui.copy.pull_needs_server.clone(),
+                    };
+                    commands.insert_resource(ServerCrate {
+                        rarity: None,
+                        fakeout: None,
+                        failed: true,
+                        reason,
+                    });
+                    audio::ui_cue(&mut commands, &assets, &content, &prefs, error);
+                }
+            }
         }
         "open" => {
             if let Some(crate_box) = crate_box {
                 if let Some(rarity) = crate_box.rarity.clone() {
-                    if let Ok(run) = RevealRun::start(&content, &rarity, crate_box.fakeout.as_deref()) {
-                        commands.insert_resource(RevealPlayback(run));
-                        commands.insert_resource(reveal_ui::RevealFrom::Crates);
-                        next.set(AppState::Reveal);
-                        audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
+                    match RevealRun::start(&content, &rarity, crate_box.fakeout.as_deref()) {
+                        Ok(run) => {
+                            commands.insert_resource(RevealPlayback(run));
+                            commands.insert_resource(reveal_ui::RevealFrom::Crates);
+                            next.set(AppState::Reveal);
+                            audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
+                        }
+                        Err(_) => {
+                            commands.insert_resource(ServerCrate {
+                                rarity: None,
+                                fakeout: None,
+                                failed: true,
+                                reason: content.ui.copy.pull_failed.clone(),
+                            });
+                            dirty.0 = true;
+                            audio::ui_cue(&mut commands, &assets, &content, &prefs, error);
+                        }
                     }
                 }
             }
@@ -661,6 +703,7 @@ pub(crate) struct MenuView<'w, 's> {
     notice: Res<'w, ResetNotice>,
     summary: Option<Res<'w, MatchSummary>>,
     crate_box: Option<Res<'w, ServerCrate>>,
+    game: Option<Res<'w, Game>>,
     ready: Res<'w, PointerReady>,
     state: Res<'w, State<AppState>>,
     windows: Query<'w, 's, &'static Window>,
@@ -697,13 +740,15 @@ pub(crate) fn rebuild(mut commands: Commands, mut dirty: ResMut<Dirty>, mut view
         view.notice.0,
         view.summary.as_deref(),
         view.crate_box.as_deref(),
+        view.game.as_ref().map(|game| game.sim.connected_count()).unwrap_or(1),
         view.ready.0,
     );
     let Some(shot) = shot else {
         view.hits.0.clear();
         return;
     };
-    let (rgb, painted) = paint_menu(&content, &shot, width, height);
+    let live = matches!(shot, MenuShot::Pause { live: true, .. });
+    let MenuPaint { rgb, alpha, hits: painted } = paint_menu_masked(&content, &shot, width, height);
     view.hits.0 = painted;
     let target = view
         .menu_cam
@@ -711,9 +756,26 @@ pub(crate) fn rebuild(mut commands: Commands, mut dirty: ResMut<Dirty>, mut view
         .next()
         .or_else(|| view.ui_cam.iter().next())
         .expect("menu UI has no camera");
+    if live {
+        let veil = content.palette.key(&content.ui.colors.veil);
+        commands.spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(veil[0], veil[1], veil[2], content.ui.layout.coop_pause_dim)),
+            GlobalZIndex(0),
+            Pickable::IGNORE,
+            Visibility::Visible,
+            MenuRoot,
+            UiTargetCamera(target),
+        ));
+    }
     if let Some(images) = view.images.as_mut() {
-        let handle = images.add(image_from_rgb(&rgb, width, height));
-        let mut spawned = commands.spawn((
+        let handle = images.add(image_from_rgba(&rgb, &alpha, width, height));
+        commands.spawn((
             Node {
                 position_type: PositionType::Absolute,
                 width: Val::Px(width as f32),
@@ -721,13 +783,15 @@ pub(crate) fn rebuild(mut commands: Commands, mut dirty: ResMut<Dirty>, mut view
                 ..default()
             },
             ImageNode::new(handle),
+            GlobalZIndex(1),
+            Pickable::IGNORE,
             Visibility::Visible,
             MenuRoot,
+            UiTargetCamera(target),
         ));
-        spawned.insert(UiTargetCamera(target));
     }
     for hit in &view.hits.0 {
-        let mut spawned = commands.spawn((
+        commands.spawn((
             Button,
             Hovered::default(),
             HitButton(hit.id.clone()),
@@ -740,11 +804,11 @@ pub(crate) fn rebuild(mut commands: Commands, mut dirty: ResMut<Dirty>, mut view
                 ..default()
             },
             BackgroundColor(Color::NONE),
+            GlobalZIndex(2),
             Visibility::Visible,
             MenuRoot,
-        ));
-        spawned.insert(UiTargetCamera(target));
-        spawned.observe(on_press);
+            UiTargetCamera(target),
+        )).observe(on_press);
     }
 }
 
@@ -790,6 +854,7 @@ fn shot_for(
     notice: bool,
     summary: Option<&MatchSummary>,
     crate_box: Option<&ServerCrate>,
+    connected: usize,
     ready: bool,
 ) -> Option<MenuShot> {
     if *state == AppState::Playing {
@@ -802,7 +867,7 @@ fn shot_for(
             });
         }
         if pause.open {
-            return Some(MenuShot::Pause { focus, hero_id: hero.to_string() });
+            return Some(MenuShot::Pause { focus, hero_id: hero.to_string(), live: connected > 1 });
         }
         if cfg!(target_arch = "wasm32") && !ready {
             return Some(MenuShot::ClickToPlay);
@@ -832,6 +897,7 @@ fn shot_for(
             rarity: crate_box.and_then(|row| row.rarity.clone()),
             failed: crate_box.is_some_and(|row| row.failed),
             can_pull: true,
+            reason: crate_box.map(|row| row.reason.clone()).unwrap_or_default(),
         },
     })
 }
@@ -848,10 +914,76 @@ fn paint_prefs(prefs: &Prefs) -> PaintPrefs {
     }
 }
 
-fn image_from_rgb(rgb: &[u8], width: u32, height: u32) -> Image {
-    let mut rgba = Vec::with_capacity(rgb.len() / 3 * 4);
-    for px in rgb.chunks_exact(3) {
-        rgba.extend_from_slice(&[px[0], px[1], px[2], 255]);
+pub(crate) fn crate_from_reply(content: &Content, reply: &CratePullReply) -> (ServerCrate, Option<u32>) {
+    let copy = &content.ui.copy;
+    let places = content.ui.layout.currency_decimals;
+    match &reply.fault {
+        None => {
+            let failed = reply.rarity.is_none();
+            (
+                ServerCrate {
+                    rarity: reply.rarity.clone(),
+                    fakeout: reply.fakeout.clone(),
+                    failed,
+                    reason: if failed { copy.pull_failed.clone() } else { String::new() },
+                },
+                (!failed).then_some(reply.rank),
+            )
+        }
+        Some(CratePullFault::Short { cost, have }) => (
+            ServerCrate {
+                rarity: None,
+                fakeout: None,
+                failed: true,
+                reason: format!(
+                    "{} {} {} {} {}",
+                    copy.pull_need,
+                    format_fixed(*cost, places),
+                    copy.pull_credits,
+                    copy.pull_have,
+                    format_fixed(*have, places)
+                ),
+            },
+            None,
+        ),
+        Some(CratePullFault::Banner) => (
+            ServerCrate {
+                rarity: None,
+                fakeout: None,
+                failed: true,
+                reason: copy.pull_failed.clone(),
+            },
+            None,
+        ),
+        Some(CratePullFault::Unavailable) => (
+            ServerCrate {
+                rarity: None,
+                fakeout: None,
+                failed: true,
+                reason: copy.pull_needs_server.clone(),
+            },
+            None,
+        ),
+        Some(CratePullFault::Shards) => (
+            ServerCrate {
+                rarity: None,
+                fakeout: None,
+                failed: true,
+                reason: copy.pull_no_shards.clone(),
+            },
+            None,
+        ),
+    }
+}
+
+fn image_from_rgba(rgb: &[u8], alpha: &[u8], width: u32, height: u32) -> Image {
+    let pixels = (width as usize).saturating_mul(height as usize);
+    assert_eq!(rgb.len(), pixels * 3, "menu image rgb length");
+    assert_eq!(alpha.len(), pixels, "menu alpha mask length");
+    let mut rgba = Vec::with_capacity(pixels * 4);
+    for (index, px) in rgb.chunks_exact(3).enumerate() {
+        let cover = alpha[index];
+        rgba.extend_from_slice(&[px[0], px[1], px[2], cover]);
     }
     Image::new(
         Extent3d { width, height, depth_or_array_layers: 1 },

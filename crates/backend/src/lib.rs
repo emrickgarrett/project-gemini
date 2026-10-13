@@ -1,5 +1,6 @@
-//! Crate pulls, pity, and the audit log. The sim and the client do not depend on this crate.
-//! The client plays back `Pull::rarity` and `Pull::fakeout`. It does not roll them.
+//! Crate pulls, pity, and the audit log.
+//! The native host calls [`Account::pull`]. Wasm does not link this crate.
+//! Callers play back `Pull::rarity` and `Pull::fakeout`. They do not roll them.
 
 #[cfg(target_arch = "wasm32")]
 compile_error!("gemini-backend does not build for wasm32");
@@ -16,6 +17,25 @@ const TIERS: [&str; 4] = ["common", "rare", "epic", "legendary"];
 struct Pity {
     since_legendary: u32,
     since_epic: u32,
+}
+
+/// Why a pull did not run. The client prints this from content copy. It does not invent a tier.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PullError {
+    Short { cost: f32, have: f32 },
+    Banner,
+    /// The rolled tier has no shard row. The wallet is unchanged.
+    Shards,
+}
+
+impl std::fmt::Display for PullError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Short { cost, have } => write!(f, "need {cost} credits to pull, have {have}"),
+            Self::Banner => write!(f, "pull needs a banner"),
+            Self::Shards => write!(f, "rolled rarity has no shard cost"),
+        }
+    }
 }
 
 /// One server pull. `fakeout` is the teased tier, exactly one step above `rarity`, or none.
@@ -51,7 +71,7 @@ pub struct AuditEntry {
 pub struct Account {
     pub rank: u32,
     pub shards: u32,
-    pub credits: f32,
+    credits: f32,
     pity: BTreeMap<String, Pity>,
     active_banner: Option<String>,
     rng: ChaCha20Rng,
@@ -59,11 +79,34 @@ pub struct Account {
 }
 
 impl Account {
-    /// A live account. The generator is seeded from the operating system.
+    /// A live account. Dev builds receive `banners.dev.starting_credits`. Release builds do not.
+    /// The grant is this crate's `debug_assertions` flag. No cargo feature can turn it on.
+    pub fn open(content: &Content) -> Self {
+        Self::open_with_dev(content, dev_currency_enabled())
+    }
+
+    /// A live account with an empty wallet. Tests and [`Account::open`] use this.
     pub fn new() -> Self {
         let mut seed = [0u8; 32];
         getrandom::fill(&mut seed).expect("os randomness for a live account");
         Self::from_chacha(ChaCha20Rng::from_seed(seed))
+    }
+
+    pub fn credits(&self) -> f32 {
+        self.credits
+    }
+
+    fn open_with_dev(content: &Content, dev: bool) -> Self {
+        let mut account = Self::new();
+        if dev {
+            account.grant_dev_credits(content);
+        }
+        account
+    }
+
+    /// Credits only. Pity counters, the banner, and the generator stay as they are.
+    fn grant_dev_credits(&mut self, content: &Content) {
+        self.credits = content.banners.dev.starting_credits;
     }
 
     /// Fixed seed for tests. Live accounts use [`Account::new`].
@@ -88,54 +131,187 @@ impl Account {
         self.pity.get(banner).map(|p| p.since_legendary).unwrap_or(0)
     }
 
-    pub fn pull(&mut self, content: &Content, banner: &str) -> Result<Pull, String> {
+    /// Bytes for the stand-in save. A later host can use the same account fields.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
+        let mut out = Vec::new();
+        out.extend(SAVE_MAGIC);
+        write_u32(&mut out, self.rank);
+        write_u32(&mut out, self.shards);
+        write_f32(&mut out, self.credits)?;
+        write_opt_str(&mut out, self.active_banner.as_deref());
+        write_u32(&mut out, self.pity.len() as u32);
+        for (banner, pity) in &self.pity {
+            write_str(&mut out, banner);
+            write_u32(&mut out, pity.since_legendary);
+            write_u32(&mut out, pity.since_epic);
+        }
+        write_u32(&mut out, self.audit.len() as u32);
+        for row in &self.audit {
+            write_str(&mut out, &row.banner);
+            write_str(&mut out, &row.rarity);
+            write_opt_str(&mut out, row.fakeout.as_deref());
+            write_u32(&mut out, row.rank);
+            write_u32(&mut out, row.shards);
+            out.push(u8::from(row.powered));
+            write_f32(&mut out, row.credits_spent)?;
+            write_u32(&mut out, row.since_legendary);
+            write_u32(&mut out, row.since_epic);
+            write_u32(&mut out, row.pity_legendary_before);
+            write_u32(&mut out, row.pity_epic_before);
+        }
+        out.extend(self.rng.get_seed());
+        let pos = self.rng.get_word_pos();
+        out.extend((pos as u64).to_le_bytes());
+        out.extend(((pos >> 64) as u64).to_le_bytes());
+        Ok(out)
+    }
+
+    /// Restore a save. Truncation, a bad header, and trailing bytes are errors.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
+        if bytes.len() < SAVE_MAGIC.len() || &bytes[..SAVE_MAGIC.len()] != SAVE_MAGIC {
+            return Err("dev account save header is wrong".into());
+        }
+        let mut at = SAVE_MAGIC.len();
+        let rank = read_u32(bytes, &mut at)?;
+        let shards = read_u32(bytes, &mut at)?;
+        let credits = read_f32(bytes, &mut at)?;
+        let active_banner = read_opt_str(bytes, &mut at)?;
+        let pity_len = read_u32(bytes, &mut at)? as usize;
+        if pity_len > 1024 {
+            return Err("dev account save has too many pity rows".into());
+        }
+        let mut pity = BTreeMap::new();
+        for _ in 0..pity_len {
+            let banner = read_str(bytes, &mut at)?;
+            let since_legendary = read_u32(bytes, &mut at)?;
+            let since_epic = read_u32(bytes, &mut at)?;
+            pity.insert(banner, Pity { since_legendary, since_epic });
+        }
+        let audit_len = read_u32(bytes, &mut at)? as usize;
+        if audit_len > 1_000_000 {
+            return Err("dev account save has too many audit rows".into());
+        }
+        let mut audit = Vec::with_capacity(audit_len);
+        for _ in 0..audit_len {
+            let banner = read_str(bytes, &mut at)?;
+            let rarity = read_str(bytes, &mut at)?;
+            let fakeout = read_opt_str(bytes, &mut at)?;
+            let row_rank = read_u32(bytes, &mut at)?;
+            let row_shards = read_u32(bytes, &mut at)?;
+            let powered = read_u8(bytes, &mut at)?;
+            if powered > 1 {
+                return Err("dev account save has a bad audit flag".into());
+            }
+            let credits_spent = read_f32(bytes, &mut at)?;
+            audit.push(AuditEntry {
+                banner,
+                rarity,
+                fakeout,
+                rank: row_rank,
+                shards: row_shards,
+                powered: powered == 1,
+                credits_spent,
+                since_legendary: read_u32(bytes, &mut at)?,
+                since_epic: read_u32(bytes, &mut at)?,
+                pity_legendary_before: read_u32(bytes, &mut at)?,
+                pity_epic_before: read_u32(bytes, &mut at)?,
+            });
+        }
+        let seed_bytes = read_exact(bytes, &mut at, 32)?;
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(seed_bytes);
+        let pos_lo = read_u64(bytes, &mut at)?;
+        let pos_hi = read_u64(bytes, &mut at)?;
+        if at != bytes.len() {
+            return Err("dev account save has trailing bytes".into());
+        }
+        let mut rng = ChaCha20Rng::from_seed(seed);
+        rng.set_word_pos((u128::from(pos_hi) << 64) | u128::from(pos_lo));
+        Ok(Self {
+            rank,
+            shards,
+            credits,
+            pity,
+            active_banner,
+            rng,
+            audit,
+        })
+    }
+
+    pub fn pull(&mut self, content: &Content, banner: &str) -> Result<Pull, PullError> {
+        if banner.is_empty() {
+            return Err(PullError::Banner);
+        }
         let cost = content.banners.cost.single as f32;
         self.charge(cost)?;
-        self.roll(content, banner, cost)
+        match self.roll(content, banner, cost) {
+            Ok(pull) => Ok(pull),
+            Err(err) => {
+                self.credits += cost;
+                Err(err)
+            }
+        }
     }
 
     /// Ten pods for `cost.ten_pull`. Pity and the epic guarantee still apply per pod.
-    pub fn pull_ten(&mut self, content: &Content, banner: &str) -> Result<Vec<Pull>, String> {
+    pub fn pull_ten(&mut self, content: &Content, banner: &str) -> Result<Vec<Pull>, PullError> {
+        if banner.is_empty() {
+            return Err(PullError::Banner);
+        }
         let cost = content.banners.cost.ten_pull as f32;
         self.charge(cost)?;
         let mut pulls = Vec::with_capacity(10);
         for i in 0..10 {
             let spent = if i == 0 { cost } else { 0.0 };
-            pulls.push(self.roll(content, banner, spent)?);
+            match self.roll(content, banner, spent) {
+                Ok(pull) => pulls.push(pull),
+                Err(err) => {
+                    self.credits += spent;
+                    return Err(err);
+                }
+            }
         }
         Ok(pulls)
     }
 
-    fn charge(&mut self, cost: f32) -> Result<(), String> {
+    fn charge(&mut self, cost: f32) -> Result<(), PullError> {
         if self.credits + 1e-3 < cost {
-            return Err(format!("need {cost} credits to pull"));
+            return Err(PullError::Short { cost, have: self.credits });
         }
         self.credits -= cost;
         Ok(())
     }
 
-    fn roll(&mut self, content: &Content, banner: &str, spent: f32) -> Result<Pull, String> {
-        if banner.is_empty() {
-            return Err("pull needs a banner".into());
+    fn roll(&mut self, content: &Content, banner: &str, spent: f32) -> Result<Pull, PullError> {
+        let max_rank = content.duplicate.max_rank;
+        let powered = self.rank < max_rank;
+        if !powered {
+            for tier in TIERS {
+                if content.cosmetics.shards_for(tier).is_err() {
+                    return Err(PullError::Shards);
+                }
+            }
         }
-        let mut pity = self.begin_banner(content, banner);
+        let mut rng = self.rng.clone();
+        let mut pity = self.pity_for(content, banner);
         let pity_legendary_before = pity.since_legendary;
         let pity_epic_before = pity.since_epic;
-        let rarity = roll_rarity(&mut pity, &mut self.rng, content);
-        let fakeout = roll_fakeout(&mut self.rng, content, &rarity);
-        self.pity.insert(banner.to_string(), pity.clone());
-        let max_rank = content.duplicate.max_rank;
-        let powered = if self.rank < max_rank {
-            self.rank += 1;
-            true
-        } else {
-            false
-        };
+        let rarity = roll_rarity(&mut pity, &mut rng, content);
+        let fakeout = roll_fakeout(&mut rng, content, &rarity);
         let shards = if powered {
             0
         } else {
-            content.cosmetics.shards_for(&rarity)?
+            match content.cosmetics.shards_for(&rarity) {
+                Ok(shards) => shards,
+                Err(_) => return Err(PullError::Shards),
+            }
         };
+        self.rng = rng;
+        self.active_banner = Some(banner.to_string());
+        self.pity.insert(banner.to_string(), pity.clone());
+        if powered {
+            self.rank += 1;
+        }
         self.shards += shards;
         let pull = Pull {
             banner: banner.to_string(),
@@ -161,18 +337,16 @@ impl Account {
         Ok(pull)
     }
 
-    /// When pity carries, the banner being pulled inherits the counter from the banner just left.
-    fn begin_banner(&mut self, content: &Content, banner: &str) -> Pity {
+    /// Starting pity for this pull. Carried counters are copied here and written back only if the roll lands.
+    fn pity_for(&self, content: &Content, banner: &str) -> Pity {
         if content.banners.pity.carries_between_banners {
-            if let Some(prev) = self.active_banner.clone() {
+            if let Some(prev) = &self.active_banner {
                 if prev != banner {
-                    let carried = self.pity.get(&prev).cloned().unwrap_or_default();
-                    self.pity.insert(banner.to_string(), carried);
+                    return self.pity.get(prev).cloned().unwrap_or_default();
                 }
             }
         }
-        self.active_banner = Some(banner.to_string());
-        self.pity.entry(banner.to_string()).or_default().clone()
+        self.pity.get(banner).cloned().unwrap_or_default()
     }
 }
 
@@ -240,6 +414,90 @@ fn next_f32(rng: &mut ChaCha20Rng) -> f32 {
     (rng.next_u32() >> 8) as f32 / 16_777_216.0
 }
 
+/// `debug_assertions` is on for dev builds and off for release. There is no feature flag.
+fn dev_currency_enabled() -> bool {
+    cfg!(debug_assertions)
+}
+
+const SAVE_MAGIC: &[u8] = b"GEMACCT1";
+
+fn write_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend(value.to_le_bytes());
+}
+
+fn write_f32(out: &mut Vec<u8>, value: f32) -> Result<(), String> {
+    if !value.is_finite() {
+        return Err("dev account save refuses a non-finite credit value".into());
+    }
+    out.extend(value.to_le_bytes());
+    Ok(())
+}
+
+fn write_str(out: &mut Vec<u8>, value: &str) {
+    write_u32(out, value.len() as u32);
+    out.extend(value.as_bytes());
+}
+
+fn write_opt_str(out: &mut Vec<u8>, value: Option<&str>) {
+    match value {
+        Some(text) => {
+            out.push(1);
+            write_str(out, text);
+        }
+        None => out.push(0),
+    }
+}
+
+fn read_exact<'a>(bytes: &'a [u8], at: &mut usize, len: usize) -> Result<&'a [u8], String> {
+    let end = at.checked_add(len).ok_or("dev account save is truncated")?;
+    if end > bytes.len() {
+        return Err("dev account save is truncated".into());
+    }
+    let slice = &bytes[*at..end];
+    *at = end;
+    Ok(slice)
+}
+
+fn read_u32(bytes: &[u8], at: &mut usize) -> Result<u32, String> {
+    let slice = read_exact(bytes, at, 4)?;
+    Ok(u32::from_le_bytes(slice.try_into().unwrap()))
+}
+
+fn read_u64(bytes: &[u8], at: &mut usize) -> Result<u64, String> {
+    let slice = read_exact(bytes, at, 8)?;
+    Ok(u64::from_le_bytes(slice.try_into().unwrap()))
+}
+
+fn read_u8(bytes: &[u8], at: &mut usize) -> Result<u8, String> {
+    Ok(read_exact(bytes, at, 1)?[0])
+}
+
+fn read_f32(bytes: &[u8], at: &mut usize) -> Result<f32, String> {
+    let slice = read_exact(bytes, at, 4)?;
+    let value = f32::from_le_bytes(slice.try_into().unwrap());
+    if !value.is_finite() {
+        return Err("dev account save has a non-finite credit value".into());
+    }
+    Ok(value)
+}
+
+fn read_str(bytes: &[u8], at: &mut usize) -> Result<String, String> {
+    let len = read_u32(bytes, at)? as usize;
+    if len > bytes.len() {
+        return Err("dev account save is truncated".into());
+    }
+    let slice = read_exact(bytes, at, len)?;
+    String::from_utf8(slice.to_vec()).map_err(|_| "dev account save has a non-utf8 string".into())
+}
+
+fn read_opt_str(bytes: &[u8], at: &mut usize) -> Result<Option<String>, String> {
+    match read_u8(bytes, at)? {
+        0 => Ok(None),
+        1 => Ok(Some(read_str(bytes, at)?)),
+        _ => Err("dev account save has a bad optional string".into()),
+    }
+}
+
 fn tier_above(rarity: &str) -> Option<&'static str> {
     let idx = TIERS.iter().position(|tier| *tier == rarity)?;
     TIERS.get(idx + 1).copied()
@@ -266,7 +524,7 @@ mod tests {
         assert!(pull.fakeout.is_none() || tier_above(&pull.rarity) == pull.fakeout.as_deref());
         assert_eq!(account.audit.len(), 1);
         let err = account.pull(&content, "standard").expect_err("a pull needs credits");
-        assert!(err.contains("credits"), "{err}");
+        assert!(err.to_string().contains("credits"), "{err}");
 
         account.credits = content.banners.cost.ten_pull as f32;
         let ten = account.pull_ten(&content, "standard").unwrap();
@@ -501,5 +759,90 @@ mod tests {
             assert!(!text.contains("gemini-backend"), "{rel} depends on gemini-backend");
             assert!(!text.contains("crates/backend") && !text.contains("../backend"), "{rel} paths at backend");
         }
+    }
+
+    #[test]
+    fn a_missing_shard_cost_does_not_move_pity_or_the_rng() {
+        let mut content = Content::embedded();
+        content.cosmetics.forget_shard_row("legendary").unwrap();
+        let mut account = Account::from_seed(7);
+        account.rank = content.duplicate.max_rank;
+        account.credits = content.banners.cost.single as f32 * 3.0;
+        account.pity.insert("featured".into(), Pity { since_legendary: 40, since_epic: 9 });
+        account.active_banner = Some("featured".into());
+        let before = account.to_bytes().unwrap();
+        let err = account.pull(&content, "standard").unwrap_err();
+        assert!(matches!(err, PullError::Shards), "{err}");
+        assert_eq!(account.to_bytes().unwrap(), before, "a shard fault must not save a new pity or rng state");
+        assert_eq!(account.since_legendary("featured"), 40);
+        assert_eq!(account.since_legendary("standard"), 0, "pity must not carry onto the banner");
+        assert!(account.audit.is_empty());
+        assert_eq!(account.credits(), content.banners.cost.single as f32 * 3.0);
+    }
+
+    #[test]
+    fn a_save_roundtrip_keeps_pity_and_garbage_fails() {
+        let content = Content::embedded();
+        let mut account = Account::from_seed(4);
+        account.credits = content.banners.dev.starting_credits;
+        let first = account.pull(&content, "standard").unwrap();
+        assert!(TIERS.contains(&first.rarity.as_str()), "{}", first.rarity);
+        let bytes = account.to_bytes().unwrap();
+        let mut loaded = Account::from_bytes(&bytes).unwrap();
+        assert_eq!(loaded.credits(), account.credits());
+        assert_eq!(loaded.since_legendary("standard"), account.since_legendary("standard"));
+        assert_eq!(loaded.audit.len(), account.audit.len());
+        assert_eq!(loaded.rank, account.rank);
+        let again = account.pull(&content, "standard").unwrap();
+        let restored = loaded.pull(&content, "standard").unwrap();
+        assert_eq!(restored.rarity, again.rarity);
+        assert_eq!(restored.fakeout, again.fakeout);
+        assert!(Account::from_bytes(b"garbage").is_err());
+        assert!(Account::from_bytes(&bytes[..bytes.len() - 1]).is_err());
+        let mut extra = bytes.clone();
+        extra.push(9);
+        assert!(Account::from_bytes(&extra).is_err());
+    }
+
+    #[test]
+    fn release_accounts_start_empty_and_the_dev_grant_is_content() {
+        let content = Content::embedded();
+        let banner = content.banners.id.as_str();
+        let empty = Account::open_with_dev(&content, false);
+        assert_eq!(empty.credits(), 0.0, "a release account must not receive test currency");
+        assert_eq!(empty.since_legendary(banner), 0);
+        let mut broke = Account::open_with_dev(&content, false);
+        let err = broke.pull(&content, banner).expect_err("an empty wallet cannot pull");
+        assert!(matches!(err, PullError::Short { have, .. } if have == 0.0), "{err}");
+
+        let mut funded = Account::open_with_dev(&content, true);
+        assert_eq!(funded.credits(), content.banners.dev.starting_credits);
+        assert_eq!(funded.since_legendary(banner), 0);
+        let pull = funded.pull(&content, banner).expect("the dev wallet can pay");
+        assert!(TIERS.contains(&pull.rarity.as_str()), "{}", pull.rarity);
+        let above = tier_above(&pull.rarity);
+        assert!(pull.fakeout.is_none() || pull.fakeout.as_deref() == above);
+        let pity = funded.since_legendary(banner);
+        funded.grant_dev_credits(&content);
+        assert_eq!(funded.since_legendary(banner), pity, "the grant must not reset pity");
+        assert_eq!(funded.credits(), content.banners.dev.starting_credits);
+
+        let mut via_grant = Account::from_seed(11);
+        via_grant.grant_dev_credits(&content);
+        let mut via_wallet = Account::from_seed(11);
+        via_wallet.credits = content.banners.dev.starting_credits;
+        let granted = via_grant.pull(&content, banner).unwrap();
+        let paid = via_wallet.pull(&content, banner).unwrap();
+        assert_eq!(granted.rarity, paid.rarity, "the grant must not force a tier");
+        assert_eq!(granted.fakeout, paid.fakeout);
+
+        let opened = Account::open(&content);
+        let expected = if dev_currency_enabled() {
+            content.banners.dev.starting_credits
+        } else {
+            0.0
+        };
+        assert_eq!(opened.credits(), expected);
+        assert_eq!(dev_currency_enabled(), cfg!(debug_assertions));
     }
 }

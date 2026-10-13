@@ -1117,3 +1117,41 @@ category = "player"
 is_warning = true
 stealable = false
 flat = true
+
+# Skip plays the card tail of the sting, not the whole file. Volume matches that sting.
+[crate_common_hit]
+path = "audio/stings/crate_common_hit.ogg"
+volume_db = -4.0
+pitch_rand_semitones = 0
+max_instances = 1
+loop = false
+category = "ui"
+stealable = true
+flat = true
+[crate_rare_hit]
+path = "audio/stings/crate_rare_hit.ogg"
+volume_db = -4.0
+pitch_rand_semitones = 0
+max_instances = 1
+loop = false
+category = "ui"
+stealable = true
+flat = true
+[crate_epic_hit]
+path = "audio/stings/crate_epic_hit.ogg"
+volume_db = -4.0
+pitch_rand_semitones = 0
+max_instances = 1
+loop = false
+category = "ui"
+stealable = true
+flat = true
+[crate_legendary_hit]
+path = "audio/stings/crate_legendary_hit.ogg"
+volume_db = -2.0
+pitch_rand_semitones = 0
+max_instances = 1
+loop = false
+category = "ui"
+stealable = true
+flat = true

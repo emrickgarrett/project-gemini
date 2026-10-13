@@ -4,7 +4,7 @@
 use gemini_sim::content::{format_fixed, Content};
 
 use crate::away_still::paint_arena;
-use crate::glyph::{blit, measure};
+use crate::glyph::{blit, mask_begin, mask_end, mask_mark, measure};
 use crate::reveal_still::paint_stage;
 
 #[derive(Clone, Debug)]
@@ -47,7 +47,7 @@ pub enum MenuShot {
     Title { focus: usize, notice: bool, native_quit: bool },
     Heroes { focus: usize },
     Difficulty { focus: usize, hero_id: String, notice: bool },
-    Pause { focus: usize, hero_id: String },
+    Pause { focus: usize, hero_id: String, live: bool },
     Settings { focus: usize, hero_id: String, prefs: PaintPrefs, notice: bool },
     Results {
         focus: usize,
@@ -57,7 +57,7 @@ pub enum MenuShot {
         seconds: f32,
         currency: f32,
     },
-    Crates { focus: usize, rarity: Option<String>, failed: bool, can_pull: bool },
+    Crates { focus: usize, rarity: Option<String>, failed: bool, can_pull: bool, reason: String },
     ClickToPlay,
 }
 
@@ -84,11 +84,48 @@ impl Frame {
     }
 }
 
+pub struct MenuPaint {
+    pub rgb: Vec<u8>,
+    pub alpha: Vec<u8>,
+    pub hits: Vec<Hit>,
+}
+
 pub fn paint_menu(content: &Content, shot: &MenuShot, width: u32, height: u32) -> (Vec<u8>, Vec<Hit>) {
+    let painted = paint_menu_masked(content, shot, width, height);
+    (painted.rgb, painted.hits)
+}
+
+/// Co-op pause still. The live mask stays clear so the match shows through in game.
+/// The still lays `coop_pause_dim` of the veil over the solo backdrop, which is already at `pause_keep`.
+pub fn paint_coop_pause(content: &Content, focus: usize, hero_id: &str, width: u32, height: u32) -> Vec<u8> {
+    let shot = |live: bool| MenuShot::Pause { focus, hero_id: hero_id.to_string(), live };
+    let solo = paint_menu_masked(content, &shot(false), width, height);
+    let coop = paint_menu_masked(content, &shot(true), width, height);
+    let dim = content.ui.layout.coop_pause_dim.clamp(0.0, 1.0);
+    let veil = palette(content, &content.ui.colors.veil);
+    let mut rgb = Vec::with_capacity(coop.rgb.len());
+    for (index, cover) in coop.alpha.iter().copied().enumerate() {
+        if cover == 0 {
+            for channel in 0..3 {
+                let stored = solo.rgb[index * 3 + channel] as f32;
+                let mixed = stored * (1.0 - dim) + veil[channel] as f32 * dim;
+                rgb.push(mixed.round().clamp(0.0, 255.0) as u8);
+            }
+        } else {
+            rgb.extend_from_slice(&coop.rgb[index * 3..index * 3 + 3]);
+        }
+    }
+    rgb
+}
+
+/// RGB plus a real coverage mask. Co-op pause leaves the backdrop at alpha 0.
+pub fn paint_menu_masked(content: &Content, shot: &MenuShot, width: u32, height: u32) -> MenuPaint {
     let frame = Frame::new(content, width.max(8), height.max(8));
     let mut rgb = vec![0u8; (frame.width * frame.height * 3) as usize];
+    let live = matches!(shot, MenuShot::Pause { live: true, .. });
+    mask_begin((frame.width * frame.height) as usize, if live { 0 } else { 255 });
     match shot {
-        MenuShot::Pause { .. } | MenuShot::ClickToPlay => {
+        MenuShot::ClickToPlay | MenuShot::Pause { live: false, .. } => {
             paint_arena(&mut rgb, frame.width, frame.height, content);
             let keep = content.ui.layout.pause_keep.clamp(0.0, 1.0);
             for px in rgb.chunks_exact_mut(3) {
@@ -97,23 +134,24 @@ pub fn paint_menu(content: &Content, shot: &MenuShot, width: u32, height: u32) -
                 }
             }
         }
+        MenuShot::Pause { live: true, .. } => {}
         _ => paint_stage(&mut rgb, frame.width, frame.height, content, &content.crate_reveal.layout),
     }
     let hits = match shot {
         MenuShot::Title { focus, notice, native_quit } => paint_title(&mut rgb, content, frame, *focus, *notice, *native_quit),
         MenuShot::Heroes { focus } => paint_heroes(&mut rgb, content, frame, *focus),
         MenuShot::Difficulty { focus, hero_id, notice } => paint_difficulty(&mut rgb, content, frame, *focus, hero_id, *notice),
-        MenuShot::Pause { focus, hero_id } => paint_pause(&mut rgb, content, frame, *focus, hero_id),
+        MenuShot::Pause { focus, hero_id, .. } => paint_pause(&mut rgb, content, frame, *focus, hero_id),
         MenuShot::Settings { focus, hero_id, prefs, notice } => paint_settings(&mut rgb, content, frame, *focus, hero_id, prefs, *notice),
         MenuShot::Results { focus, victory, waves, kills, seconds, currency } => {
             paint_results(&mut rgb, content, frame, *focus, *victory, *waves, *kills, *seconds, *currency)
         }
-        MenuShot::Crates { focus, rarity, failed, can_pull } => {
-            paint_crates(&mut rgb, content, frame, *focus, rarity.as_deref(), *failed, *can_pull)
+        MenuShot::Crates { focus, rarity, failed, can_pull, reason } => {
+            paint_crates(&mut rgb, content, frame, *focus, rarity.as_deref(), *failed, *can_pull, reason)
         }
         MenuShot::ClickToPlay => paint_click(&mut rgb, content, frame),
     };
-    (rgb, hits)
+    MenuPaint { rgb, alpha: mask_end(), hits }
 }
 
 fn paint_title(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, notice: bool, native_quit: bool) -> Vec<Hit> {
@@ -245,9 +283,8 @@ fn paint_pause(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, he
     let x = (frame.width as i32 - pw) / 2;
     let y = (frame.height as i32 - ph) / 2;
     let hero = if hero_id.is_empty() { None } else { Some(hero_id) };
-    rect(rgb, frame.width, frame.height, x, y, pw, ph, accent(content, hero));
-    let inset = frame.px(ui.layout.border_px).max(ui.layout.inset_min.round() as i32);
-    rect(rgb, frame.width, frame.height, x + inset, y + inset, pw - inset * 2, ph - inset * 2, palette(content, &ui.colors.panel));
+    let panel = bevel_of(content, frame, ui.layout.panel_radius, accent(content, hero));
+    beveled(rgb, frame.width, frame.height, x, y, pw, ph, &panel);
     let labels = [("resume", ui.copy.resume.as_str()), ("settings", ui.copy.settings.as_str()), ("quit_to_menu", ui.copy.quit_to_menu.as_str())];
     let button_h = frame.px(ui.layout.button_height);
     let gap = frame.px(ui.layout.row_gap);
@@ -255,7 +292,8 @@ fn paint_pause(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, he
     let mut by = y + (ph - stack) / 2;
     let mut hits = Vec::new();
     for (index, (id, label)) in labels.iter().enumerate() {
-        let hit = button_at(rgb, content, frame, x + (pw - frame.px(ui.layout.button_width)) / 2, by, label, index == focus, hero);
+        let edge = if index == focus { accent(content, hero) } else { palette(content, &ui.colors.dim) };
+        let hit = pause_button(rgb, content, frame, x + (pw - frame.px(ui.layout.button_width)) / 2, by, label, edge);
         by = hit.y + hit.h + gap;
         hits.push(Hit { id: (*id).into(), ..hit });
     }
@@ -334,7 +372,7 @@ fn paint_results(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, 
     hits
 }
 
-fn paint_crates(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, rarity: Option<&str>, failed: bool, can_pull: bool) -> Vec<Hit> {
+fn paint_crates(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, rarity: Option<&str>, failed: bool, can_pull: bool, reason: &str) -> Vec<Hit> {
     let ui = &content.ui;
     draw_title(rgb, content, frame, &ui.copy.crates_title);
     let rows = content.crate_reveal.layout.glyph_rows;
@@ -344,6 +382,8 @@ fn paint_crates(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, r
     let paper = palette(content, &ui.colors.text);
     let line = if let Some(rarity) = rarity {
         rarity.to_uppercase()
+    } else if failed && !reason.is_empty() {
+        reason.to_string()
     } else if failed {
         ui.copy.pull_failed.clone()
     } else {
@@ -355,20 +395,26 @@ fn paint_crates(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, r
     let mut hits = Vec::new();
     let mut index = 0;
     if can_pull {
-        let hit = button(rgb, content, frame, y, &ui.copy.crates_pull, focus == index, None);
+        let hit = crate_button(rgb, content, frame, y, &ui.copy.crates_pull, focus == index);
         y = hit.y + hit.h + frame.px(ui.layout.row_gap);
         hits.push(Hit { id: "pull".into(), ..hit });
         index += 1;
     }
     if rarity.is_some() {
-        let hit = button(rgb, content, frame, y, &ui.copy.crates_open, focus == index, None);
+        let hit = crate_button(rgb, content, frame, y, &ui.copy.crates_open, focus == index);
         y = hit.y + hit.h + frame.px(ui.layout.row_gap);
         hits.push(Hit { id: "open".into(), ..hit });
         index += 1;
     }
     let _ = index;
-    hits.push(Hit { id: "back".into(), ..button(rgb, content, frame, y, &ui.copy.back, focus == hits.len(), None) });
+    hits.push(Hit { id: "back".into(), ..crate_button(rgb, content, frame, y, &ui.copy.back, focus == hits.len()) });
     hits
+}
+
+fn crate_button(rgb: &mut [u8], content: &Content, frame: Frame, y: i32, label: &str, focused: bool) -> Hit {
+    let edge = if focused { accent(content, None) } else { palette(content, &content.ui.colors.dim) };
+    let x = (frame.width as i32 - frame.px(content.ui.layout.button_width)) / 2;
+    pause_button(rgb, content, frame, x, y, label, edge)
 }
 
 fn paint_click(rgb: &mut [u8], content: &Content, frame: Frame) -> Vec<Hit> {
@@ -762,6 +808,80 @@ fn positions_fit(positions: &[[f32; 3]], fov: f32, near: f32, fit: f32) -> bool 
     any
 }
 
+struct Bevel {
+    radius: i32,
+    outline: i32,
+    depth: i32,
+    edge: [u8; 3],
+    light: [u8; 3],
+    shadow: [u8; 3],
+    fill: [u8; 3],
+}
+
+fn bevel_of(content: &Content, frame: Frame, radius: f32, edge: [u8; 3]) -> Bevel {
+    let ui = &content.ui;
+    Bevel {
+        radius: frame.px(radius),
+        outline: frame.px(ui.layout.pause_outline_px).max(1),
+        depth: frame.px(ui.layout.bevel_px).max(1),
+        edge,
+        light: palette(content, &ui.colors.bevel_light),
+        shadow: palette(content, &ui.colors.bevel_shadow),
+        fill: palette(content, &ui.colors.panel),
+    }
+}
+
+fn pause_button(rgb: &mut [u8], content: &Content, frame: Frame, x: i32, y: i32, label: &str, edge: [u8; 3]) -> Hit {
+    let w = frame.px(content.ui.layout.button_width);
+    let h = frame.px(content.ui.layout.button_height);
+    let face = bevel_of(content, frame, content.ui.layout.button_radius, edge);
+    beveled(rgb, frame.width, frame.height, x, y, w, h, &face);
+    let glyph = content.crate_reveal.layout.title_glyph_px;
+    let scale = frame.text(content.ui.layout.button_scale);
+    let tw = measure(label, scale, glyph) as i32;
+    let th = (content.crate_reveal.layout.glyph_rows * scale) as i32;
+    blit(rgb, frame.width, frame.height, x + (w - tw) / 2, y + (h - th) / 2, label, palette(content, &content.ui.colors.text), scale, glyph);
+    Hit { id: String::new(), x, y, w, h }
+}
+
+fn beveled(rgb: &mut [u8], width: u32, height: u32, x: i32, y: i32, w: i32, h: i32, face: &Bevel) {
+    if w <= 0 || h <= 0 {
+        return;
+    }
+    let outline = face.outline.max(1);
+    let band = outline + face.depth.max(1);
+    for row in 0..h {
+        for col in 0..w {
+            if !inside_round(col, row, w, h, face.radius) {
+                continue;
+            }
+            let color = if !inside_round(col - outline, row - outline, w - outline * 2, h - outline * 2, face.radius - outline) {
+                face.edge
+            } else if !inside_round(col - band, row - band, w - band * 2, h - band * 2, face.radius - band) {
+                if (col as f32) + (row as f32) < (w as f32 + h as f32) * 0.5 { face.light } else { face.shadow }
+            } else {
+                face.fill
+            };
+            put(rgb, width, height, x + col, y + row, color);
+        }
+    }
+}
+
+fn inside_round(col: i32, row: i32, w: i32, h: i32, radius: i32) -> bool {
+    if w <= 0 || h <= 0 || col < 0 || row < 0 || col >= w || row >= h {
+        return false;
+    }
+    let r = radius.max(0).min(w / 2).min(h / 2);
+    let px = col as f32 + 0.5;
+    let py = row as f32 + 0.5;
+    let rf = r as f32;
+    let cx = px.clamp(rf, w as f32 - rf);
+    let cy = py.clamp(rf, h as f32 - rf);
+    let dx = px - cx;
+    let dy = py - cy;
+    dx * dx + dy * dy <= rf * rf + 1e-3
+}
+
 fn rect(rgb: &mut [u8], width: u32, height: u32, x: i32, y: i32, w: i32, h: i32, color: [u8; 3]) {
     if w <= 0 || h <= 0 {
         return;
@@ -780,6 +900,7 @@ fn put(rgb: &mut [u8], width: u32, height: u32, x: i32, y: i32, color: [u8; 3]) 
     let i = ((y as u32 * width) + x as u32) as usize * 3;
     if i + 2 < rgb.len() {
         rgb[i..i + 3].copy_from_slice(&color);
+        mask_mark(width, x, y);
     }
 }
 
@@ -1124,6 +1245,131 @@ mod tests {
         assert!(crate::portrait::build(&content.heroes_visual, "pulse_rifle").is_none());
     }
 
+    #[test]
+    fn pause_panel_is_rounded_and_coop_keeps_the_frame_clear() {
+        let content = Content::embedded();
+        let hero = content.hero.id.clone();
+        let (solo, hits) = paint_menu(&content, &MenuShot::Pause { focus: 0, hero_id: hero.clone(), live: false }, 1280, 720);
+        let (live, _) = paint_menu(&content, &MenuShot::Pause { focus: 0, hero_id: hero, live: true }, 1280, 720);
+        assert!(hits.iter().any(|hit| hit.id == "resume"));
+        assert!(hits.iter().any(|hit| hit.id == "settings"));
+        assert!(hits.iter().any(|hit| hit.id == "quit_to_menu"));
+        let scale = 720.0 / content.ui.layout.fit_height;
+        let pw = (content.ui.layout.pause_panel_width * scale).round() as i32;
+        let ph = (content.ui.layout.pause_panel_height * scale).round() as i32;
+        let x = (1280 - pw) / 2;
+        let y = (720 - ph) / 2;
+        let outline = bytes(&content, &content.heroes.iter().find(|card| card.id == content.hero.id).unwrap().accent_key);
+        assert_ne!(sample(&solo, 1280, x, y), outline, "the panel corner is rounded off");
+        assert_eq!(sample(&solo, 1280, x + pw / 2, y + 1), outline, "the top edge is the outline");
+        let bevel = bytes(&content, &content.ui.colors.bevel_light);
+        let inset = (content.ui.layout.pause_outline_px * scale).round() as i32 + 1;
+        assert_eq!(sample(&solo, 1280, x + pw / 2, y + inset), bevel, "the top bevel is the lit palette key");
+        assert_eq!(sample(&live, 1280, 0, 0), [0, 0, 0], "co-op pause leaves the backdrop unpainted");
+        let masked = paint_menu_masked(&content, &MenuShot::Pause { focus: 0, hero_id: content.hero.id.clone(), live: true }, 1280, 720);
+        assert_eq!(alpha_at(&masked.alpha, 1280, 0, 0), 0, "the co-op backdrop is a clear alpha mask");
+        assert_eq!(alpha_at(&masked.alpha, 1280, x + pw / 2, y + ph / 2), 255, "the panel stays opaque");
+        let center = sample(&masked.rgb, 1280, x + pw / 2, y + ph / 2);
+        assert_ne!(center, [0, 0, 0], "panel coverage does not depend on punching out black");
+        assert_ne!(sample(&solo, 1280, 0, 0), [0, 0, 0], "solo pause keeps a dimmed still");
+        let (failed, _) = paint_menu(
+            &content,
+            &MenuShot::Crates {
+                focus: 0,
+                rarity: None,
+                failed: true,
+                can_pull: true,
+                reason: "NEED 100 CREDITS HAVE 0".into(),
+            },
+            1280,
+            720,
+        );
+        let (generic, _) = paint_menu(
+            &content,
+            &MenuShot::Crates { focus: 0, rarity: None, failed: true, can_pull: true, reason: String::new() },
+            1280,
+            720,
+        );
+        assert_ne!(failed, generic, "a failed pull shows its reason");
+    }
+
+    #[test]
+    fn coop_pause_is_darker_than_solo_by_the_configured_dim() {
+        let content = Content::embedded();
+        let hero = content.hero.id.clone();
+        let width = 1280u32;
+        let height = 720u32;
+        let (solo, _) = paint_menu(&content, &MenuShot::Pause { focus: 0, hero_id: hero.clone(), live: false }, width, height);
+        let coop = paint_coop_pause(&content, 0, &hero, width, height);
+        let masked = paint_menu_masked(&content, &MenuShot::Pause { focus: 0, hero_id: hero, live: true }, width, height);
+        let keep = content.ui.layout.pause_keep as f64;
+        let dim = content.ui.layout.coop_pause_dim as f64;
+        let veil = bytes(&content, &content.ui.colors.veil);
+        let veil_luma = (veil[0] as f64 + veil[1] as f64 + veil[2] as f64) / 3.0;
+        let mut solo_sum = 0.0;
+        let mut coop_sum = 0.0;
+        let mut count = 0.0;
+        for y in 0..height as i32 {
+            for x in 0..width as i32 {
+                if alpha_at(&masked.alpha, width, x, y) != 0 {
+                    continue;
+                }
+                let s = sample(&solo, width, x, y);
+                let c = sample(&coop, width, x, y);
+                solo_sum += (s[0] as f64 + s[1] as f64 + s[2] as f64) / 3.0;
+                coop_sum += (c[0] as f64 + c[1] as f64 + c[2] as f64) / 3.0;
+                count += 1.0;
+            }
+        }
+        assert!(count > 1000.0, "the co-op backdrop has no clear pixels");
+        let solo_mean = solo_sum / count;
+        let coop_mean = coop_sum / count;
+        // pause_keep and coop_pause_dim set how far the solo still must sit above the veil.
+        // A near-black pair makes (solo - coop) and (solo - veil) * dim both ~0, so this floor fails first.
+        let floor = veil_luma + 255.0 * keep * dim * 0.2;
+        let separation = solo_mean - veil_luma;
+        assert!(
+            separation > floor - veil_luma,
+            "solo backdrop {solo_mean:.1} is too close to the veil {veil_luma:.1} to prove the dim (need {floor:.1})"
+        );
+        let ratio = (solo_mean - coop_mean) / separation;
+        assert!(
+            (ratio - dim).abs() < 0.02,
+            "co-op drop {ratio:.3} is not coop_pause_dim {dim:.3} (solo {solo_mean:.1}, coop {coop_mean:.1})"
+        );
+        assert!(coop_mean < solo_mean, "co-op backdrop {coop_mean:.1} is not darker than solo {solo_mean:.1}");
+    }
+
+    #[test]
+    fn crate_pull_and_back_use_the_pause_bevel() {
+        let content = Content::embedded();
+        let (rgb, hits) = paint_menu(
+            &content,
+            &MenuShot::Crates {
+                focus: 0,
+                rarity: None,
+                failed: true,
+                can_pull: true,
+                reason: "NEED 100 CREDITS HAVE 0".into(),
+            },
+            1280,
+            720,
+        );
+        let pull = hits.iter().find(|hit| hit.id == "pull").unwrap();
+        let back = hits.iter().find(|hit| hit.id == "back").unwrap();
+        let scale = 720.0 / content.ui.layout.fit_height;
+        let inset = (content.ui.layout.pause_outline_px * scale).round() as i32 + 1;
+        let light = bytes(&content, &content.ui.colors.bevel_light);
+        let focus = bytes(&content, &content.ui.colors.focus_before_hero);
+        let dim = bytes(&content, &content.ui.colors.dim);
+        assert_ne!(sample(&rgb, 1280, pull.x, pull.y), focus, "pull corner is still a square");
+        assert_eq!(sample(&rgb, 1280, pull.x + pull.w / 2, pull.y + 1), focus, "pull outline is the focus key");
+        assert_eq!(sample(&rgb, 1280, pull.x + pull.w / 2, pull.y + inset), light, "pull bevel is the lit key");
+        assert_ne!(sample(&rgb, 1280, back.x, back.y), dim, "back corner is still a square");
+        assert_eq!(sample(&rgb, 1280, back.x + back.w / 2, back.y + 1), dim, "back outline is the dim key");
+        assert_eq!(sample(&rgb, 1280, back.x + back.w / 2, back.y + inset), light, "back bevel is the lit key");
+    }
+
     fn bytes(content: &Content, key: &str) -> [u8; 3] {
         let c = content.palette.key(key);
         [(c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8]
@@ -1132,5 +1378,9 @@ mod tests {
     fn sample(rgb: &[u8], width: u32, x: i32, y: i32) -> [u8; 3] {
         let i = ((y as u32 * width) + x as u32) as usize * 3;
         [rgb[i], rgb[i + 1], rgb[i + 2]]
+    }
+
+    fn alpha_at(alpha: &[u8], width: u32, x: i32, y: i32) -> u8 {
+        alpha[(y as u32 * width + x as u32) as usize]
     }
 }

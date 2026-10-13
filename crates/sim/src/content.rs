@@ -247,7 +247,11 @@ impl Content {
             upgrades: parse::<UpgradeFile>("run_upgrades.toml", src.run_upgrades)?.upgrade,
             endless: parse("endless.toml", src.endless)?,
             currency: parse("currency.toml", src.currency)?,
-            banners: parse("banners.toml", src.banners)?,
+            banners: {
+                let banners: Banners = parse("banners.toml", src.banners)?;
+                validate_banners(&banners)?;
+                banners
+            },
             duplicate: load_duplicate(src.duplicate_ranks)?,
             bosses,
             weapons,
@@ -461,6 +465,7 @@ fn validate_reveal_cues(reveal: &CrateReveal, audio: &AudioTable) -> Result<(), 
         let tier = reveal.tier(name).ok_or_else(|| format!("crate_reveal.toml: missing tier {name}"))?;
         ids.push(cue_stem(&tier.tease));
         ids.push(cue_stem(&tier.sting));
+        ids.push(format!("crate_{name}_hit"));
     }
     let fakeout = cue_stem(&reveal.fakeout_sfx);
     if !fakeout.is_empty() {
@@ -863,10 +868,18 @@ pub struct Currency {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Banners {
+    pub id: String,
     pub rates: BannerRates,
     pub pity: BannerPity,
     pub published: BannerPublished,
     pub cost: BannerCost,
+    pub dev: BannerDev,
+}
+
+/// Dev-build test wallet. The backend reads this. A release account does not.
+#[derive(Clone, Debug, Deserialize)]
+pub struct BannerDev {
+    pub starting_credits: f32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -910,17 +923,39 @@ pub struct ShardCost {
     pub rare: u32,
     pub epic: u32,
     pub legendary: u32,
+    missing: u8,
 }
 
 impl Cosmetics {
+    /// Drops one tier's shard row. A later max-rank pull faults before the roll.
+    pub fn forget_shard_row(&mut self, rarity: &str) -> Result<(), String> {
+        let bit = shard_bit(rarity)?;
+        self.shard_cost.missing |= bit;
+        Ok(())
+    }
+
     pub fn shards_for(&self, rarity: &str) -> Result<u32, String> {
-        match rarity {
-            "common" => Ok(self.shard_cost.common),
-            "rare" => Ok(self.shard_cost.rare),
-            "epic" => Ok(self.shard_cost.epic),
-            "legendary" => Ok(self.shard_cost.legendary),
-            other => Err(format!("unknown rarity \"{other}\"")),
+        let (bit, cost) = match rarity {
+            "common" => (1u8, self.shard_cost.common),
+            "rare" => (2, self.shard_cost.rare),
+            "epic" => (4, self.shard_cost.epic),
+            "legendary" => (8, self.shard_cost.legendary),
+            other => return Err(format!("unknown rarity \"{other}\"")),
+        };
+        if self.shard_cost.missing & bit != 0 {
+            return Err(format!("cosmetics.toml shard_cost is missing {rarity}"));
         }
+        Ok(cost)
+    }
+}
+
+fn shard_bit(rarity: &str) -> Result<u8, String> {
+    match rarity {
+        "common" => Ok(1),
+        "rare" => Ok(2),
+        "epic" => Ok(4),
+        "legendary" => Ok(8),
+        other => Err(format!("unknown rarity \"{other}\"")),
     }
 }
 
@@ -2705,6 +2740,7 @@ fn load_cosmetics(text: &str) -> Result<Cosmetics, String> {
             rare: shard("rare")?,
             epic: shard("epic")?,
             legendary: shard("legendary")?,
+            missing: 0,
         },
     })
 }
@@ -4690,7 +4726,7 @@ pub struct Ui {
 }
 
 impl Ui {
-    pub fn color_keys(&self) -> [(&str, &str); 10] {
+    pub fn color_keys(&self) -> [(&str, &str); 13] {
         [
             ("ui.colors.panel", self.colors.panel.as_str()),
             ("ui.colors.text", self.colors.text.as_str()),
@@ -4701,6 +4737,9 @@ impl Ui {
             ("ui.colors.defeat", self.colors.defeat.as_str()),
             ("ui.colors.locked", self.colors.locked.as_str()),
             ("ui.colors.locked_text", self.colors.locked_text.as_str()),
+            ("ui.colors.bevel_light", self.colors.bevel_light.as_str()),
+            ("ui.colors.bevel_shadow", self.colors.bevel_shadow.as_str()),
+            ("ui.colors.veil", self.colors.veil.as_str()),
             ("ui.portrait.bg", self.portrait.bg.as_str()),
         ]
     }
@@ -4718,6 +4757,12 @@ pub struct UiColors {
     pub locked: String,
     /// Palette key for name, role, ability, and the HP/SPD line on a locked card.
     pub locked_text: String,
+    /// Lit edge of the pause bevel.
+    pub bevel_light: String,
+    /// Shadow edge of the pause bevel.
+    pub bevel_shadow: String,
+    /// Co-op pause veil. The match shows through at `layout.coop_pause_dim`.
+    pub veil: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -4764,6 +4809,11 @@ pub struct UiCopy {
     pub crates_pull: String,
     pub crates_open: String,
     pub pull_failed: String,
+    pub pull_need: String,
+    pub pull_have: String,
+    pub pull_credits: String,
+    pub pull_needs_server: String,
+    pub pull_no_shards: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -4799,6 +4849,16 @@ pub struct UiLayout {
     pub panel_alpha: f32,
     pub pause_panel_width: f32,
     pub pause_panel_height: f32,
+    /// Corner radius of the pause panel, in 720p pixels.
+    pub panel_radius: f32,
+    /// Corner radius of a pause button, in 720p pixels.
+    pub button_radius: f32,
+    /// Width of the lit and shadowed bevel inside the pause outline.
+    pub bevel_px: f32,
+    /// Bold outline around the pause panel and its buttons.
+    pub pause_outline_px: f32,
+    /// Alpha of the co-op pause veil. The live match stays visible underneath.
+    pub coop_pause_dim: f32,
     pub slider_width: f32,
     pub slider_height: f32,
     pub settings_row_height: f32,
@@ -4912,6 +4972,20 @@ fn load_ui(text: &str) -> Result<Ui, String> {
     parse("ui.toml", text)
 }
 
+fn validate_banners(banners: &Banners) -> Result<(), String> {
+    if banners.id.is_empty() {
+        return Err("banners.toml id must be set".into());
+    }
+    if banners.cost.single == 0 || banners.cost.ten_pull == 0 {
+        return Err("banners.toml costs must be > 0".into());
+    }
+    let grant = banners.dev.starting_credits;
+    if !(grant.is_finite() && grant + 1e-3 >= banners.cost.ten_pull as f32) {
+        return Err("banners.toml dev.starting_credits must cover cost.ten_pull".into());
+    }
+    Ok(())
+}
+
 fn validate_downed(downed: &DownedCfg) -> Result<(), String> {
     if !(downed.revive_time.is_finite() && downed.revive_time > 0.0) {
         return Err("controller.toml downed.revive_time must be > 0".into());
@@ -4948,6 +5022,10 @@ fn validate_ui(
         ("card_height", layout.card_height),
         ("pause_panel_width", layout.pause_panel_width),
         ("pause_panel_height", layout.pause_panel_height),
+        ("panel_radius", layout.panel_radius),
+        ("button_radius", layout.button_radius),
+        ("bevel_px", layout.bevel_px),
+        ("pause_outline_px", layout.pause_outline_px),
         ("slider_width", layout.slider_width),
         ("slider_height", layout.slider_height),
         ("settings_row_height", layout.settings_row_height),
@@ -4963,6 +5041,18 @@ fn validate_ui(
     }
     if !(layout.pause_keep > 0.0 && layout.pause_keep <= 1.0) {
         return Err("ui.toml layout.pause_keep must be in (0, 1]".into());
+    }
+    if !(layout.coop_pause_dim > 0.0 && layout.coop_pause_dim < 1.0) {
+        return Err("ui.toml layout.coop_pause_dim must be in (0, 1)".into());
+    }
+    if layout.panel_radius * 2.0 >= layout.pause_panel_width.min(layout.pause_panel_height) {
+        return Err("ui.toml layout.panel_radius must leave a flat edge on the pause panel".into());
+    }
+    if layout.button_radius * 2.0 >= layout.button_width.min(layout.button_height) {
+        return Err("ui.toml layout.button_radius must leave a flat edge on a button".into());
+    }
+    if layout.pause_outline_px + layout.bevel_px >= layout.button_height * 0.5 {
+        return Err("ui.toml pause outline and bevel must fit inside a button".into());
     }
     if !(layout.panel_alpha > 0.0 && layout.panel_alpha <= 1.0) {
         return Err("ui.toml layout.panel_alpha must be in (0, 1]".into());

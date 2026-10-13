@@ -144,6 +144,8 @@ pub(crate) struct OneShot {
     started: f32,
     /// Monotonic stamp so two voices that share a timestamp still have an order.
     order: u32,
+    /// Linear volume before a co-op pause duck. Solo pause pauses the sink instead.
+    gain: f32,
 }
 
 #[derive(Component)]
@@ -215,18 +217,9 @@ pub fn play(
     let hud = &game.content.presentation.hud.away;
     let mix = away_mix(away.view.look, hud.music_duck_db, hud.music_duck_lowpass_hz);
     let solo = game.sim.connected_count() <= 1;
-    if hold.open && solo {
-        // Same duck and low-pass as the host-away banner.
-        music.duck_gain = db_to_gain(hud.solo_pause_duck_db);
-        music.filter.0.set_hz(hud.music_duck_lowpass_hz);
-    } else if hold.open {
-        // This client only. Game sounds stay full; music ducks without the low-pass.
-        music.duck_gain = mix.gain.min(db_to_gain(hud.coop_pause_duck_db));
-        music.filter.0.set_hz(mix.lowpass_hz);
-    } else {
-        music.duck_gain = mix.gain;
-        music.filter.0.set_hz(mix.lowpass_hz);
-    }
+    let (gain, hz) = pause_music(hold.open, solo, mix.gain, mix.lowpass_hz, hud.solo_pause_duck_db, hud.music_duck_lowpass_hz, hud.coop_pause_duck_db);
+    music.duck_gain = gain;
+    music.filter.0.set_hz(hz);
     music.user_gain = bus_gain(&prefs, true);
     let listener = listener_of(&game);
     if !fx.moments.is_empty() {
@@ -258,7 +251,12 @@ pub fn play(
             shot_i += 1;
         }
         let atten = if def.flat { 1.0 } else { attenuate(&game.content, voice.pos, listener) };
-        let volume = def.volume * atten * bus_gain(&prefs, false);
+        let full = def.volume * atten * bus_gain(&prefs, false);
+        let bus = paused_bus(hold.open, solo, def.category_ui, def.is_warning, hud.coop_pause_duck_db);
+        if bus == 0.0 {
+            continue;
+        }
+        let volume = full * bus;
         let looping = def.looped;
         let settings = if looping {
             PlaybackSettings::LOOP
@@ -276,6 +274,7 @@ pub fn play(
                     owner: owner_of(&fx.sounds, &voice.id, voice.pos),
                     started: time.elapsed_secs(),
                     order: next_voice_order(),
+                    gain: full,
                 },
             ))
             .id();
@@ -289,7 +288,7 @@ pub fn play(
             commands.entity(entity).despawn();
         }
     }
-    crowd.volume = crowd_vol;
+    crowd.volume = crowd_vol * paused_bus(hold.open, solo, false, false, hud.coop_pause_duck_db);
     if crowd.entity.is_none() {
         if let Some(def) = game.content.sfx("swarmer_crowd") {
             let entity = commands
@@ -390,6 +389,7 @@ pub fn flush_ui_cues(
                 owner: 0,
                 started: time.elapsed_secs(),
                 order: next_voice_order(),
+                gain: def.volume * bus_gain(&prefs, false),
             },
         ));
     }
@@ -499,19 +499,23 @@ pub fn menu_levels(prefs: Res<Prefs>, mut music: Option<ResMut<Music>>) {
     music.filter.0.set_hz(f32::INFINITY);
 }
 
-/// Solo pause suspends looping game sounds. Closing the menu resumes them in place.
+/// Solo pause stops game sounds. Co-op ducks them. UI cues and act-now warnings stay full.
 pub fn hold_loops(hold: Res<PauseMenu>, game: Res<Game>, mut sinks: Query<(&OneShot, &mut AudioSink)>) {
-    let pause_loops = hold.open && game.sim.connected_count() <= 1;
-    for (shot, sink) in &mut sinks {
-        let looping = game.content.sfx(&shot.id).is_some_and(|def| def.looped);
-        if !looping {
+    let solo = game.sim.connected_count() <= 1;
+    let duck = game.content.presentation.hud.away.coop_pause_duck_db;
+    for (shot, mut sink) in &mut sinks {
+        let def = game.content.sfx(&shot.id);
+        let ui = def.is_some_and(|row| row.category_ui);
+        let warning = def.is_some_and(|row| row.is_warning);
+        let bus = paused_bus(hold.open, solo, ui, warning, duck);
+        if bus == 0.0 {
+            sink.pause();
             continue;
         }
-        if pause_loops {
-            sink.pause();
-        } else if sink.is_paused() {
+        if sink.is_paused() {
             sink.play();
         }
+        sink.set_volume(Volume::Linear(shot.gain * bus));
     }
 }
 
@@ -720,6 +724,30 @@ fn advance(game: &Game, music: &mut Music, dt: f32) {
 
 fn db_to_gain(db: f32) -> f32 {
     10f32.powf(db / 20.0)
+}
+
+/// 0 stops the voice. 1 leaves it alone. Anything between is the co-op duck.
+/// UI cues and warnings stay at 1 while a pause is open.
+/// Solo pause ducks music by `solo_pause_duck_db` and keeps the away low-pass.
+/// Co-op pause ducks by `coop_pause_duck_db` without replacing the away filter.
+fn pause_music(open: bool, solo: bool, away_gain: f32, away_hz: f32, solo_duck_db: f32, solo_hz: f32, coop_duck_db: f32) -> (f32, f32) {
+    if open && solo {
+        (db_to_gain(solo_duck_db), solo_hz)
+    } else if open {
+        (away_gain.min(db_to_gain(coop_duck_db)), away_hz)
+    } else {
+        (away_gain, away_hz)
+    }
+}
+
+fn paused_bus(open: bool, solo: bool, ui: bool, warning: bool, coop_duck_db: f32) -> f32 {
+    if !open || ui || warning {
+        return 1.0;
+    }
+    if solo {
+        return 0.0;
+    }
+    db_to_gain(coop_duck_db)
 }
 
 fn fade_now(
@@ -1052,5 +1080,25 @@ mod tests {
         }
         let later = admit_ui(&content.audio, &reversed, &asked, 100.0);
         assert_eq!(later.stop, vec![1], "the stored start time beats list order");
+    }
+
+    #[test]
+    fn pause_stops_solo_game_sounds_and_ducks_coop() {
+        let content = gemini_sim::content::Content::embedded();
+        let duck = content.presentation.hud.away.coop_pause_duck_db;
+        let ducked = super::paused_bus(true, false, false, false, duck);
+        assert!(ducked > 0.0 && ducked < 1.0, "co-op game sounds duck, got {ducked}");
+        assert_eq!(super::db_to_gain(duck), ducked);
+        assert_eq!(super::paused_bus(true, true, false, false, duck), 0.0, "solo pause stops game sounds");
+        let solo_db = content.presentation.hud.away.solo_pause_duck_db;
+        let (gain, hz) = super::pause_music(true, true, 1.0, 20_000.0, solo_db, content.presentation.hud.away.music_duck_lowpass_hz, duck);
+        assert!((solo_db - -12.0).abs() < 1e-3);
+        assert!((gain - super::db_to_gain(solo_db)).abs() < 1e-4, "solo pause ducks music, got {gain}");
+        assert!(gain > 0.0);
+        assert!((hz - content.presentation.hud.away.music_duck_lowpass_hz).abs() < 1e-3);
+        assert_eq!(super::paused_bus(true, true, true, false, duck), 1.0, "ui stays full in solo");
+        assert_eq!(super::paused_bus(true, false, false, true, duck), 1.0, "warnings stay full in co-op");
+        assert_eq!(super::paused_bus(true, true, false, true, duck), 1.0, "warnings stay full in solo");
+        assert_eq!(super::paused_bus(false, true, false, false, duck), 1.0);
     }
 }

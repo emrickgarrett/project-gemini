@@ -36,19 +36,46 @@ fn main() {
         println!("wrote {path}");
     }
     let legendary = plan(&content, "legendary", None).expect("legendary");
-    let mut t = 0.0f32;
-    let mut index = 0u32;
-    while t <= legendary.card_at + 0.001 {
-        let rgb = paint(&content, &legendary, t, W, H);
+    let tier = &content.crate_reveal.legendary;
+    let freeze = tier.freeze.expect("legendary freeze");
+    let marks = [
+        tier.drop[0],
+        (tier.crack[0] + tier.crack[1]) * 0.5,
+        (freeze[0] + freeze[1]) * 0.5,
+        tier.burst,
+        (tier.rise[0] + tier.rise[1]) * 0.5,
+        tier.card,
+    ];
+    let mut strip = Vec::new();
+    for (index, t) in marks.iter().enumerate() {
+        let rgb = paint(&content, &legendary, *t, W, H);
         let path = format!("{out}/crate_legendary_{index:02}.png");
         write_png(&path, &rgb);
         println!("wrote {path} t={t:.2}");
-        t += 0.25;
-        index += 1;
+        if strip.is_empty() {
+            strip = rgb;
+        } else {
+            let mut next = Vec::with_capacity(strip.len() + rgb.len());
+            for row in 0..H {
+                let start = (row * W * 3) as usize;
+                let end = start + (W * 3) as usize;
+                let wide = W as usize * (index as usize) * 3;
+                next.extend_from_slice(&strip[row as usize * wide..row as usize * wide + wide]);
+                next.extend_from_slice(&rgb[start..end]);
+            }
+            strip = next;
+        }
     }
+    let strip_path = format!("{out}/crate_legendary_strip.png");
+    write_png_size(&strip_path, &strip, W * marks.len() as u32, H);
+    println!("wrote {strip_path}");
 }
 
 fn write_png(path: &str, rgb: &[u8]) {
+    write_png_size(path, rgb, W, H);
+}
+
+fn write_png_size(path: &str, rgb: &[u8], width: u32, height: u32) {
     let mut child = Command::new("ffmpeg")
         .args([
             "-y",
@@ -57,7 +84,7 @@ fn write_png(path: &str, rgb: &[u8]) {
             "-pix_fmt",
             "rgb24",
             "-s",
-            &format!("{W}x{H}"),
+            &format!("{width}x{height}"),
             "-i",
             "pipe:0",
             path,
