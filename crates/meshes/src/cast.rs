@@ -181,9 +181,6 @@ fn shade_png(id: &str) -> Result<&'static [u8], String> {
 /// 252 is 0.99 × 255. Every texel of a channel mask must carry at least this much R+G+B+A.
 pub const MASK_MIN_BYTE_SUM: u16 = 252;
 
-/// 5 cm. A weak-point center farther than this from the cast surface fails the load.
-pub const HIT_SURFACE_GAP_M: f32 = 0.05;
-
 pub fn ensure_mask_weight(mask: &Tex, id: &str) -> Result<(), String> {
     let pixels = (mask.w as usize).saturating_mul(mask.h as usize);
     if pixels == 0 || mask.rgba.len() != pixels * 4 {
@@ -281,7 +278,7 @@ fn fit_model(bytes: &[u8], spec: &CastModel, content: &Content) -> Result<CastMe
         yaw_about_center(&mut decoded.positions, &mut decoded.normals, spec.yaw_deg);
     }
     if spec.fit == "hitbox" {
-        require_weak_anchors_on_cast(&decoded, spec, content)?;
+        require_glows_on_cast(&decoded, spec, content)?;
     }
     decoded.mask = decode_mask(mask_png(&spec.id)?, &spec.id)?;
     let shade = if spec.fit == "hitbox" {
@@ -406,13 +403,15 @@ fn fit_hitbox(mesh: &mut RawMesh, spec: &CastModel, content: &Content) -> Result
     Ok(())
 }
 
-/// Every weak-point center has to sit on this cast. The procedural tail is not a surface.
-fn require_weak_anchors_on_cast(mesh: &RawMesh, spec: &CastModel, content: &Content) -> Result<(), String> {
+/// Every glow center has to sit on this cast. That is each weak point, each pod,
+/// and every other emissive part, including a mirrored pair.
+fn require_glows_on_cast(mesh: &RawMesh, spec: &CastModel, content: &Content) -> Result<(), String> {
     let Some((_, row)) = content.bugs.rows().into_iter().find(|(id, _)| *id == spec.id) else {
         return Err(format!("{} has no hitbox", spec.id));
     };
+    let limit = content.cast.hit_surface_gap;
     for (slot, shape) in row.hitbox.anchored() {
-        require_point_on_cast(&spec.id, slot, &shape.anchor, &mesh.positions, &mesh.indices, shape.offset)?;
+        require_point_on_cast(&spec.id, slot, &shape.anchor, &mesh.positions, &mesh.indices, shape.offset, limit)?;
     }
     for (index, place) in row.hitbox.pods.iter().enumerate() {
         require_point_on_cast(
@@ -422,7 +421,27 @@ fn require_weak_anchors_on_cast(mesh: &RawMesh, spec: &CastModel, content: &Cont
             &mesh.positions,
             &mesh.indices,
             place.offset,
+            limit,
         )?;
+    }
+    for part in &row.visual.parts {
+        if !(part.emissive || part.visual_radius > 0.0) || part.name == "pod" {
+            continue;
+        }
+        let centers: Vec<[f32; 3]> = if part.mirror {
+            let x = part.offset[0].abs();
+            vec![[x, part.offset[1], part.offset[2]], [-x, part.offset[1], part.offset[2]]]
+        } else {
+            vec![part.offset]
+        };
+        for (index, center) in centers.iter().enumerate() {
+            let slot = if part.mirror {
+                format!("{}{index}", part.name)
+            } else {
+                part.name.clone()
+            };
+            require_point_on_cast(&spec.id, &slot, &part.name, &mesh.positions, &mesh.indices, *center, limit)?;
+        }
     }
     Ok(())
 }
@@ -434,11 +453,12 @@ fn require_point_on_cast(
     positions: &[[f32; 3]],
     indices: &[u32],
     point: [f32; 3],
+    limit: f32,
 ) -> Result<(), String> {
     let gap = closest_on_mesh(positions, indices, point).1;
-    if gap > HIT_SURFACE_GAP_M {
+    if gap > limit {
         return Err(format!(
-            "{id} {slot} anchor \"{anchor}\" is {gap:.3} m off the cast, limit {HIT_SURFACE_GAP_M:.2}"
+            "{id} {slot} anchor \"{anchor}\" is {gap:.3} m off the cast, limit {limit:.2}"
         ));
     }
     Ok(())
@@ -2333,7 +2353,7 @@ mod tests {
         let mut missed = Vec::new();
         for (id, slot, center, gap) in &gaps {
             eprintln!("{id} {slot} center {center:?} surface gap {gap:.3}");
-            if *gap > HIT_SURFACE_GAP_M {
+            if *gap > content.cast.hit_surface_gap {
                 missed.push(format!(
                     "{id} {slot} center {center:?} is {gap:.3} off the cast surface"
                 ));
@@ -2861,15 +2881,48 @@ mod tests {
         assert!((radius - authored).abs() < 1.0e-2, "cannon mesh {radius:.3} is not the authored radius {authored:.3}");
         let mesh = cast("hive_tyrant");
         let gap = closest_on_mesh(&mesh.positions, &mesh.indices, center).1;
+        let limit = content.cast.hit_surface_gap;
         assert!(
-            gap <= HIT_SURFACE_GAP_M,
-            "hive cannon gap {gap:.3} is off the cast (limit {HIT_SURFACE_GAP_M:.2})"
+            gap <= limit,
+            "hive cannon gap {gap:.3} is off the cast (limit {limit:.2})"
         );
     }
 
     #[test]
+    fn the_spitter_eyes_sit_on_the_head() {
+        let content = Content::embedded();
+        let limit = content.cast.hit_surface_gap;
+        let mesh = cast("spitter");
+        let (_, row) = content.bugs.rows().into_iter().find(|(id, _)| *id == "spitter").unwrap();
+        let eyes = row.visual.parts.iter().find(|part| part.name == "eyes").expect("eyes");
+        assert!(eyes.mirror, "the eyes are a mirrored pair");
+        assert!(eyes.emissive, "the eyes are a glow");
+        for side in [1.0_f32, -1.0] {
+            let center = [eyes.offset[0].abs() * side, eyes.offset[1], eyes.offset[2]];
+            let gap = closest_on_mesh(&mesh.positions, &mesh.indices, center).1;
+            assert!(
+                gap <= limit,
+                "spitter eye {center:?} is {gap:.3} m off the head (limit {limit:.2})"
+            );
+        }
+        let err = require_point_on_cast(
+            "spitter",
+            "eyes",
+            "eyes",
+            &mesh.positions,
+            &mesh.indices,
+            [0.09, 0.56, 0.82],
+            limit,
+        )
+        .expect_err("the old eye offset floats in front of the cast");
+        assert!(err.contains("off the cast"), "{err}");
+    }
+
+    #[test]
     fn an_anchor_off_the_cast_fails_the_load() {
+        let content = Content::embedded();
         let mesh = cast("hive_tyrant");
+        let limit = content.cast.hit_surface_gap;
         let err = require_point_on_cast(
             "hive_tyrant",
             "cannon",
@@ -2877,6 +2930,7 @@ mod tests {
             &mesh.positions,
             &mesh.indices,
             [0.0, 6.1933675, -0.72942567],
+            limit,
         )
         .expect_err("the old cannon center floats above the cast");
         assert!(err.contains("off the cast"), "{err}");
@@ -2888,6 +2942,7 @@ mod tests {
             &mesh.positions,
             &mesh.indices,
             [-0.00517016, 5.0, -0.70474398],
+            limit,
         )
         .expect("the named tail tip is on the cast");
     }

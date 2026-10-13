@@ -914,21 +914,22 @@ fn weakpoint_hitboxes_overlap_their_glowing_parts() {
     for (bug, row) in content.bugs.rows() {
         for (slot, shape) in row.hitbox.anchored() {
             saw += 1;
-            let name = shape.anchor.as_str();
-            let anchor = visual_anchor(&row.visual, name)
-                .unwrap_or_else(|| panic!("{bug} {slot} anchor {name:?} did not resolve after load"));
+            let anchor_name = shape.anchor.as_str();
+            let part_name = if shape.name.is_empty() { anchor_name } else { shape.name.as_str() };
+            let anchor = visual_anchor(&row.visual, anchor_name)
+                .unwrap_or_else(|| panic!("{bug} {slot} anchor {anchor_name:?} did not resolve after load"));
             assert_eq!(
                 shape.offset, anchor,
                 "{bug} {slot} was not baked from its visual anchor"
             );
-            let glow = glow_bounds(&row.visual, name)
-                .unwrap_or_else(|| panic!("{bug} {slot} anchor {name} has no glowing volume"));
+            let glow = glow_bounds(&row.visual, anchor_name, part_name)
+                .unwrap_or_else(|| panic!("{bug} {slot} part {part_name} has no glowing volume"));
             let hit = hit_bounds(shape);
             assert!(
                 hit.overlaps(glow),
                 "{bug} {slot} hitbox {hit:?} does not overlap its glowing part {glow:?}"
             );
-            if let Some(part) = row.visual.parts.iter().find(|part| part.name == name) {
+            if let Some(part) = row.visual.parts.iter().find(|part| part.name == anchor_name) {
                 if let Some(phase) = part.phase_max {
                     assert_eq!(shape.active_phase, phase, "{bug} {slot} phase");
                 }
@@ -1061,6 +1062,15 @@ fn missing_weakpoint_anchor_fails_content_load() {
     let err = load(&misspelled).expect_err("a misspelled anchor must fail load");
     assert!(err.contains("abdomenn"), "{err}");
     assert!(err.contains("does not resolve"), "{err}");
+
+    let clash = bugs.replacen(
+        "tail_tip = [-0.00517016, 5.0, -0.70474398]",
+        "tail_tip = [-0.00517016, 5.0, -0.70474398]\ncannon = [0.0, 0.0, 0.0]",
+        1,
+    );
+    assert_ne!(clash, bugs, "the cannon point must change the table");
+    let err = load(&clash).expect_err("a point that is also a part must fail");
+    assert!(err.contains("both a visual point and a part"), "{err}");
 
     let missing = bugs.replacen("anchor = \"abdomen\"", "anchor = \"\"", 1);
     let missing = missing.replacen("name = \"abdomen\"", "name = \"\"", 1);

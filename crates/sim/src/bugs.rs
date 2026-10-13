@@ -267,6 +267,19 @@ impl BugHitbox {
     }
 }
 
+/// A cast point and a visual part are different names. Sharing one would make
+/// the anchor and the glow mesh the same lookup.
+pub fn require_point_names_are_not_parts(book: &BugBook) -> Result<(), String> {
+    for (bug, row) in book.rows() {
+        for name in row.visual.points.keys() {
+            if part_named(&row.visual, name).is_some() {
+                return Err(format!("{bug} \"{name}\" is both a visual point and a part"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Bake every weak-point center from its visual anchor. A missing or unknown
 /// name is a content error; the authored offset is not a fallback.
 pub fn bind_weak_anchors(book: &mut BugBook) -> Result<(), String> {
@@ -602,16 +615,11 @@ pub fn resolved_offset(visual: &BugVisual, shape: &ShapeDef) -> Result<[f32; 3],
     visual_anchor(visual, name).ok_or_else(|| format!("anchor \"{name}\" is not on the cast and does not resolve"))
 }
 
-/// Volume of the glowing part named in the visual table.
-/// A cast point uses the emissive part that sits on that point.
-pub fn glow_bounds(visual: &BugVisual, name: &str) -> Option<PartBounds> {
-    let center = visual_anchor(visual, name)?;
-    let part = part_named(visual, name).or_else(|| {
-        visual
-            .parts
-            .iter()
-            .find(|part| part.emissive && part.offset == center)
-    })?;
+/// Volume of the glowing part. `anchor` places the center (a cast point or a
+/// part). `part_name` is the visual part, looked up by name.
+pub fn glow_bounds(visual: &BugVisual, anchor: &str, part_name: &str) -> Option<PartBounds> {
+    let center = visual_anchor(visual, anchor)?;
+    let part = part_named(visual, part_name)?;
     let half = if part.size.is_empty() {
         let host_name = part.on.as_deref().unwrap_or("");
         let host = part_named(visual, host_name)?;

@@ -13,6 +13,9 @@
 # The fit scales from that hitbox. It does not keep a second size in code.
 # `axis_scale_limit` is the max allowed max(axis scale) / min(axis scale) on
 # the unscaled mesh. The fit checks that ratio before it stretches any vertex.
+# `hit_surface_gap` is how far a glow center may sit from the cast, in meters.
+# 0.05 is 5 cm. Weak points, pods, and every other emissive part use this bar.
+# A center past it fails the load.
 # `tail_glow_radius` is the tyrant tail glow. The cannon authors this radius.
 # A glow radius past it fails the load. There is no silent clamp. It stays
 # under the cannon hit radius and is still readable at 15 m.
@@ -44,6 +47,8 @@ axis_scale_limit = 2.15
 tail_glow_radius = 0.40
 # Guns and the shield. Each UV island has to agree with its faces at this rate.
 min_island_coverage = 0.98
+# 5 cm. A glow center farther from the cast than this fails the load.
+hit_surface_gap = 0.05
 rim_strength = 1.0
 rim_fill = 0.30
 overdrive_emissive_channel = "accent"

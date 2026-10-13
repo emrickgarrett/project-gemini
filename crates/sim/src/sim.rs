@@ -222,7 +222,9 @@ pub struct Enemy {
     pub spawn_count: u32,
     pub spawn_interval: f32,
     pub alive: bool,
-    /// Seconds of pose time.
+    /// Seconds of pose time. Nothing in this sim reads it. The rig branch
+    /// (`cursor/rigged-heroes-84b8`) is the one that should drive a cast from
+    /// it, or drop the field if that rig keeps its own clock.
     #[serde(default)]
     pub anim_time: f32,
     #[serde(default)]

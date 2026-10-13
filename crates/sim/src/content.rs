@@ -137,6 +137,7 @@ impl Content {
         ]);
         let mut bugs: crate::bugs::BugBook = parse("bugs.toml", src.bugs)?;
         crate::bugs::bind_weak_anchors(&mut bugs).map_err(|err| format!("bugs.toml: {err}"))?;
+        crate::bugs::require_point_names_are_not_parts(&bugs).map_err(|err| format!("bugs.toml: {err}"))?;
         crate::bugs::require_glow_hit_centers(&bugs).map_err(|err| format!("bugs.toml: {err}"))?;
         crate::bugs::require_leg_layout(&bugs).map_err(|err| format!("bugs.toml: {err}"))?;
         let bosses = load_bosses(src.bosses).map_err(|err| format!("bosses.toml: {err}"))?;
@@ -1390,6 +1391,8 @@ pub struct CastLook {
     pub tail_glow_radius: f32,
     /// Smallest share of a UV island that must match its face's mask channel.
     pub min_island_coverage: f32,
+    /// Meters a glow center may sit off the cast. Past this, the mesh load fails.
+    pub hit_surface_gap: f32,
     pub rim_strength: f32,
     /// Facing share of the rim color on an unmasked bug texel. The fresnel takes the rest.
     pub rim_fill: f32,
@@ -2069,6 +2072,7 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
             "axis_scale_limit",
             "tail_glow_radius",
             "min_island_coverage",
+            "hit_surface_gap",
             "rim_strength",
             "rim_fill",
             "overdrive_emissive_channel",
@@ -2109,6 +2113,10 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
     let min_island_coverage = vis_f32(table, "min_island_coverage", "cast.toml")?;
     if !(min_island_coverage >= 0.98 && min_island_coverage <= 1.0) {
         return Err("cast.toml min_island_coverage must be >= 0.98 and <= 1".into());
+    }
+    let hit_surface_gap = vis_f32(table, "hit_surface_gap", "cast.toml")?;
+    if !(hit_surface_gap > 0.0 && hit_surface_gap <= 0.2) {
+        return Err("cast.toml hit_surface_gap must be > 0 and <= 0.2".into());
     }
     if !(rim_strength >= 0.0 && rim_strength <= 1.0) {
         return Err("cast.toml rim_strength must be between 0 and 1".into());
@@ -2176,6 +2184,7 @@ fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
         axis_scale_limit,
         tail_glow_radius,
         min_island_coverage,
+        hit_surface_gap,
         rim_strength,
         rim_fill,
         overdrive_emissive_channel,
@@ -5081,6 +5090,14 @@ mod cast_look_tests {
         );
         let err = load_cast_look(&unknown, &palette).expect_err("an unknown channel must fail");
         assert!(err.contains("unknown"), "{err}");
+        assert!((look.hit_surface_gap - 0.05).abs() < 1.0e-6, "hit_surface_gap is 5 cm");
+        let missing = text.replacen("hit_surface_gap = 0.05\n", "", 1);
+        assert_ne!(missing, text);
+        let err = load_cast_look(&missing, &palette).expect_err("a missing gap must fail");
+        assert!(err.contains("hit_surface_gap"), "{err}");
+        let wide = text.replacen("hit_surface_gap = 0.05", "hit_surface_gap = 1.0", 1);
+        let err = load_cast_look(&wide, &palette).expect_err("a meter-wide gap must fail");
+        assert!(err.contains("hit_surface_gap"), "{err}");
     }
 }
 
