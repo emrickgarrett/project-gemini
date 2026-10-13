@@ -334,6 +334,166 @@ mod tests {
     }
 
     #[test]
+    fn pause_buttons_unlock_the_cursor_and_sit_above_the_rifle() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        app.world_mut().spawn(locked_cursor());
+        app.update();
+        press_hit(&mut app, "play");
+        assert!(matches!(*app.world().resource::<flow::Page>(), flow::Page::Heroes));
+        press_hit(&mut app, "back");
+        assert!(matches!(*app.world().resource::<flow::Page>(), flow::Page::Title));
+        press_hit(&mut app, "settings");
+        assert!(matches!(*app.world().resource::<flow::Page>(), flow::Page::Settings));
+        press_hit(&mut app, "back");
+
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Playing);
+        app.update();
+        assert_eq!(cursor_state(&mut app).0, CursorGrabMode::Locked);
+        tap(&mut app, KeyCode::Escape);
+        let (grab, shown) = cursor_state(&mut app);
+        assert_eq!(grab, CursorGrabMode::None, "pause must release the cursor");
+        assert!(shown);
+        assert!(app.world().resource::<session::PauseMenu>().open);
+
+        let picking = app.world().resource::<bevy::picking::mesh_picking::MeshPickingSettings>();
+        assert!(picking.require_markers);
+        let mut world_order = None;
+        let mut view_order = None;
+        let mut ui_order = None;
+        {
+            let mut query = app.world_mut().query::<(
+                &Camera,
+                Option<&world::ViewmodelCamera>,
+                Option<&bevy::picking::mesh_picking::MeshPickingCamera>,
+                Option<&IsDefaultUiCamera>,
+            )>();
+            for (camera, viewmodel, mesh, ui) in query.iter(app.world()) {
+                if viewmodel.is_some() {
+                    assert!(mesh.is_none(), "the viewmodel camera must not pick meshes");
+                    view_order = Some(camera.order);
+                } else if ui.is_some() {
+                    assert!(mesh.is_none());
+                    ui_order = Some(camera.order);
+                } else {
+                    assert!(mesh.is_some(), "the world camera keeps mesh picking");
+                    world_order = Some(camera.order);
+                }
+            }
+        }
+        let world_order = world_order.expect("world camera");
+        let view_order = view_order.expect("viewmodel camera");
+        let ui_order = ui_order.expect("ui camera");
+        assert!(ui_order > view_order && view_order > world_order);
+
+        let mut images = app.world_mut().query::<(&ImageNode, &bevy::picking::Pickable)>();
+        assert!(images.iter(app.world()).any(|(_, pick)| pick == &bevy::picking::Pickable::IGNORE));
+        let mut hud_roots = app.world_mut().query::<(&hud::HudNode, &bevy::picking::Pickable, Option<&ChildOf>)>();
+        assert!(hud_roots.iter(app.world()).any(|(_, pick, parent)| parent.is_none() && pick == &bevy::picking::Pickable::IGNORE));
+
+        press_hit(&mut app, "settings");
+        assert!(app.world().resource::<session::PauseMenu>().settings);
+        tap(&mut app, KeyCode::Escape);
+        assert!(!app.world().resource::<session::PauseMenu>().settings);
+        assert!(app.world().resource::<session::PauseMenu>().open);
+        press_hit(&mut app, "resume");
+        assert!(!app.world().resource::<session::PauseMenu>().open);
+        tap(&mut app, KeyCode::Escape);
+        press_hit(&mut app, "quit_to_menu");
+        assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Menu));
+    }
+
+    #[test]
+    fn paused_coop_hero_still_takes_damage() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        app.update();
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Playing);
+        app.update();
+        place_tyrant(&mut app);
+        let hp = app.world().resource::<session::Game>().sim.players[0].hp;
+        let tick = app.world().resource::<session::Game>().sim.tick;
+        app.world_mut().resource_mut::<session::PauseMenu>().open = true;
+        app.update();
+        assert_eq!(app.world().resource::<session::Game>().sim.tick, tick, "solo pause freezes the match");
+        assert_eq!(app.world().resource::<session::Game>().sim.players[0].hp, hp);
+        assert!(!has_pause_veil(&mut app), "solo pause keeps the dimmed still");
+
+        app.world_mut().resource_mut::<session::PauseMenu>().open = false;
+        join_second(&mut app);
+        place_tyrant(&mut app);
+        let hp = app.world().resource::<session::Game>().sim.players[0].hp;
+        let tick = app.world().resource::<session::Game>().sim.tick;
+        app.world_mut().resource_mut::<session::PauseMenu>().open = true;
+        app.update();
+        let game = app.world().resource::<session::Game>();
+        assert!(game.sim.tick > tick, "co-op pause keeps the match running");
+        assert!(game.sim.players[0].hp < hp, "the hero stays in the world and can take damage");
+        assert!(has_pause_veil(&mut app), "co-op pause dims the live match");
+    }
+
+    #[test]
+    fn a_server_pull_succeeds_and_a_short_wallet_names_the_cost() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        app.update();
+        let content = gemini_sim::content::Content::embedded();
+        assert_eq!(app.world().resource::<flow::Wallet>().credits(), content.banners.dev.starting_credits);
+        choose(&mut app, "crates");
+        assert!(app.world().get_resource::<reveal_ui::RevealPlayback>().is_none());
+        choose(&mut app, "open");
+        assert!(app.world().get_resource::<reveal_ui::RevealPlayback>().is_none(), "open does nothing before a server result");
+        choose(&mut app, "pull");
+        let pulled = app.world().resource::<flow::ServerCrate>().clone();
+        assert!(!pulled.failed, "{}", pulled.reason);
+        let rarity = pulled.rarity.expect("the server returned a tier");
+        assert!(["common", "rare", "epic", "legendary"].contains(&rarity.as_str()));
+        assert_eq!(app.world().resource::<session::Account>().rank, 2);
+        let pity = app.world().resource::<flow::Wallet>().since_legendary(&content.banners.id);
+        assert!(pity <= 1, "test currency must not skip pity, counter is {pity}");
+        choose(&mut app, "open");
+        let playback = app.world().get_resource::<reveal_ui::RevealPlayback>().expect("reveal starts after the server result");
+        assert_eq!(playback.0.plan.rarity, rarity);
+
+        let mut app = menu_app();
+        app.update();
+        let content = gemini_sim::content::Content::embedded();
+        loop {
+            let mut wallet = app.world_mut().resource_mut::<flow::Wallet>();
+            if wallet.pull_banner(&content).is_err() {
+                break;
+            }
+        }
+        choose(&mut app, "crates");
+        choose(&mut app, "pull");
+        let failed = app.world().resource::<flow::ServerCrate>().clone();
+        assert!(failed.failed);
+        assert!(failed.rarity.is_none());
+        assert!(failed.reason.starts_with(&content.ui.copy.pull_need), "{}", failed.reason);
+        assert!(failed.reason.contains(&content.ui.copy.pull_have), "{}", failed.reason);
+        choose(&mut app, "open");
+        assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Menu));
+        assert!(app.world().get_resource::<reveal_ui::RevealPlayback>().is_none());
+    }
+
+    #[test]
+    fn skip_cuts_the_reveal_down_to_the_card_sound() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        let content = gemini_sim::content::Content::embedded();
+        let run = gemini_sim::reveal::RevealRun::start(&content, "rare", Some("epic")).unwrap();
+        app.insert_resource(reveal_ui::RevealPlayback(run));
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Reveal);
+        app.update();
+        app.world_mut().spawn((reveal_ui::RevealVoice, OldVoice));
+        tap(&mut app, KeyCode::Space);
+        let mut old = app.world_mut().query::<&OldVoice>();
+        assert_eq!(old.iter(app.world()).count(), 0, "skip stops whatever was already playing");
+        let mut voices = app.world_mut().query::<&reveal_ui::RevealVoice>();
+        assert_eq!(voices.iter(app.world()).count(), 1, "only the card sting is left");
+    }
+
+    #[test]
     fn menu_camera_draws_ui_on_boot_and_after_a_match() {
         let _guard = settings_lock();
         let mut app = menu_app();
@@ -615,6 +775,93 @@ mod tests {
     fn hud_text(app: &mut App) -> Vec<String> {
         let mut query = app.world_mut().query::<&Text>();
         query.iter(app.world()).map(|text| text.0.clone()).collect()
+    }
+
+    #[derive(Component)]
+    struct OldVoice;
+
+    fn press_hit(app: &mut App, id: &str) {
+        let entity = {
+            let mut query = app.world_mut().query::<(Entity, &flow::HitButton)>();
+            query
+                .iter(app.world())
+                .find(|(_, hit)| hit.0 == id)
+                .map(|(entity, _)| entity)
+                .unwrap_or_else(|| panic!("missing button {id}"))
+        };
+        app.world_mut().trigger(bevy::ui_widgets::Activate { entity });
+        app.update();
+        app.update();
+    }
+
+    fn place_tyrant(app: &mut App) {
+        let mut game = app.world_mut().resource_mut::<session::Game>();
+        let pos = game.sim.players[0].pos;
+        game.sim.players[0].invuln = 0.0;
+        game.sim.director.parked = true;
+        game.sim.enemies.clear();
+        game.sim.projectiles.clear();
+        game.sim.enemies.push(gemini_sim::sim::Enemy {
+            id: 9001,
+            kind: gemini_sim::content::EnemyKind::HiveTyrant,
+            pos,
+            vel: gemini_sim::math::Vec3::ZERO,
+            yaw: 0.0,
+            hp: 1000.0,
+            max_hp: 1000.0,
+            speed: 0.0,
+            contact: 0.0,
+            range: 0.0,
+            weak_mult: 1.0,
+            attack_cd: 10.0,
+            ai: gemini_sim::sim::AiState::Chase,
+            weak_exposed: false,
+            open_left: 0.0,
+            just_opened: false,
+            pods: Vec::new(),
+            phase: 0,
+            spawn_acc: 0.0,
+            spawn_kind: gemini_sim::content::EnemyKind::Swarmer,
+            spawn_count: 0,
+            spawn_interval: 0.0,
+            alive: true,
+            anim_time: 0.0,
+            cycle_left: 0.0,
+            warn_left: 0.0,
+            warn_sfx: false,
+            warn_pod: 255,
+            reserved: 0,
+            enraged: false,
+            invuln: 0.0,
+            tail_hp: 10_000.0,
+            tail_broken: false,
+            acid_cd: 99.0,
+            acid_warn: 0.0,
+            scythe_cd: 0.0,
+            reinforce_cd: 99.0,
+            reinforce_warn: 0.0,
+            cue: gemini_sim::sim::EnemyCue::None,
+            climbing: false,
+            last_hit_by: 0,
+        });
+    }
+
+    fn join_second(app: &mut App) {
+        let content = gemini_sim::content::Content::embedded();
+        let mut game = app.world_mut().resource_mut::<session::Game>();
+        game.sim.phase = gemini_sim::sim::Phase::Breather { left: 30.0 };
+        game.sim.request_join(&content).expect("a second player can join");
+        game.sim.phase = gemini_sim::sim::Phase::Combat;
+        if let Some(joiner) = game.sim.players.get_mut(1) {
+            joiner.pos.x += 80.0;
+        }
+        assert!(game.sim.connected_count() > 1);
+    }
+
+    fn has_pause_veil(app: &mut App) -> bool {
+        let alpha = gemini_sim::content::Content::embedded().ui.layout.coop_pause_dim;
+        let mut query = app.world_mut().query::<&BackgroundColor>();
+        query.iter(app.world()).any(|BackgroundColor(color)| (color.to_srgba().alpha - alpha).abs() < 1e-4)
     }
 
     fn locked_cursor() -> CursorOptions {

@@ -1,5 +1,6 @@
-//! Crate pulls, pity, and the audit log. The sim and the client do not depend on this crate.
-//! The client plays back `Pull::rarity` and `Pull::fakeout`. It does not roll them.
+//! Crate pulls, pity, and the audit log.
+//! The native host calls [`Account::pull`]. Wasm does not link this crate.
+//! Callers play back `Pull::rarity` and `Pull::fakeout`. They do not roll them.
 
 #[cfg(target_arch = "wasm32")]
 compile_error!("gemini-backend does not build for wasm32");
@@ -16,6 +17,22 @@ const TIERS: [&str; 4] = ["common", "rare", "epic", "legendary"];
 struct Pity {
     since_legendary: u32,
     since_epic: u32,
+}
+
+/// Why a pull did not run. The client prints this from content copy. It does not invent a tier.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PullError {
+    Short { cost: f32, have: f32 },
+    Banner,
+}
+
+impl std::fmt::Display for PullError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Short { cost, have } => write!(f, "need {cost} credits to pull, have {have}"),
+            Self::Banner => write!(f, "pull needs a banner"),
+        }
+    }
 }
 
 /// One server pull. `fakeout` is the teased tier, exactly one step above `rarity`, or none.
@@ -51,7 +68,7 @@ pub struct AuditEntry {
 pub struct Account {
     pub rank: u32,
     pub shards: u32,
-    pub credits: f32,
+    credits: f32,
     pity: BTreeMap<String, Pity>,
     active_banner: Option<String>,
     rng: ChaCha20Rng,
@@ -59,11 +76,34 @@ pub struct Account {
 }
 
 impl Account {
-    /// A live account. The generator is seeded from the operating system.
+    /// A live account. Dev builds receive `banners.dev.starting_credits`. Release builds do not.
+    /// The grant is this crate's `debug_assertions` flag. No cargo feature can turn it on.
+    pub fn open(content: &Content) -> Self {
+        Self::open_with_dev(content, dev_currency_enabled())
+    }
+
+    /// A live account with an empty wallet. Tests and [`Account::open`] use this.
     pub fn new() -> Self {
         let mut seed = [0u8; 32];
         getrandom::fill(&mut seed).expect("os randomness for a live account");
         Self::from_chacha(ChaCha20Rng::from_seed(seed))
+    }
+
+    pub fn credits(&self) -> f32 {
+        self.credits
+    }
+
+    fn open_with_dev(content: &Content, dev: bool) -> Self {
+        let mut account = Self::new();
+        if dev {
+            account.grant_dev_credits(content);
+        }
+        account
+    }
+
+    /// Credits only. Pity counters, the banner, and the generator stay as they are.
+    fn grant_dev_credits(&mut self, content: &Content) {
+        self.credits = content.banners.dev.starting_credits;
     }
 
     /// Fixed seed for tests. Live accounts use [`Account::new`].
@@ -88,14 +128,20 @@ impl Account {
         self.pity.get(banner).map(|p| p.since_legendary).unwrap_or(0)
     }
 
-    pub fn pull(&mut self, content: &Content, banner: &str) -> Result<Pull, String> {
+    pub fn pull(&mut self, content: &Content, banner: &str) -> Result<Pull, PullError> {
+        if banner.is_empty() {
+            return Err(PullError::Banner);
+        }
         let cost = content.banners.cost.single as f32;
         self.charge(cost)?;
         self.roll(content, banner, cost)
     }
 
     /// Ten pods for `cost.ten_pull`. Pity and the epic guarantee still apply per pod.
-    pub fn pull_ten(&mut self, content: &Content, banner: &str) -> Result<Vec<Pull>, String> {
+    pub fn pull_ten(&mut self, content: &Content, banner: &str) -> Result<Vec<Pull>, PullError> {
+        if banner.is_empty() {
+            return Err(PullError::Banner);
+        }
         let cost = content.banners.cost.ten_pull as f32;
         self.charge(cost)?;
         let mut pulls = Vec::with_capacity(10);
@@ -106,18 +152,15 @@ impl Account {
         Ok(pulls)
     }
 
-    fn charge(&mut self, cost: f32) -> Result<(), String> {
+    fn charge(&mut self, cost: f32) -> Result<(), PullError> {
         if self.credits + 1e-3 < cost {
-            return Err(format!("need {cost} credits to pull"));
+            return Err(PullError::Short { cost, have: self.credits });
         }
         self.credits -= cost;
         Ok(())
     }
 
-    fn roll(&mut self, content: &Content, banner: &str, spent: f32) -> Result<Pull, String> {
-        if banner.is_empty() {
-            return Err("pull needs a banner".into());
-        }
+    fn roll(&mut self, content: &Content, banner: &str, spent: f32) -> Result<Pull, PullError> {
         let mut pity = self.begin_banner(content, banner);
         let pity_legendary_before = pity.since_legendary;
         let pity_epic_before = pity.since_epic;
@@ -134,7 +177,7 @@ impl Account {
         let shards = if powered {
             0
         } else {
-            content.cosmetics.shards_for(&rarity)?
+            content.cosmetics.shards_for(&rarity).expect("a rolled rarity has a shard cost")
         };
         self.shards += shards;
         let pull = Pull {
@@ -240,6 +283,11 @@ fn next_f32(rng: &mut ChaCha20Rng) -> f32 {
     (rng.next_u32() >> 8) as f32 / 16_777_216.0
 }
 
+/// `debug_assertions` is on for dev builds and off for release. There is no feature flag.
+fn dev_currency_enabled() -> bool {
+    cfg!(debug_assertions)
+}
+
 fn tier_above(rarity: &str) -> Option<&'static str> {
     let idx = TIERS.iter().position(|tier| *tier == rarity)?;
     TIERS.get(idx + 1).copied()
@@ -266,7 +314,7 @@ mod tests {
         assert!(pull.fakeout.is_none() || tier_above(&pull.rarity) == pull.fakeout.as_deref());
         assert_eq!(account.audit.len(), 1);
         let err = account.pull(&content, "standard").expect_err("a pull needs credits");
-        assert!(err.contains("credits"), "{err}");
+        assert!(err.to_string().contains("credits"), "{err}");
 
         account.credits = content.banners.cost.ten_pull as f32;
         let ten = account.pull_ten(&content, "standard").unwrap();
@@ -493,13 +541,62 @@ mod tests {
     }
 
     #[test]
-    fn sim_and_client_do_not_name_backend() {
+    fn sim_does_not_link_the_backend_and_wasm_cannot() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        for rel in ["../sim/Cargo.toml", "../client/Cargo.toml"] {
-            let path = root.join(rel);
-            let text = std::fs::read_to_string(&path).unwrap_or_else(|err| panic!("{}: {err}", path.display()));
-            assert!(!text.contains("gemini-backend"), "{rel} depends on gemini-backend");
-            assert!(!text.contains("crates/backend") && !text.contains("../backend"), "{rel} paths at backend");
-        }
+        let sim = std::fs::read_to_string(root.join("../sim/Cargo.toml")).unwrap();
+        assert!(!sim.contains("gemini-backend"), "the sim must not roll crates");
+        assert!(!sim.contains("../backend"), "the sim must not path at the backend");
+        let client = std::fs::read_to_string(root.join("../client/Cargo.toml")).unwrap();
+        assert!(
+            client.contains("[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]"),
+            "the native host is the only client target that may call the backend"
+        );
+        let wasm = client
+            .split("[target.'cfg(target_arch = \"wasm32\")'.dependencies]")
+            .nth(1)
+            .unwrap_or("");
+        assert!(!wasm.contains("gemini-backend"), "the wasm client must not link the backend");
+    }
+
+    #[test]
+    fn release_accounts_start_empty_and_the_dev_grant_is_content() {
+        let content = Content::embedded();
+        let banner = content.banners.id.as_str();
+        let empty = Account::open_with_dev(&content, false);
+        assert_eq!(empty.credits(), 0.0, "a release account must not receive test currency");
+        assert_eq!(empty.since_legendary(banner), 0);
+        let mut broke = Account::open_with_dev(&content, false);
+        let err = broke.pull(&content, banner).expect_err("an empty wallet cannot pull");
+        assert!(matches!(err, PullError::Short { have, .. } if have == 0.0), "{err}");
+
+        let mut funded = Account::open_with_dev(&content, true);
+        assert_eq!(funded.credits(), content.banners.dev.starting_credits);
+        assert_eq!(funded.since_legendary(banner), 0);
+        let pull = funded.pull(&content, banner).expect("the dev wallet can pay");
+        assert!(TIERS.contains(&pull.rarity.as_str()), "{}", pull.rarity);
+        let above = tier_above(&pull.rarity);
+        assert!(pull.fakeout.is_none() || pull.fakeout.as_deref() == above);
+        let pity = funded.since_legendary(banner);
+        funded.grant_dev_credits(&content);
+        assert_eq!(funded.since_legendary(banner), pity, "the grant must not reset pity");
+        assert_eq!(funded.credits(), content.banners.dev.starting_credits);
+
+        let mut via_grant = Account::from_seed(11);
+        via_grant.grant_dev_credits(&content);
+        let mut via_wallet = Account::from_seed(11);
+        via_wallet.credits = content.banners.dev.starting_credits;
+        let granted = via_grant.pull(&content, banner).unwrap();
+        let paid = via_wallet.pull(&content, banner).unwrap();
+        assert_eq!(granted.rarity, paid.rarity, "the grant must not force a tier");
+        assert_eq!(granted.fakeout, paid.fakeout);
+
+        let opened = Account::open(&content);
+        let expected = if dev_currency_enabled() {
+            content.banners.dev.starting_credits
+        } else {
+            0.0
+        };
+        assert_eq!(opened.credits(), expected);
+        assert_eq!(dev_currency_enabled(), cfg!(debug_assertions));
     }
 }

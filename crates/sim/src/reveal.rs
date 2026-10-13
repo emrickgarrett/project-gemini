@@ -58,6 +58,11 @@ pub fn plan(content: &Content, rarity: &str, fakeout: Option<&str>) -> Result<Re
         if content.crate_reveal.tier(tease).is_none() {
             return Err(format!("unknown fakeout {tease}"));
         }
+        let from = tier_index(rarity).ok_or_else(|| format!("unknown rarity {rarity}"))?;
+        let to = tier_index(tease).ok_or_else(|| format!("unknown fakeout {tease}"))?;
+        if to != from + 1 {
+            return Err(format!("fakeout {tease} is not one tier above {rarity}"));
+        }
     }
     let sting = format!("crate_{rarity}");
     let sting_from_table = file_stem(&tier.sting);
@@ -173,6 +178,10 @@ fn span(t: f32, window: [f32; 2]) -> f32 {
     ((t - window[0]) / (window[1] - window[0])).clamp(0.0, 1.0)
 }
 
+fn tier_index(id: &str) -> Option<usize> {
+    ["common", "rare", "epic", "legendary"].iter().position(|tier| *tier == id)
+}
+
 fn file_stem(path: &str) -> String {
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
     name.trim_end_matches(".ogg").to_string()
@@ -245,6 +254,39 @@ mod tests {
         let epic = content.palette.key("rarity_epic");
         assert_eq!(look_mid.rgb, gold);
         assert_eq!(look_card.rgb, epic);
+    }
+
+    #[test]
+    fn storyboard_timings_and_a_one_tier_fakeout() {
+        let content = Content::embedded();
+        for rarity in ["common", "rare", "epic"] {
+            let tier = content.crate_reveal.tier(rarity).unwrap();
+            assert_eq!(tier.drop, [0.0, 2.0], "{rarity}");
+            assert_eq!(tier.crack, [2.0, 3.5], "{rarity}");
+            assert_eq!(tier.burst, 3.5, "{rarity}");
+            assert_eq!(tier.rise, [4.0, 5.5], "{rarity}");
+            assert_eq!(tier.card, 5.5, "{rarity}");
+            assert!(tier.freeze.is_none(), "{rarity}");
+        }
+        let legendary = &content.crate_reveal.legendary;
+        let freeze = legendary.freeze.expect("legendary freeze");
+        assert!((freeze[1] - freeze[0] - 1.0).abs() < 1e-4, "legendary freeze is one second");
+        assert_eq!(legendary.drop, [0.0, 2.0]);
+        assert_eq!(legendary.crack, [2.0, 3.5]);
+        assert_eq!(freeze, [3.5, 4.5]);
+        assert_eq!(legendary.burst, 4.5);
+        assert_eq!(legendary.rise, [5.0, 6.5]);
+        assert_eq!(legendary.card, 6.5);
+        assert!(plan(&content, "common", Some("epic")).is_err(), "a fake-out cannot skip a tier");
+        assert!(plan(&content, "rare", Some("epic")).is_ok());
+        let silver = content.palette.hex("rarity_common").unwrap();
+        let blue = content.palette.hex("rarity_rare").unwrap();
+        let purple = content.palette.hex("rarity_epic").unwrap();
+        let gold = content.palette.hex("rarity_legendary").unwrap();
+        assert_eq!(silver, "#C0C7D0");
+        assert_eq!(blue, "#3B82F6");
+        assert_eq!(purple, "#A855F7");
+        assert_eq!(gold, "#FACC15");
     }
 
     #[test]

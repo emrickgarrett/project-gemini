@@ -31,7 +31,8 @@ fn main() {
         ("title_reset", MenuShot::Title { focus: 0, notice: true, native_quit: true }),
         ("heroes", MenuShot::Heroes { focus: 0 }),
         ("difficulty", MenuShot::Difficulty { focus: 0, hero_id: hero.clone(), notice: false }),
-        ("pause", MenuShot::Pause { focus: 0, hero_id: hero.clone() }),
+        ("pause_solo", MenuShot::Pause { focus: 0, hero_id: hero.clone(), live: false }),
+        ("pause_coop", MenuShot::Pause { focus: 0, hero_id: hero.clone(), live: true }),
         ("settings", MenuShot::Settings { focus: 0, hero_id: hero.clone(), prefs: prefs.clone(), notice: false }),
         (
             "results_victory",
@@ -41,7 +42,17 @@ fn main() {
             "results_defeat",
             MenuShot::Results { focus: 0, victory: false, waves: 3, kills: 18, seconds: 201.0, currency: 40.0 },
         ),
-        ("crates", MenuShot::Crates { focus: 0, rarity: None, failed: false, can_pull: true }),
+        ("crates", MenuShot::Crates { focus: 0, rarity: None, failed: false, can_pull: true, reason: String::new() }),
+        (
+            "crates_short",
+            MenuShot::Crates {
+                focus: 0,
+                rarity: None,
+                failed: true,
+                can_pull: true,
+                reason: "NEED 100 CREDITS HAVE 0".into(),
+            },
+        ),
         ("click_to_play", MenuShot::ClickToPlay),
     ];
     for (name, shot) in shots {
@@ -65,10 +76,12 @@ fn main() {
         write_png(&path, &rgb, width, height);
         println!("wrote {path}");
     }
-    let (rgb, _) = paint_menu(&content, &MenuShot::Pause { focus: 0, hero_id: hero }, 1920, 1080);
-    let path = format!("{out}/pause_1920x1080.png");
-    write_png(&path, &rgb, 1920, 1080);
-    println!("wrote {path}");
+    for (name, live) in [("pause_solo_1920x1080", false), ("pause_coop_1920x1080", true)] {
+        let (rgb, _) = paint_menu(&content, &MenuShot::Pause { focus: 0, hero_id: hero.clone(), live }, 1920, 1080);
+        let path = format!("{out}/{name}.png");
+        write_png(&path, &rgb, 1920, 1080);
+        println!("wrote {path}");
+    }
     let raster = content.ui.portrait.raster;
     for hero in &content.heroes {
         let rgb = raster_hero_portrait(&content, &hero.id, raster);

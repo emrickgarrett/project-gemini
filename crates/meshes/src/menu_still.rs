@@ -47,7 +47,7 @@ pub enum MenuShot {
     Title { focus: usize, notice: bool, native_quit: bool },
     Heroes { focus: usize },
     Difficulty { focus: usize, hero_id: String, notice: bool },
-    Pause { focus: usize, hero_id: String },
+    Pause { focus: usize, hero_id: String, live: bool },
     Settings { focus: usize, hero_id: String, prefs: PaintPrefs, notice: bool },
     Results {
         focus: usize,
@@ -57,7 +57,7 @@ pub enum MenuShot {
         seconds: f32,
         currency: f32,
     },
-    Crates { focus: usize, rarity: Option<String>, failed: bool, can_pull: bool },
+    Crates { focus: usize, rarity: Option<String>, failed: bool, can_pull: bool, reason: String },
     ClickToPlay,
 }
 
@@ -88,7 +88,7 @@ pub fn paint_menu(content: &Content, shot: &MenuShot, width: u32, height: u32) -
     let frame = Frame::new(content, width.max(8), height.max(8));
     let mut rgb = vec![0u8; (frame.width * frame.height * 3) as usize];
     match shot {
-        MenuShot::Pause { .. } | MenuShot::ClickToPlay => {
+        MenuShot::ClickToPlay | MenuShot::Pause { live: false, .. } => {
             paint_arena(&mut rgb, frame.width, frame.height, content);
             let keep = content.ui.layout.pause_keep.clamp(0.0, 1.0);
             for px in rgb.chunks_exact_mut(3) {
@@ -97,19 +97,20 @@ pub fn paint_menu(content: &Content, shot: &MenuShot, width: u32, height: u32) -
                 }
             }
         }
+        MenuShot::Pause { live: true, .. } => {}
         _ => paint_stage(&mut rgb, frame.width, frame.height, content, &content.crate_reveal.layout),
     }
     let hits = match shot {
         MenuShot::Title { focus, notice, native_quit } => paint_title(&mut rgb, content, frame, *focus, *notice, *native_quit),
         MenuShot::Heroes { focus } => paint_heroes(&mut rgb, content, frame, *focus),
         MenuShot::Difficulty { focus, hero_id, notice } => paint_difficulty(&mut rgb, content, frame, *focus, hero_id, *notice),
-        MenuShot::Pause { focus, hero_id } => paint_pause(&mut rgb, content, frame, *focus, hero_id),
+        MenuShot::Pause { focus, hero_id, .. } => paint_pause(&mut rgb, content, frame, *focus, hero_id),
         MenuShot::Settings { focus, hero_id, prefs, notice } => paint_settings(&mut rgb, content, frame, *focus, hero_id, prefs, *notice),
         MenuShot::Results { focus, victory, waves, kills, seconds, currency } => {
             paint_results(&mut rgb, content, frame, *focus, *victory, *waves, *kills, *seconds, *currency)
         }
-        MenuShot::Crates { focus, rarity, failed, can_pull } => {
-            paint_crates(&mut rgb, content, frame, *focus, rarity.as_deref(), *failed, *can_pull)
+        MenuShot::Crates { focus, rarity, failed, can_pull, reason } => {
+            paint_crates(&mut rgb, content, frame, *focus, rarity.as_deref(), *failed, *can_pull, reason)
         }
         MenuShot::ClickToPlay => paint_click(&mut rgb, content, frame),
     };
@@ -245,9 +246,8 @@ fn paint_pause(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, he
     let x = (frame.width as i32 - pw) / 2;
     let y = (frame.height as i32 - ph) / 2;
     let hero = if hero_id.is_empty() { None } else { Some(hero_id) };
-    rect(rgb, frame.width, frame.height, x, y, pw, ph, accent(content, hero));
-    let inset = frame.px(ui.layout.border_px).max(ui.layout.inset_min.round() as i32);
-    rect(rgb, frame.width, frame.height, x + inset, y + inset, pw - inset * 2, ph - inset * 2, palette(content, &ui.colors.panel));
+    let panel = bevel_of(content, frame, ui.layout.panel_radius, accent(content, hero));
+    beveled(rgb, frame.width, frame.height, x, y, pw, ph, &panel);
     let labels = [("resume", ui.copy.resume.as_str()), ("settings", ui.copy.settings.as_str()), ("quit_to_menu", ui.copy.quit_to_menu.as_str())];
     let button_h = frame.px(ui.layout.button_height);
     let gap = frame.px(ui.layout.row_gap);
@@ -255,7 +255,8 @@ fn paint_pause(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, he
     let mut by = y + (ph - stack) / 2;
     let mut hits = Vec::new();
     for (index, (id, label)) in labels.iter().enumerate() {
-        let hit = button_at(rgb, content, frame, x + (pw - frame.px(ui.layout.button_width)) / 2, by, label, index == focus, hero);
+        let edge = if index == focus { accent(content, hero) } else { palette(content, &ui.colors.dim) };
+        let hit = pause_button(rgb, content, frame, x + (pw - frame.px(ui.layout.button_width)) / 2, by, label, edge);
         by = hit.y + hit.h + gap;
         hits.push(Hit { id: (*id).into(), ..hit });
     }
@@ -334,7 +335,7 @@ fn paint_results(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, 
     hits
 }
 
-fn paint_crates(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, rarity: Option<&str>, failed: bool, can_pull: bool) -> Vec<Hit> {
+fn paint_crates(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, rarity: Option<&str>, failed: bool, can_pull: bool, reason: &str) -> Vec<Hit> {
     let ui = &content.ui;
     draw_title(rgb, content, frame, &ui.copy.crates_title);
     let rows = content.crate_reveal.layout.glyph_rows;
@@ -344,6 +345,8 @@ fn paint_crates(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, r
     let paper = palette(content, &ui.colors.text);
     let line = if let Some(rarity) = rarity {
         rarity.to_uppercase()
+    } else if failed && !reason.is_empty() {
+        reason.to_string()
     } else if failed {
         ui.copy.pull_failed.clone()
     } else {
@@ -762,6 +765,80 @@ fn positions_fit(positions: &[[f32; 3]], fov: f32, near: f32, fit: f32) -> bool 
     any
 }
 
+struct Bevel {
+    radius: i32,
+    outline: i32,
+    depth: i32,
+    edge: [u8; 3],
+    light: [u8; 3],
+    shadow: [u8; 3],
+    fill: [u8; 3],
+}
+
+fn bevel_of(content: &Content, frame: Frame, radius: f32, edge: [u8; 3]) -> Bevel {
+    let ui = &content.ui;
+    Bevel {
+        radius: frame.px(radius),
+        outline: frame.px(ui.layout.pause_outline_px).max(1),
+        depth: frame.px(ui.layout.bevel_px).max(1),
+        edge,
+        light: palette(content, &ui.colors.bevel_light),
+        shadow: palette(content, &ui.colors.bevel_shadow),
+        fill: palette(content, &ui.colors.panel),
+    }
+}
+
+fn pause_button(rgb: &mut [u8], content: &Content, frame: Frame, x: i32, y: i32, label: &str, edge: [u8; 3]) -> Hit {
+    let w = frame.px(content.ui.layout.button_width);
+    let h = frame.px(content.ui.layout.button_height);
+    let face = bevel_of(content, frame, content.ui.layout.button_radius, edge);
+    beveled(rgb, frame.width, frame.height, x, y, w, h, &face);
+    let glyph = content.crate_reveal.layout.title_glyph_px;
+    let scale = frame.text(content.ui.layout.button_scale);
+    let tw = measure(label, scale, glyph) as i32;
+    let th = (content.crate_reveal.layout.glyph_rows * scale) as i32;
+    blit(rgb, frame.width, frame.height, x + (w - tw) / 2, y + (h - th) / 2, label, palette(content, &content.ui.colors.text), scale, glyph);
+    Hit { id: String::new(), x, y, w, h }
+}
+
+fn beveled(rgb: &mut [u8], width: u32, height: u32, x: i32, y: i32, w: i32, h: i32, face: &Bevel) {
+    if w <= 0 || h <= 0 {
+        return;
+    }
+    let outline = face.outline.max(1);
+    let band = outline + face.depth.max(1);
+    for row in 0..h {
+        for col in 0..w {
+            if !inside_round(col, row, w, h, face.radius) {
+                continue;
+            }
+            let color = if !inside_round(col - outline, row - outline, w - outline * 2, h - outline * 2, face.radius - outline) {
+                face.edge
+            } else if !inside_round(col - band, row - band, w - band * 2, h - band * 2, face.radius - band) {
+                if (col as f32) + (row as f32) < (w as f32 + h as f32) * 0.5 { face.light } else { face.shadow }
+            } else {
+                face.fill
+            };
+            put(rgb, width, height, x + col, y + row, color);
+        }
+    }
+}
+
+fn inside_round(col: i32, row: i32, w: i32, h: i32, radius: i32) -> bool {
+    if w <= 0 || h <= 0 || col < 0 || row < 0 || col >= w || row >= h {
+        return false;
+    }
+    let r = radius.max(0).min(w / 2).min(h / 2);
+    let px = col as f32 + 0.5;
+    let py = row as f32 + 0.5;
+    let rf = r as f32;
+    let cx = px.clamp(rf, w as f32 - rf);
+    let cy = py.clamp(rf, h as f32 - rf);
+    let dx = px - cx;
+    let dy = py - cy;
+    dx * dx + dy * dy <= rf * rf + 1e-3
+}
+
 fn rect(rgb: &mut [u8], width: u32, height: u32, x: i32, y: i32, w: i32, h: i32, color: [u8; 3]) {
     if w <= 0 || h <= 0 {
         return;
@@ -1122,6 +1199,49 @@ mod tests {
         }
         assert!(crate::portrait::build(&content.heroes_visual, "laser_knife").is_none());
         assert!(crate::portrait::build(&content.heroes_visual, "pulse_rifle").is_none());
+    }
+
+    #[test]
+    fn pause_panel_is_rounded_and_coop_keeps_the_frame_clear() {
+        let content = Content::embedded();
+        let hero = content.hero.id.clone();
+        let (solo, hits) = paint_menu(&content, &MenuShot::Pause { focus: 0, hero_id: hero.clone(), live: false }, 1280, 720);
+        let (live, _) = paint_menu(&content, &MenuShot::Pause { focus: 0, hero_id: hero, live: true }, 1280, 720);
+        assert!(hits.iter().any(|hit| hit.id == "resume"));
+        assert!(hits.iter().any(|hit| hit.id == "settings"));
+        assert!(hits.iter().any(|hit| hit.id == "quit_to_menu"));
+        let scale = 720.0 / content.ui.layout.fit_height;
+        let pw = (content.ui.layout.pause_panel_width * scale).round() as i32;
+        let ph = (content.ui.layout.pause_panel_height * scale).round() as i32;
+        let x = (1280 - pw) / 2;
+        let y = (720 - ph) / 2;
+        let outline = bytes(&content, &content.heroes.iter().find(|card| card.id == content.hero.id).unwrap().accent_key);
+        assert_ne!(sample(&solo, 1280, x, y), outline, "the panel corner is rounded off");
+        assert_eq!(sample(&solo, 1280, x + pw / 2, y + 1), outline, "the top edge is the outline");
+        let bevel = bytes(&content, &content.ui.colors.bevel_light);
+        let inset = (content.ui.layout.pause_outline_px * scale).round() as i32 + 1;
+        assert_eq!(sample(&solo, 1280, x + pw / 2, y + inset), bevel, "the top bevel is the lit palette key");
+        assert_eq!(sample(&live, 1280, 0, 0), [0, 0, 0], "co-op pause leaves the backdrop clear");
+        assert_ne!(sample(&solo, 1280, 0, 0), [0, 0, 0], "solo pause keeps a dimmed still");
+        let (failed, _) = paint_menu(
+            &content,
+            &MenuShot::Crates {
+                focus: 0,
+                rarity: None,
+                failed: true,
+                can_pull: true,
+                reason: "NEED 100 CREDITS HAVE 0".into(),
+            },
+            1280,
+            720,
+        );
+        let (generic, _) = paint_menu(
+            &content,
+            &MenuShot::Crates { focus: 0, rarity: None, failed: true, can_pull: true, reason: String::new() },
+            1280,
+            720,
+        );
+        assert_ne!(failed, generic, "a failed pull shows its reason");
     }
 
     fn bytes(content: &Content, key: &str) -> [u8; 3] {

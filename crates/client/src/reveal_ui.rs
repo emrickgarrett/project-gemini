@@ -34,11 +34,17 @@ pub fn tick(
     mut playback: ResMut<RevealPlayback>,
     mut next: ResMut<NextState<AppState>>,
     old: Query<Entity, With<RevealRoot>>,
+    voices: Query<Entity, With<RevealVoice>>,
     prefs: Option<Res<crate::settings::Prefs>>,
 ) {
     let content = Content::embedded();
     let run = &mut playback.0;
     let skip = keys.just_pressed(KeyCode::Space) || mouse.just_pressed(MouseButton::Left);
+    if skip {
+        for entity in &voices {
+            commands.entity(entity).despawn();
+        }
+    }
     let cues = if skip { run.skip() } else { run.advance(time.delta_secs()) };
     let bus = prefs.as_ref().map(|prefs| crate::audio::bus_gain(prefs, false)).unwrap_or(1.0);
     for id in cues {

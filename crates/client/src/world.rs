@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ClearColorConfig, Hdr};
+use bevy::picking::mesh_picking::{MeshPickingCamera, MeshPickingSettings};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::post_process::bloom::Bloom;
 use bevy::prelude::*;
@@ -225,6 +226,12 @@ pub fn scene(
         bank.cast_mats.insert(mesh.id.clone(), mat);
     }
 
+    // Mesh hits are opt-in. The viewmodel camera is not a picking camera, so the
+    // rifle cannot sit above the pause buttons.
+    commands.insert_resource(MeshPickingSettings {
+        require_markers: true,
+        ..default()
+    });
     let vm = gemini_meshes::viewmodel(&content.heroes_visual.glove);
     let offset = content.hero.viewmodel_offset;
     let hands = Transform::from_xyz(offset[0], offset[1], offset[2]);
@@ -234,13 +241,18 @@ pub fn scene(
         unlit: true,
         ..default()
     });
+    // World, then the viewmodel overlay, then UI. The pause buttons are picked
+    // on the UI camera, which has to sort above the rifle.
+    const WORLD_CAMERA_ORDER: isize = 0;
+    const VIEWMODEL_CAMERA_ORDER: isize = WORLD_CAMERA_ORDER + 1;
+    const UI_CAMERA_ORDER: isize = VIEWMODEL_CAMERA_ORDER + 1;
     // The world camera draws layer 0. The overlay camera draws the arms on
     // layer 1 with its own depth buffer, so the rifle cannot clip into the arena.
     let world_cam = commands
         .spawn((
             Camera3d::default(),
             Camera {
-                order: 0,
+                order: WORLD_CAMERA_ORDER,
                 clear_color: ClearColorConfig::Custom(sky_color(content)),
                 ..default()
             },
@@ -254,7 +266,7 @@ pub fn scene(
             ColorGrading::default(),
             arena_fog(content),
             shadow_filter(content),
-            IsDefaultUiCamera,
+            MeshPickingCamera,
             PlayPiece,
         ))
         .id();
@@ -263,7 +275,7 @@ pub fn scene(
             ViewmodelCamera,
             Camera3d::default(),
             Camera {
-                order: 1,
+                order: VIEWMODEL_CAMERA_ORDER,
                 clear_color: ClearColorConfig::None,
                 ..default()
             },
@@ -281,6 +293,16 @@ pub fn scene(
             ChildOf(world_cam),
         ))
         .id();
+    commands.spawn((
+        Camera2d,
+        Camera {
+            order: UI_CAMERA_ORDER,
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
+        IsDefaultUiCamera,
+        PlayPiece,
+    ));
     let layer = RenderLayers::layer(1);
     let gun_id = format!("{}_gun", content.hero.id);
     let gun_mesh = bank.casts.get(&gun_id).cloned().unwrap_or_else(|| panic!("missing {gun_id}"));

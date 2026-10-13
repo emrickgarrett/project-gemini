@@ -1,3 +1,5 @@
+id = "standard"
+
 [rates]   # base rates, published in-game
 common=0.60
 rare=0.30
@@ -14,3 +16,8 @@ legendary_overall_rate = 0.0255  # exact: expected 39.2 pulls per legendary unde
 [cost]
 single = 100
 ten_pull = 1000   # ten-pull shows ten pods
+
+# Dev builds only. The backend grants this when its server-side dev flag is on.
+# It does not change pity, rates, or which tier a pull can land on.
+[dev]
+starting_credits = 5000
