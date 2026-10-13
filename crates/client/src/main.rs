@@ -142,6 +142,7 @@ mod tests {
         ));
         app.init_asset::<Mesh>();
         app.init_asset::<StandardMaterial>();
+        app.init_asset::<bevy::image::Image>();
         app.init_asset::<AudioSource>();
         app.init_resource::<ButtonInput<KeyCode>>();
         app.init_resource::<ButtonInput<MouseButton>>();

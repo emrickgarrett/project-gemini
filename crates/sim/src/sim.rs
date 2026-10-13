@@ -222,7 +222,9 @@ pub struct Enemy {
     pub spawn_count: u32,
     pub spawn_interval: f32,
     pub alive: bool,
-    /// Seconds of pose time. The cannon hitbox walks the tail at this time.
+    /// Seconds of pose time. Nothing in this sim reads it. The rig branch
+    /// (`cursor/rigged-heroes-84b8`) is the one that should drive a cast from
+    /// it, or drop the field if that rig keeps its own clock.
     #[serde(default)]
     pub anim_time: f32,
     #[serde(default)]
@@ -3031,11 +3033,7 @@ fn gather_enemy_hits(
         }
         if let Some(cannon) = &book.hitbox.cannon {
             if crate::bugs::phase_allows(cannon.active_phase, enemy.phase) {
-                let mut placed = cannon.clone();
-                if let Some(center) = crate::bugs::cannon_center(&book.visual, enemy.anim_time) {
-                    placed.offset = center;
-                }
-                if let Some(t) = shape_hit(&placed, enemy, p0, p1, projectile.radius, 1.0) {
+                if let Some(t) = shape_hit(cannon, enemy, p0, p1, projectile.radius, 1.0) {
                     consider(&mut best, t, HitSpot::Tail);
                 }
             }
@@ -3370,5 +3368,108 @@ pub fn launch_pending_shots(sim: &mut Sim, content: &Content) {
     for mut shot in spawned {
         shot.id = sim.alloc_id();
         sim.projectiles.push(shot);
+    }
+}
+
+#[cfg(test)]
+mod frame_time {
+    use super::*;
+
+    /// Counts the live-enemy cap. The test steps the sim six times and checks
+    /// enemies, movement, and a same-seed checksum. It does not read the wall
+    /// clock. Release timing is a one-time measurement of a sim step, not a
+    /// client frame, so it stays out of CI.
+    #[test]
+    fn three_hundred_live_enemies_stay_at_the_cap() {
+        let content = Content::embedded();
+        let cap = content.waves.budget.live_enemy_cap;
+        assert_eq!(cap, 300, "the check is the live-enemy cap");
+        let steps = 6u32;
+        let first = run_capped(&content, cap, steps);
+        let second = run_capped(&content, cap, steps);
+        assert_eq!(first.live, cap as usize, "the director must not add or drop enemies");
+        assert_eq!(second.live, cap as usize);
+        assert_eq!(first.moved, cap as usize, "each of the 300 enemies was stepped");
+        assert_eq!(first.checksum, second.checksum, "the same seed must take the same path");
+        assert!((f64::from(steps) * f64::from(SIM_DT) - f64::from(first.time)).abs() < 1e-4);
+    }
+
+    struct Capped {
+        live: usize,
+        moved: usize,
+        checksum: u64,
+        time: f32,
+    }
+
+    fn run_capped(content: &Content, cap: u32, steps: u32) -> Capped {
+        let mut sim = Sim::new(content, "normal", 7);
+        sim.enemies.clear();
+        sim.director.pool = 0.0;
+        sim.director.parked = true;
+        for i in 0..cap {
+            let x = (i % 20) as f32 * 1.6 - 15.0;
+            let z = (i / 20) as f32 * 1.6 - 10.0;
+            sim.spawn_trash(content, EnemyKind::Swarmer, Vec3::new(x, 0.0, z));
+        }
+        let spawned: Vec<_> = sim.enemies.iter().map(|enemy| enemy.pos).collect();
+        for _ in 0..steps {
+            sim.step(content, PlayerInput::default());
+        }
+        let live = sim.enemies.iter().filter(|enemy| enemy.alive).count();
+        let moved = sim
+            .enemies
+            .iter()
+            .zip(&spawned)
+            .filter(|(enemy, at)| enemy.alive && (enemy.pos.x != at.x || enemy.pos.z != at.z))
+            .count();
+        Capped {
+            live,
+            moved,
+            checksum: positions_checksum(&sim),
+            time: sim.time,
+        }
+    }
+
+    fn positions_checksum(sim: &Sim) -> u64 {
+        let mut sum = 0u64;
+        for enemy in sim.enemies.iter().filter(|enemy| enemy.alive) {
+            sum = sum.wrapping_mul(0x9E37_79B1).wrapping_add(enemy.pos.x.to_bits() as u64);
+            sum = sum.wrapping_mul(0x9E37_79B1).wrapping_add(enemy.pos.z.to_bits() as u64);
+        }
+        sum
+    }
+
+    /// Wall clock for one `Sim::step` with 300 live swarmers.
+    /// That is sim-tick timing. The client target stays 60 fps.
+    /// `cargo test -p gemini-sim --release -- --ignored --nocapture frame_time_release`
+    #[test]
+    #[ignore = "one-time release measurement; CI counts the cap instead"]
+    fn frame_time_release_at_three_hundred_live_enemies() {
+        use std::time::Instant;
+
+        let content = Content::embedded();
+        let cap = content.waves.budget.live_enemy_cap;
+        assert_eq!(cap, 300);
+        let mut sim = Sim::new(&content, "normal", 7);
+        sim.enemies.clear();
+        sim.director.pool = 0.0;
+        sim.director.parked = true;
+        for i in 0..cap {
+            let x = (i % 20) as f32 * 1.6 - 15.0;
+            let z = (i / 20) as f32 * 1.6 - 10.0;
+            sim.spawn_trash(&content, EnemyKind::Swarmer, Vec3::new(x, 0.0, z));
+        }
+        sim.step(&content, PlayerInput::default());
+        let frames = 6u32;
+        let start = Instant::now();
+        for _ in 0..frames {
+            sim.step(&content, PlayerInput::default());
+        }
+        let per_ms = start.elapsed().as_secs_f64() * 1000.0 / f64::from(frames);
+        let step_ms = f64::from(SIM_DT) * 1000.0;
+        eprintln!(
+            "release 300 live enemies: {per_ms:.3} ms wall clock for one sim step (SIM_DT is {step_ms:.3} ms of simulated time, not a client frame)"
+        );
+        assert_eq!(sim.enemies.iter().filter(|enemy| enemy.alive).count(), cap as usize);
     }
 }

@@ -3,6 +3,8 @@
 //! name is missing or does not resolve. Size and the damage multiplier stay
 //! on `hitbox`. The mesh crate is not consulted.
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 
 use crate::content::EnemyKind;
@@ -77,6 +79,11 @@ pub struct BugVisual {
     pub grown_color: String,
     #[serde(default)]
     pub parts: Vec<VisualPart>,
+    /// Named points on the cast, in the fitted hitbox frame. A weak-point
+    /// anchor may name one. The mesh load rejects a center that is not on
+    /// that cast.
+    #[serde(default)]
+    pub points: BTreeMap<String, [f32; 3]>,
     pub anim: VisualAnim,
 }
 
@@ -93,6 +100,9 @@ pub struct VisualPart {
     pub color: String,
     #[serde(default)]
     pub emissive: bool,
+    /// Glow mesh radius. Separate from the hitbox radius. Zero on parts that are not a glow.
+    #[serde(default)]
+    pub visual_radius: f32,
     #[serde(default)]
     pub mirror: bool,
     #[serde(default)]
@@ -162,6 +172,16 @@ pub struct VisualPart {
     /// Radial yaw offset, radians. Pod rings use the same key.
     #[serde(default)]
     pub ring_phase: Option<f32>,
+    /// Pod indices that sit on the cast instead of the ring. Empty on every other part.
+    #[serde(default)]
+    pub seats: Vec<PodSeat>,
+}
+
+/// One pod center snapped onto the cast. The ring still places every other pod.
+#[derive(Clone, Debug, Deserialize)]
+pub struct PodSeat {
+    pub index: u32,
+    pub offset: [f32; 3],
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -247,6 +267,19 @@ impl BugHitbox {
     }
 }
 
+/// A cast point and a visual part are different names. Sharing one would make
+/// the anchor and the glow mesh the same lookup.
+pub fn require_point_names_are_not_parts(book: &BugBook) -> Result<(), String> {
+    for (bug, row) in book.rows() {
+        for name in row.visual.points.keys() {
+            if part_named(&row.visual, name).is_some() {
+                return Err(format!("{bug} \"{name}\" is both a visual point and a part"));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Bake every weak-point center from its visual anchor. A missing or unknown
 /// name is a content error; the authored offset is not a fallback.
 pub fn bind_weak_anchors(book: &mut BugBook) -> Result<(), String> {
@@ -254,6 +287,69 @@ pub fn bind_weak_anchors(book: &mut BugBook) -> Result<(), String> {
         bind_row(bug, row)?;
     }
     Ok(())
+}
+
+/// A glow's place is its weak-point hit center. Eyes are markers, not weak points.
+/// The head is never a glow. A glow with no hit center fails the load.
+pub fn require_glow_hit_centers(book: &BugBook) -> Result<(), String> {
+    for (bug, row) in book.rows() {
+        for part in &row.visual.parts {
+            if part.name == "head" && (part.emissive || part.visual_radius > 0.0) {
+                return Err(format!("{bug} head has no glow"));
+            }
+            if part.visual_radius <= 0.0 || part.name == "eyes" {
+                continue;
+            }
+            if part.name == "pod" {
+                if row.hitbox.pod.is_none() {
+                    return Err(format!("{bug} pod glow has no weak point"));
+                }
+                continue;
+            }
+            let Some(center) = hit_center_named(row, &part.name) else {
+                return Err(format!("{bug} {} glow has no weak point", part.name));
+            };
+            if part.offset != center {
+                return Err(format!(
+                    "{bug} {} glow is not on its hit center",
+                    part.name
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The tail glow is the authored cannon radius. Past `tail_glow_radius`, the load fails.
+pub fn require_tail_glow_radius(book: &BugBook, cap: f32) -> Result<(), String> {
+    if !(cap > 0.0) {
+        return Err("tail glow radius is not positive".into());
+    }
+    for (bug, row) in book.rows() {
+        for part in &row.visual.parts {
+            if part.name == "cannon" && part.visual_radius > cap {
+                return Err(format!(
+                    "{bug} cannon glow radius {:.3} exceeds tail_glow_radius {cap:.3}",
+                    part.visual_radius
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn hit_center_named(row: &BugRow, name: &str) -> Option<[f32; 3]> {
+    for (_, shape) in row.hitbox.anchored() {
+        let hit_name = if !shape.name.is_empty() {
+            shape.name.as_str()
+        } else {
+            shape.anchor.as_str()
+        };
+        if hit_name == name {
+            return Some(shape.offset);
+        }
+    }
+    None
 }
 
 /// Every leg names `layout`. Radial legs also name hip scale, plant scale, and phase.
@@ -432,12 +528,12 @@ fn anchor_name(shape: &ShapeDef) -> Option<&str> {
     }
 }
 
-/// Local center of a visual part. `None` when the part is missing or has no anchor.
+/// Local center of a named cast point or a visual part. `None` when the name is neither.
 pub fn visual_anchor(visual: &BugVisual, name: &str) -> Option<[f32; 3]> {
-    let part = part_named(visual, name)?;
-    if part.at.as_deref() == Some("tail_end") {
-        return tail_end(visual, part);
+    if let Some(point) = visual.points.get(name) {
+        return Some(*point);
     }
+    let part = part_named(visual, name)?;
     // `[0, 0, 0]` is the serde default for an omitted offset, not a placed part.
     if part.offset != [0.0, 0.0, 0.0] {
         return Some(part.offset);
@@ -480,18 +576,33 @@ fn bake_pods(bug: &str, visual: &BugVisual, hitbox: &mut BugHitbox) -> Result<()
     let phase = pod
         .ring_phase
         .ok_or_else(|| format!("{bug} visual pod is missing ring_phase"))?;
+    let mut seen = vec![false; count as usize];
+    for seat in &pod.seats {
+        if seat.index >= count {
+            return Err(format!("{bug} pod seat {} is outside the ring", seat.index));
+        }
+        if seen[seat.index as usize] {
+            return Err(format!("{bug} pod seat {} is duplicated", seat.index));
+        }
+        seen[seat.index as usize] = true;
+    }
     for i in 0..count {
         let a = (i as f32 + phase) / count as f32 * std::f32::consts::TAU + turn;
         let nx = a.cos() * pod.ring_radius;
         let nz = a.sin() * pod.ring_radius;
         let ny = (1.0 - nx * nx - nz * nz).max(floor).sqrt();
-        hitbox.pods.push(PodPlacement {
-            offset: [
-                host.offset[0] + nx * radii[0] * sink,
-                host.offset[1] + ny * radii[1] * sink,
-                host.offset[2] + nz * radii[2] * sink,
-            ],
-        });
+        let ring = [
+            host.offset[0] + nx * radii[0] * sink,
+            host.offset[1] + ny * radii[1] * sink,
+            host.offset[2] + nz * radii[2] * sink,
+        ];
+        let offset = pod
+            .seats
+            .iter()
+            .find(|seat| seat.index == i)
+            .map(|seat| seat.offset)
+            .unwrap_or(ring);
+        hitbox.pods.push(PodPlacement { offset });
     }
     Ok(())
 }
@@ -501,13 +612,14 @@ pub fn resolved_offset(visual: &BugVisual, shape: &ShapeDef) -> Result<[f32; 3],
     let Some(name) = anchor_name(shape) else {
         return Err("weak point has no anchor name".into());
     };
-    visual_anchor(visual, name).ok_or_else(|| format!("anchor \"{name}\" does not resolve to a visual part"))
+    visual_anchor(visual, name).ok_or_else(|| format!("anchor \"{name}\" is not on the cast and does not resolve"))
 }
 
-/// Volume of the glowing part named in the visual table.
-pub fn glow_bounds(visual: &BugVisual, name: &str) -> Option<PartBounds> {
-    let part = part_named(visual, name)?;
-    let center = visual_anchor(visual, name)?;
+/// Volume of the glowing part. `anchor` places the center (a cast point or a
+/// part). `part_name` is the visual part, looked up by name.
+pub fn glow_bounds(visual: &BugVisual, anchor: &str, part_name: &str) -> Option<PartBounds> {
+    let center = visual_anchor(visual, anchor)?;
+    let part = part_named(visual, part_name)?;
     let half = if part.size.is_empty() {
         let host_name = part.on.as_deref().unwrap_or("");
         let host = part_named(visual, host_name)?;
@@ -551,69 +663,3 @@ fn size_extents(size: &[f32]) -> Option<[f32; 3]> {
     }
 }
 
-/// Cannon center for `at = "tail_end"`. Pitch, joint, segment length, gap, and
-/// the segment cap are the tail part's fields. A chain with no cap, scale, or
-/// joint is not an anchor.
-/// Cannon center at `time`, including the tail's sway. Time 0 is the rest pose baked at load.
-pub fn cannon_center(visual: &BugVisual, time: f32) -> Option<[f32; 3]> {
-    let cannon = part_named(visual, "cannon")?;
-    tail_end_at(visual, cannon, time)
-}
-
-fn tail_end(visual: &BugVisual, cannon: &VisualPart) -> Option<[f32; 3]> {
-    tail_end_at(visual, cannon, 0.0)
-}
-
-fn tail_end_at(visual: &BugVisual, cannon: &VisualPart, time: f32) -> Option<[f32; 3]> {
-    let tail = part_named(visual, "tail")?;
-    if tail.segment_cap == 0 || tail.segment_scale <= 0.0 || tail.joint_span <= 0.0 {
-        return None;
-    }
-    let len = tail.size.get(1).copied()?;
-    let count = tail.count.max(1).min(tail.segment_cap);
-    let step = tail.curl_deg.to_radians() / count as f32;
-
-    let mut pos = [0.0_f32, 0.0, 0.0];
-    let mut rot = [0.0_f32, 0.0, 0.0, 1.0];
-    for i in 0..count {
-        let local_pos = if i == 0 {
-            tail.offset
-        } else {
-            [0.0, -len * tail.joint_span, 0.0]
-        };
-        let sway = (time * tail.sway_rate + i as f32 * tail.sway_spread).sin() * tail.sway_amp;
-        let pitch = (if i == 0 { tail.base_pitch } else { step * tail.curl_share }) + sway;
-        pos = add3(pos, rotate_q(rot, local_pos));
-        rot = quat_mul(rot, quat_x(pitch));
-    }
-    let gem_r = cannon.size.first().copied().filter(|r| *r > 0.0)? * 0.5;
-    let along = [0.0, -(len * tail.segment_scale + gem_r + tail.tip_gap), 0.0];
-    Some(add3(pos, rotate_q(rot, along)))
-}
-
-fn add3(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-}
-
-fn quat_x(angle: f32) -> [f32; 4] {
-    let (s, c) = (angle * 0.5).sin_cos();
-    [s, 0.0, 0.0, c]
-}
-
-fn quat_mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
-    let [ax, ay, az, aw] = a;
-    let [bx, by, bz, bw] = b;
-    [
-        aw * bx + ax * bw + ay * bz - az * by,
-        aw * by - ax * bz + ay * bw + az * bx,
-        aw * bz + ax * by - ay * bx + az * bw,
-        aw * bw - ax * bx - ay * by - az * bz,
-    ]
-}
-
-fn rotate_q(q: [f32; 4], v: [f32; 3]) -> [f32; 3] {
-    let qv = [v[0], v[1], v[2], 0.0];
-    let inv = [-q[0], -q[1], -q[2], q[3]];
-    let r = quat_mul(quat_mul(q, qv), inv);
-    [r[0], r[1], r[2]]
-}

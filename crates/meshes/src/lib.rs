@@ -3,6 +3,7 @@
 
 mod arena;
 mod away_still;
+mod cast;
 mod geom;
 mod glyph;
 mod menu_still;
@@ -12,15 +13,21 @@ mod preview;
 mod reveal_still;
 mod visual;
 
+pub use cast::{
+    bake_overdrive_emissive, bake_textures, body_pivot, cast, casts, hero_pieces, hero_placement, load_catalog, model_bytes, muzzle_tip, paint_approved_gun, place_point, read_model_file,
+    CastMesh, PaintCam, Placement,
+};
+
 pub use menu_still::{paint_menu, raster_hero_portrait, Hit, MenuShot, PaintPrefs};
 
 pub use arena::{pieces as arena_pieces, review_ground, ArenaPiece};
 pub use away_still::{paint_away, AwayShot};
 pub use reveal_still::{paint_reveal, reveal_still_is_flat, still_color_stats};
 
-pub use pose::{pose, AnimInput, Pose, Xform};
+pub use pose::{pose, root_motion, AnimInput, Pose, Xform};
 pub use preview::{
-    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_in_arena, raster_rail_edge, raster_top, raster_viewmodel, still,
+    missing_glow_keys, missing_glow_keys_open, painted_pixels, raster, raster_bug, raster_crown, raster_embedded, raster_heroes_at_15m, raster_in_arena, raster_model, raster_rail_edge, raster_top,
+    raster_crowd, raster_viewmodel, still,
     still_open, still_top, ViewmodelFrame,
 };
 pub use visual::{bug, catalog, flat_shaded, EnemyVisual, Gate, Joint, Part, ShotCamera};
@@ -92,8 +99,20 @@ impl Viewmodel {
 }
 
 /// Barrel tip in viewmodel mesh space, before the screen offset from characters.toml.
+/// Vex's muzzle in viewmodel mesh space, before `viewmodel_offset`.
+/// The fitted gun keeps its grip at the origin and its muzzle down -Z.
 pub fn muzzle_local() -> [f32; 3] {
-    [0.03, -0.005, -1.28]
+    let gun = cast("vex_gun");
+    let tip = muzzle_tip(gun);
+    let content = gemini_sim::content::Content::embedded();
+    let spec = content
+        .models
+        .iter()
+        .find(|model| model.id == "vex_gun")
+        .unwrap_or_else(|| panic!("vex_gun has no cast record"));
+    let (s, c) = spec.view_pitch_deg.to_radians().sin_cos();
+    let pitched = [tip[0], c * tip[1] - s * tip[2], s * tip[1] + c * tip[2]];
+    [spec.view[0] + pitched[0], spec.view[1] + pitched[1], spec.view[2] + pitched[2]]
 }
 
 /// Round muzzle glow, centered on the origin. Scale it by the radius from characters.toml.
@@ -410,13 +429,13 @@ mod tests {
     fn anchors_follow_the_visual_table() {
         let sp = bug("spitter");
         let sac = sp.parts.iter().find(|p| p.name == "sac").expect("sac");
-        assert!(near(sac.rest_pos, [0.0, 1.02, -0.02], 0.02), "{:?}", sac.rest_pos);
+        assert!(near(sac.rest_pos, [0.06444810, 0.62343204, -0.29764500], 0.02), "{:?}", sac.rest_pos);
         assert!(sac.emissive);
         let gland = bug("brood_mother").parts.iter().find(|p| p.name == "gland").expect("gland");
-        assert!(near(gland.rest_pos, [0.0, 0.9, 2.0], 0.02));
+        assert!(near(gland.rest_pos, [-0.01607708, 1.45470980, 1.18440960], 0.02));
         assert!(gland.emissive);
         let core = bug("hive_tyrant").parts.iter().find(|p| p.name == "core").expect("core");
-        assert!(near(core.rest_pos, [0.0, 3.4, 1.0], 0.02));
+        assert!(near(core.rest_pos, [-0.03506386, 2.3284526, 0.77563494], 0.02));
         assert!(core.emissive);
         let armor = bug("hive_tyrant").parts.iter().find(|p| p.name == "armor").expect("armor");
         assert!(matches!(armor.gate, Gate::PhaseMax(1)));
@@ -609,7 +628,7 @@ mod tests {
             .iter()
             .map(|p| p[0].abs().max(p[1].abs()).max(p[2].abs()))
             .fold(0.0_f32, f32::max);
-        assert!((rad - 0.575).abs() < 0.05, "pod radius {rad}");
+        assert!((rad - 0.52).abs() < 0.02, "pod radius {rad}");
         let posed = pose(
             brood,
             AnimInput {
@@ -646,14 +665,10 @@ mod tests {
         );
         assert!(charged.xforms[p0].glow > posed.xforms[p0].glow + 1.0);
 
-        let vein = bug("hive_tyrant").parts.iter().find(|p| p.name == "vein0").unwrap();
-        let thick = vein
-            .mesh
-            .positions
-            .iter()
-            .map(|p| (p[0] * p[0] + p[2] * p[2]).sqrt())
-            .fold(0.0_f32, f32::max);
-        assert!(thick < 0.06, "leg spike thickness {thick}");
+        assert!(
+            bug("hive_tyrant").parts.iter().all(|part| !part.name.starts_with("vein")),
+            "hive lime veins are leftover glow geometry, not projectiles"
+        );
     }
 
     #[test]
@@ -700,6 +715,54 @@ mod tests {
         let halo = at(cx + 28, cy);
         assert!(halo[0] > 160 && halo[2] < 160, "soft halo {halo:?}");
         assert!(core[0] as i32 + core[1] as i32 > halo[0] as i32 + halo[1] as i32);
+        // Shots leave the camera along -Z and hit the crosshair. The bore is that axis.
+        let mesh_tip = muzzle_tip(cast("vex_gun"));
+        let radial = (mesh_tip[0] * mesh_tip[0] + mesh_tip[1] * mesh_tip[1]).sqrt();
+        assert!(
+            mesh_tip[2] < -0.2 && radial < mesh_tip[2].abs() * 0.25,
+            "muzzle {mesh_tip:?} is off the shot axis"
+        );
+    }
+
+    /// The pre-swap rifle covered 63563 idle pixels and left the crosshair and the
+    /// lower center empty. The cast gun must not cover more.
+    #[test]
+    fn vex_gun_covers_no_more_screen_than_the_old_rifle() {
+        let hero = &gemini_sim::content::Content::embedded().hero;
+        let frame = ViewmodelFrame {
+            accent: [1.0, 0.45, 0.1, 1.0],
+            offset: hero.viewmodel_offset,
+            fov: hero.viewmodel_fov,
+            overdrive: false,
+            glow_radius: hero.muzzle_flash_radius,
+            glow_core: hero.muzzle_flash_core,
+            glow_falloff: hero.muzzle_flash_falloff,
+            glow_tip_px: hero.muzzle_flash_tip_px,
+            glow_color: [1.0, 0.72, 0.28, 1.0],
+        };
+        let rgb = raster_viewmodel(1280, 720, &frame);
+        let bg = [0x8Au8, 0x8A, 0x8A];
+        let mut covered = 0usize;
+        let mut cross = 0usize;
+        let mut lower = 0usize;
+        for y in 0..720u32 {
+            for x in 0..1280u32 {
+                let i = ((y * 1280 + x) * 3) as usize;
+                if rgb[i..i + 3] == bg {
+                    continue;
+                }
+                covered += 1;
+                if (x as i32 - 640).abs() <= 24 && (y as i32 - 360).abs() <= 24 {
+                    cross += 1;
+                }
+                if (448..832).contains(&x) && y >= 432 {
+                    lower += 1;
+                }
+            }
+        }
+        assert!(covered <= 63_563, "idle coverage {covered} px exceeds the old rifle");
+        assert_eq!(cross, 0, "crosshair is covered");
+        assert_eq!(lower, 0, "lower center is covered");
     }
 
     #[test]
@@ -854,6 +917,23 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Wall clock for one software raster of 300 swarmers. That is the headless
+    /// stand-in for a client frame. It is not run in CI.
+    /// `cargo test -p gemini-meshes --release -- --ignored --nocapture crowd_frame`
+    #[test]
+    #[ignore = "one-time release measurement of a software frame with 300 bugs"]
+    fn crowd_frame_time_release_at_three_hundred_bugs() {
+        use std::time::Instant;
+        let cap = gemini_sim::content::Content::embedded().waves.budget.live_enemy_cap as usize;
+        assert_eq!(cap, 300);
+        let start = Instant::now();
+        let rgb = raster_crowd(cap, 960, 540);
+        let ms = start.elapsed().as_secs_f64() * 1000.0;
+        let painted = painted_pixels(&rgb);
+        eprintln!("release software frame, 300 swarmers, 960x540: {ms:.1} ms, {painted} painted px");
+        assert!(painted > 1000, "the crowd frame is blank ({painted} px)");
     }
 
     fn mesh_radius(mesh: &MeshData) -> f32 {

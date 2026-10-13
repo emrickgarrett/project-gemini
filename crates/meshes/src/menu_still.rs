@@ -5,7 +5,6 @@ use gemini_sim::content::{format_fixed, Content};
 
 use crate::away_still::paint_arena;
 use crate::glyph::{blit, measure};
-use crate::preview::raster_parts;
 use crate::reveal_still::paint_stage;
 
 #[derive(Clone, Debug)]
@@ -615,6 +614,9 @@ fn paint_portrait(rgb: &mut [u8], content: &Content, frame: Frame, hero: &gemini
                     away.away_desaturation,
                     content.ui.layout.locked_body_desaturation,
                     away.dim_floor,
+                    content.ui.layout.locked_accent_chroma,
+                    content.ui.layout.locked_accent_value,
+                    content.ui.layout.locked_hue_window,
                 );
             }
             put(rgb, frame.width, frame.height, dx + col, dy + row, px);
@@ -677,20 +679,58 @@ pub fn raster_hero_portrait(content: &Content, hero_id: &str, raster: u32) -> Ve
 }
 
 fn portrait_raster(content: &Content, hero: &gemini_sim::content::HeroCard, raster: u32) -> Vec<u8> {
-    let built = crate::portrait::build(&content.heroes_visual, &hero.portrait.mesh)
-        .unwrap_or_else(|| panic!("unknown portrait mesh {}", hero.portrait.mesh));
-    let turned = crate::portrait::turn(&built, hero.portrait.yaw_deg, hero.portrait.pitch_deg);
-    let positions: Vec<[f32; 3]> = turned.iter().flat_map(|part| part.mesh.positions.iter().copied()).collect();
-    let fov = mesh_fov(content, &positions, hero.portrait.fit);
-    let parts: Vec<(crate::MeshData, [f32; 4], bool)> = turned
+    let pieces = crate::hero_pieces(&hero.id);
+    let pivot = crate::body_pivot(content, &hero.id);
+    let body = content
+        .models
         .iter()
-        .map(|part| {
-            let key = if part.palette == "accent" { hero.accent_key.as_str() } else { part.palette.as_str() };
-            let c = content.palette.key(key);
-            (part.mesh.clone(), [c[0], c[1], c[2], 1.0], part.glow)
-        })
+        .find(|model| model.id == format!("{}_body", hero.id))
+        .unwrap_or_else(|| panic!("missing cast {}", hero.id));
+    let mut positions = Vec::new();
+    let places: Vec<crate::Placement> = pieces
+        .iter()
+        .map(|mesh| crate::hero_placement(content, mesh, body.at, pivot, hero.portrait.yaw_deg, hero.portrait.pitch_deg))
         .collect();
-    raster_parts(raster, raster, &parts, fov)
+    for (mesh, place) in pieces.iter().zip(places.iter()) {
+        for p in &mesh.positions {
+            positions.push(crate::place_point(*p, place));
+        }
+    }
+    let fov = mesh_fov(content, &positions, hero.portrait.fit);
+    let w = raster.max(8);
+    let h = raster.max(8);
+    let bg = portrait_bg(content);
+    let mut color = Vec::with_capacity((w * h * 3) as usize);
+    for _ in 0..(w * h) {
+        color.extend_from_slice(&bg);
+    }
+    let mut depth = vec![f32::INFINITY; (w * h) as usize];
+    let fov_rad = fov.to_radians();
+    let cam = crate::PaintCam {
+        eye: [0.0, 0.0, 0.0],
+        right: [1.0, 0.0, 0.0],
+        up: [0.0, 1.0, 0.0],
+        forward: [0.0, 0.0, -1.0],
+        focal: 1.0 / (fov_rad * 0.5).tan(),
+        aspect: w as f32 / h as f32,
+        w,
+        h,
+        key: [0.0_f32, 0.92, 0.28],
+        fill: [0.55, 0.35, -0.45],
+    };
+    let key = norm3(cam.key);
+    let fill = norm3(cam.fill);
+    let cam = crate::PaintCam { key, fill, ..cam };
+    let palette = |name: &str| content.palette.key(name);
+    for (mesh, place) in pieces.iter().zip(places.into_iter()) {
+        crate::cast::paint(&mut color, &mut depth, mesh, place, &palette, &cam, false);
+    }
+    color
+}
+
+fn norm3(v: [f32; 3]) -> [f32; 3] {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
+    [v[0] / len, v[1] / len, v[2] / len]
 }
 
 fn mesh_fov(content: &Content, positions: &[[f32; 3]], fit: f32) -> f32 {
@@ -771,8 +811,50 @@ fn gray(px: [u8; 3]) -> [u8; 3] {
     [y, y, y]
 }
 
-fn locked_pixel(px: [u8; 3], accent: [u8; 3], mix: f32, dim: f32, accent_desat: f32, body_desat: f32, floor: f32) -> [u8; 3] {
-    let accent_px = px == accent;
+fn hue_deg(px: [u8; 3], chroma_floor: f32, value_floor: f32) -> Option<f32> {
+    let r = px[0] as f32;
+    let g = px[1] as f32;
+    let b = px[2] as f32;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let chroma = max - min;
+    if chroma < chroma_floor || max < value_floor {
+        return None;
+    }
+    let h = if max == r {
+        60.0 * ((g - b) / chroma)
+    } else if max == g {
+        60.0 * ((b - r) / chroma + 2.0)
+    } else {
+        60.0 * ((r - g) / chroma + 4.0)
+    };
+    Some(if h < 0.0 { h + 360.0 } else { h })
+}
+
+fn near_accent(px: [u8; 3], accent: [u8; 3], chroma_floor: f32, value_floor: f32, window: f32) -> bool {
+    let (Some(h), Some(a)) = (hue_deg(px, chroma_floor, value_floor), hue_deg(accent, chroma_floor, value_floor)) else {
+        return false;
+    };
+    let mut d = (h - a).abs();
+    if d > 180.0 {
+        d = 360.0 - d;
+    }
+    d <= window
+}
+
+fn locked_pixel(
+    px: [u8; 3],
+    accent: [u8; 3],
+    mix: f32,
+    dim: f32,
+    accent_desat: f32,
+    body_desat: f32,
+    floor: f32,
+    chroma_floor: f32,
+    value_floor: f32,
+    window: f32,
+) -> [u8; 3] {
+    let accent_px = near_accent(px, accent, chroma_floor, value_floor, window);
     let desat = if accent_px { accent_desat } else { body_desat };
     let body = crate::away_still::grade(px[0], px[1], px[2], dim, desat, floor);
     if accent_px { lift(body, accent, mix) } else { body }
@@ -939,17 +1021,14 @@ mod tests {
                 }
             }
         }
-        let content = Content::embedded();
-        let panel = bytes(&content, &content.ui.colors.panel);
-        let (rgb, hits) = paint_menu(&content, &MenuShot::Heroes { focus: 0 }, 1280, 720);
-        for hit in hits.iter().filter(|hit| hit.id.starts_with("hero:") && hit.id != "hero:vex") {
+        let mut locked = Content::embedded();
+        for hero in &mut locked.heroes {
+            hero.owned = false;
+        }
+        let panel = bytes(&locked, &content.ui.colors.panel);
+        let (rgb, hits) = paint_menu(&locked, &MenuShot::Heroes { focus: 0 }, 1280, 720);
+        for hit in hits.iter().filter(|hit| hit.id.starts_with("hero:")) {
             let id = hit.id.trim_start_matches("hero:");
-            let hero = content.heroes.iter().find(|hero| hero.id == id).unwrap();
-            let accent = round_bytes(&content, &hero.accent_key);
-            let away = &content.presentation.hud.away;
-            let graded = crate::away_still::grade(accent[0], accent[1], accent[2], away.away_dim, away.away_desaturation, away.dim_floor);
-            let mixed = lift(graded, accent, content.ui.layout.locked_accent_mix);
-            let mut glow = 0u32;
             let mut colored = 0u32;
             let inset = ((content.ui.layout.border_px * (720.0 / content.ui.layout.fit_height)).round() as i32).max(1);
             let top = hit.y + inset;
@@ -960,15 +1039,12 @@ mod tests {
                     if px == panel {
                         continue;
                     }
-                    if px == mixed {
-                        glow += 1;
-                    } else if px[0] != px[1] || px[1] != px[2] {
+                    if px[0] != px[1] || px[1] != px[2] {
                         colored += 1;
                     }
                 }
             }
-            assert!(glow > 8, "{id} keeps a mixed accent glow");
-            assert_eq!(colored, 0, "{id} locked portrait is grayscale aside from the accent mix");
+            assert!(colored > 8, "{id} locked portrait keeps {colored} accent pixels");
         }
     }
 
@@ -1046,11 +1122,6 @@ mod tests {
         }
         assert!(crate::portrait::build(&content.heroes_visual, "laser_knife").is_none());
         assert!(crate::portrait::build(&content.heroes_visual, "pulse_rifle").is_none());
-    }
-
-    fn round_bytes(content: &Content, key: &str) -> [u8; 3] {
-        let c = content.palette.key(key);
-        [(c[0] * 255.0).round() as u8, (c[1] * 255.0).round() as u8, (c[2] * 255.0).round() as u8]
     }
 
     fn bytes(content: &Content, key: &str) -> [u8; 3] {

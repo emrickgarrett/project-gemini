@@ -150,3 +150,272 @@ thumb_sides = 8
 thumb_at = [0.07, -0.02, -0.02]
 thumb_pitch = 0.85
 thumb_yaw = 0.9
+
+# Meshy static casts. `file` is under assets/. The load hashes the embedded glb.
+# An unknown id, or a hash that is not the one in content, fails the load.
+# Bodies are the final_rig meshes with skin, joints, and clips removed. UVs and
+# positions are the rigged primitive. The rigged files stay off this branch.
+# Guns and the shield set `grip_root`. The glb must carry that node. There is
+# no +X butt fallback. `triangles` and `bytes` are the budgets. Body files stay
+# inside 1_100_000 bytes. `size` is the fitted height or gun length.
+# `at` places a body in front of the portrait camera, or a weapon's grip on that body.
+# `view` is the grip in viewmodel space, before characters.toml viewmodel_offset.
+# A grip-rooted gun keeps the rig grip at the origin. `yaw_deg` turns the
+# rig muzzle (+Z) onto the shot axis. Guns use 180 so the muzzle lands on -Z.
+# Brakk's shield grip is the handle.
+# Colors are palette.toml keys. Empty `rim` means no rim light.
+# `primary` `secondary` `accent` `fourth` are mask R G B A. They are not the UI
+# `hero_<id>` keys. Empty `accent` or `fourth` means that channel has no weight.
+# `shade` is the sRGB grayscale map. Channel rows do not carry `glow`; the tint
+# does not read it. Bug rows still do. Emissive is a palette field, not this key.
+# vex_body, vex_gun, and swarmer are in the handoff. Their task JSON was not,
+# so `task` is empty and the source line records Meshy from Gorkasso's concepts.
+
+[[model]]
+id = "vex_body"
+file = "models/vex_body.glb"
+sha256 = "c2c36be51fa436f638d85ddca43b7a1a991205618e34e297560a3795fe1e111b"
+mask = "masks/vex_body_mask_rgba.png"
+shade = "masks/vex_body_shade.png"
+triangles = 14000
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = ""
+base = "hero_vex_primary"
+primary = "hero_vex_primary"
+secondary = "hero_vex_secondary"
+accent = "hero_vex_accent"
+fourth = "hero_vex_glow"
+rim = ""
+fit = "hero"
+grip_root = false
+size = 1.84
+yaw_deg = 0.0
+at = [0.0, -0.92, -3.20]
+grip = [0.0, 0.0, 0.0]
+view = [0.0, 0.0, 0.0]
+
+[[model]]
+id = "vex_gun"
+hero = "vex"
+file = "models/vex_gun.glb"
+sha256 = "9dcc4e3425301804820e7ebb7588b7d2425b42d3b15e3347bdadb20fd7e56510"
+mask = "masks/vex_gun_mask_rgba.png"
+shade = "masks/vex_gun_shade.png"
+triangles = 3400
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = ""
+base = "gear_vex_gun_primary"
+primary = "gear_vex_gun_primary"
+secondary = "gear_vex_gun_secondary"
+accent = "gear_vex_gun_accent"
+fourth = ""
+stock_uv = [0.1787, 0.7822]
+stock_channel = "secondary"
+rail_uv = [0.8213, 0.2041]
+rail_channel = "secondary"
+rim = ""
+fit = "weapon"
+grip_root = true
+size = 0.78
+yaw_deg = 180.0
+at = [0.34, 1.08, 0.26]
+grip = [1.0, 0.0, 0.0]
+view = [0.10, 0.00, -0.32]
+view_pitch_deg = 12.0
+
+[[model]]
+id = "nyra_body"
+file = "models/nyra_body.glb"
+sha256 = "007e0a1334f06918f10ca8ef31e1e5d992a7db5483cc4ca4399fac01a8b34274"
+mask = "masks/nyra_body_mask_rgba.png"
+shade = "masks/nyra_body_shade.png"
+triangles = 14000
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-0793-7293-ba7e-cf21b38cc17a"
+base = "hero_nyra_primary"
+primary = "hero_nyra_primary"
+secondary = "hero_nyra_secondary"
+accent = "hero_nyra_accent"
+fourth = "hero_nyra_glow"
+rim = ""
+fit = "hero"
+grip_root = false
+size = 1.74
+yaw_deg = 0.0
+at = [0.0, -0.87, -3.15]
+grip = [0.0, 0.0, 0.0]
+view = [0.0, 0.0, 0.0]
+
+[[model]]
+id = "nyra_gun"
+hero = "nyra"
+file = "models/nyra_gun.glb"
+sha256 = "9ae235dd5e707cc5542858b7b68be8c60d8dbb5beb0afa19dfa4c50b0e1cd5e0"
+mask = "masks/nyra_gun_mask_rgba.png"
+shade = "masks/nyra_gun_shade.png"
+triangles = 3400
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-07ac-73d3-9c70-26a0d522c443"
+base = "gear_nyra_gun_primary"
+primary = "gear_nyra_gun_primary"
+secondary = "gear_nyra_gun_secondary"
+accent = "gear_nyra_gun_accent"
+fourth = "gear_nyra_gun_glow"
+stock_uv = [0.3018, 0.4209]
+stock_channel = "primary"
+rail_uv = [0.4170, 0.4346]
+rail_channel = "primary"
+rim = ""
+fit = "weapon"
+grip_root = true
+size = 0.72
+yaw_deg = 180.0
+at = [0.26, 1.02, 0.22]
+grip = [1.0, 0.0, 0.0]
+view = [0.08, -0.04, -0.20]
+view_pitch_deg = 0.0
+
+[[model]]
+id = "brakk_body"
+file = "models/brakk_body.glb"
+sha256 = "a82ac46954bcf6c096a388c12704f16412c58d42e6a39789c7c4b9eebd549fd0"
+mask = "masks/brakk_body_mask_rgba.png"
+shade = "masks/brakk_body_shade.png"
+triangles = 14000
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-07c4-7020-aa98-9b0149cdc711"
+base = "hero_brakk_primary"
+primary = "hero_brakk_primary"
+secondary = "hero_brakk_secondary"
+accent = "hero_brakk_accent"
+fourth = "hero_brakk_glow"
+rim = ""
+fit = "hero"
+grip_root = false
+size = 1.96
+yaw_deg = 0.0
+at = [0.0, -0.98, -3.55]
+grip = [0.0, 0.0, 0.0]
+view = [0.0, 0.0, 0.0]
+
+[[model]]
+id = "brakk_gun"
+hero = "brakk"
+file = "models/brakk_gun.glb"
+sha256 = "7d5dd3112b8c7d122c62b54091601bdb4a04523b7122bb481bd6863e9e19ffe4"
+mask = "masks/brakk_gun_mask_rgba.png"
+shade = "masks/brakk_gun_shade.png"
+triangles = 3400
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-07f6-7500-94c6-71ba5b485607"
+base = "gear_brakk_gun_primary"
+primary = "gear_brakk_gun_primary"
+secondary = "gear_brakk_gun_secondary"
+accent = ""
+fourth = "gear_brakk_gun_glow"
+stock_uv = [0.8018, 0.8545]
+stock_channel = "secondary"
+rail_uv = [0.7139, 0.1514]
+rail_channel = "secondary"
+rim = ""
+fit = "weapon"
+grip_root = true
+size = 0.82
+yaw_deg = 180.0
+at = [0.46, 1.08, 0.28]
+grip = [1.0, 0.0, 0.0]
+view = [0.12, -0.06, -0.24]
+view_pitch_deg = 0.0
+
+[[model]]
+id = "brakk_shield"
+file = "models/brakk_shield.glb"
+sha256 = "fa06b6ea73b01b16b37a7d58f7acd08a10e516b7de3b5be51f01904ec0a1aa9e"
+mask = "masks/brakk_shield_mask_rgba.png"
+shade = "masks/brakk_shield_shade.png"
+triangles = 3600
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-0850-7679-b7cb-91f3bedf9043"
+base = "gear_brakk_shield_primary"
+primary = "gear_brakk_shield_primary"
+secondary = "gear_brakk_shield_secondary"
+accent = "gear_brakk_shield_accent"
+fourth = ""
+rim = ""
+fit = "shield"
+grip_root = true
+size = 1.12
+yaw_deg = 0.0
+at = [-0.50, 1.20, 0.18]
+grip = [0.0, 0.0, -0.058]
+view = [0.0, 0.0, 0.0]
+
+[[model]]
+id = "kip_body"
+file = "models/kip_body.glb"
+sha256 = "2562de169c6690e7cf8deefe31da069facd6b5eb9fabf87c6c960ba0bffabe0d"
+mask = "masks/kip_body_mask_rgba.png"
+shade = "masks/kip_body_shade.png"
+triangles = 13000
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-07a4-737d-80be-85f9da7898c6"
+base = "hero_kip_primary"
+primary = "hero_kip_primary"
+secondary = "hero_kip_secondary"
+accent = "hero_kip_accent"
+fourth = "hero_kip_glow"
+rim = ""
+fit = "hero"
+grip_root = false
+size = 1.66
+yaw_deg = 0.0
+at = [0.0, -0.83, -3.10]
+grip = [0.0, 0.0, 0.0]
+view = [0.0, 0.0, 0.0]
+
+[[model]]
+id = "kip_gun"
+hero = "kip"
+file = "models/kip_gun.glb"
+sha256 = "ba5d64e579fbfc1cd9bc0c97c13fbbd0773d9c1344ddc460550dc513acf722d3"
+mask = "masks/kip_gun_mask_rgba.png"
+shade = "masks/kip_gun_shade.png"
+triangles = 3400
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-07ea-7463-8f9a-8c225f23fcfd"
+base = "gear_kip_gun_primary"
+primary = "gear_kip_gun_primary"
+secondary = "gear_kip_gun_secondary"
+accent = "gear_kip_gun_accent"
+fourth = ""
+stock_uv = [0.4854, 0.7412]
+stock_channel = "primary"
+rail_uv = [0.3193, 0.3955]
+rail_channel = "secondary"
+rim = ""
+fit = "weapon"
+grip_root = true
+size = 0.86
+yaw_deg = 180.0
+at = [0.26, 0.98, 0.20]
+grip = [1.0, 0.0, 0.0]
+view = [0.08, -0.04, -0.22]
+view_pitch_deg = 0.0

@@ -8,7 +8,10 @@ description = "Procedural placeholder meshes. No renderer dependency."
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
 toml = "0.8"
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 gemini-sim = { path = "../sim" }
 
 [dev-dependencies]
@@ -25,3 +28,7 @@ path = "src/bin/heroshot.rs"
 [[bin]]
 name = "menushot"
 path = "src/bin/menushot.rs"
+
+[[bin]]
+name = "castshot"
+path = "src/bin/castshot.rs"

@@ -49,13 +49,52 @@ ui_panel_slate = "#334155"
 reveal_stage = "#120E17"
 reveal_ink = "#1C1820"
 reveal_paper = "#F2F2F2"
+# UI accents only. Casts do not tint with these keys.
 hero_vex = "#F97316"
 hero_nyra = "#7DD3FC"
 hero_brakk = "#DC2626"
 hero_kip = "#FDE047"
+# Spitter rim. The carapace is too dark against arena_sky without it.
+spitter_rim = "#E6D3C2"
 # Brakk's plates. hero_cobalt shades to near-black on a lit facet.
 hero_plate = "#5B8DEF"
 # Menu portrait field. The viewmodel raster treats this grey as empty.
 portrait_field = "#8A8A8A"
 # Host-away sky. reveal_ink scaled by [2, 5, 1] / [7, 12, 2] is these bytes.
 arena_sky = "#080A10"
+
+# Channel colors measured from the Meshy textures (masks_v2).
+# R primary, G secondary, B accent, A fourth color.
+# Emissive is the `emissive` field. A name ending in _glow is not a glow.
+hero_vex_primary = "#127587"
+hero_vex_secondary = "#132848"
+hero_vex_accent = "#F97316"
+hero_vex_glow = "#715439"
+hero_nyra_primary = "#D9DADB"
+hero_nyra_secondary = "#0C4580"
+hero_nyra_accent = "#3C89CF"
+hero_nyra_glow = "#182F4E"
+hero_brakk_primary = "#9A1B28"
+hero_brakk_secondary = "#0F2D49"
+hero_brakk_accent = "#9D1C29"
+hero_brakk_glow = "#3A1E2F"
+hero_kip_primary = "#124877"
+hero_kip_secondary = "#DDD9D6"
+hero_kip_accent = "#E1AE27"
+hero_kip_glow = "#324145"
+gear_vex_gun_primary = "#262929"
+gear_vex_gun_secondary = "#0C7984"
+gear_vex_gun_accent = "#F18619"
+gear_nyra_gun_primary = "#D9DBDD"
+gear_nyra_gun_secondary = "#0C5898"
+gear_nyra_gun_accent = "#1C93CF"
+gear_nyra_gun_glow = { hex = "#62E3F7", emissive = true }
+gear_brakk_gun_primary = "#191B1B"
+gear_brakk_gun_secondary = "#18496E"
+gear_brakk_gun_glow = { hex = "#39673D", emissive = true }
+gear_kip_gun_primary = "#162D43"
+gear_kip_gun_secondary = "#0C566C"
+gear_kip_gun_accent = "#F3BB3A"
+gear_brakk_shield_primary = "#A51126"
+gear_brakk_shield_secondary = "#163662"
+gear_brakk_shield_accent = "#A71126"

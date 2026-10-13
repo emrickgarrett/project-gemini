@@ -333,6 +333,7 @@ mod vex_reference {
 
     #[test]
     fn vex_fp_stills_stay_near_the_polished_reference() {
+        // Approved stills live in reference/. art/heroes is what heroshot writes.
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../art/heroes/reference");
         let idle_ref = decode_png(&format!("{root}/vex_fp_idle.png"));
         let drive_ref = decode_png(&format!("{root}/vex_fp_overdrive.png"));

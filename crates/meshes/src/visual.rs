@@ -142,6 +142,7 @@ fn sculpt(id: &str, row: &Row) -> Result<EnemyVisual, String> {
     let mut parts = Vec::new();
     let mut shell = None;
     place_parts(&mut parts, id, row, &dens, height, &mut shell)?;
+    place_glows_on_hit_centers(id, &mut parts)?;
 
     let lod_parts = {
         let low = dens_of(&row.visual.lod)?;
@@ -153,6 +154,7 @@ fn sculpt(id: &str, row: &Row) -> Result<EnemyVisual, String> {
             }
             place_one(&mut low_parts, id, spec, &low, &row.visual.parts, height, &mut ignored)?;
         }
+        place_glows_on_hit_centers(id, &mut low_parts)?;
         low_parts
     };
     let mut baked = EnemyVisual {
@@ -209,6 +211,32 @@ fn sculpt(id: &str, row: &Row) -> Result<EnemyVisual, String> {
     Ok(baked)
 }
 
+/// Glow origins are the weak-point hit centers. Eyes stay on their own mark.
+fn place_glows_on_hit_centers(id: &str, parts: &mut [Part]) -> Result<(), String> {
+    let content = gemini_sim::content::Content::embedded();
+    let Some((_, row)) = content.bugs.rows().into_iter().find(|(bug, _)| *bug == id) else {
+        return Err(format!("{id} has no hitbox"));
+    };
+    for (_, shape) in row.hitbox.anchored() {
+        let name = if shape.name.is_empty() {
+            shape.anchor.as_str()
+        } else {
+            shape.name.as_str()
+        };
+        if let Some(part) = parts.iter_mut().find(|part| part.name == name && part.parent.is_none()) {
+            part.rest_pos = shape.offset;
+        }
+    }
+    for (index, place) in row.hitbox.pods.iter().enumerate() {
+        let name = format!("pod{index}");
+        let Some(part) = parts.iter_mut().find(|part| part.name == name) else {
+            return Err(format!("{id} {name} glow has no weak point"));
+        };
+        part.rest_pos = place.offset;
+    }
+    Ok(())
+}
+
 fn place_parts(
     parts: &mut Vec<Part>,
     id: &str,
@@ -250,6 +278,8 @@ fn place_one(
         "decal" => {
             if spec.on.as_deref() == Some("legs") {
                 add_veins(parts, id, spec)?;
+            } else if spec.visual_radius > 0.0 {
+                add_glow_orb(parts, id, spec)?;
             } else {
                 let (anchor, size) = shell.ok_or_else(|| format!("{id} {} decal has no shell", spec.name))?;
                 add_decal(parts, id, spec, dens, anchor, size);
@@ -306,7 +336,7 @@ fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cat
     match spec.part.as_str() {
         "pod" | "bud" => return add_sac_orbs(parts, id, spec, dens, catalog),
         "crown" => return add_crown(parts, id, spec, dens),
-        "cannon" => return add_cannon(parts, id, spec, dens, catalog),
+        "cannon" => return add_cannon(parts, id, spec, dens),
         _ => {}
     }
     let gate = spec.gate();
@@ -344,11 +374,19 @@ fn add_body_part(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cat
         let (mesh, joint) = match spec.part.as_str() {
             // Weak points are clean gems at the authored diameter so they read
             // even when bloom is off. No plates on top of them.
-            "gem" => (
-                gem_mesh([size[0] * 0.5, size[1] * 0.5, size[2] * 0.5], dens),
-                Joint::Sac,
-            ),
-            "eyes" => (gem_mesh([size[0] * 0.5, size[1] * 0.5, size[2] * 0.5], &Dens::small()), Joint::Static),
+            "gem" => {
+                let radii = if spec.emissive {
+                    let r = glow_radius(id, spec)?;
+                    [r, r, r]
+                } else {
+                    [size[0] * 0.5, size[1] * 0.5, size[2] * 0.5]
+                };
+                (gem_mesh(radii, dens), Joint::Sac)
+            }
+            "eyes" => {
+                let r = glow_radius(id, spec)?;
+                (gem_mesh([r, r, r], &Dens::small()), Joint::Static)
+            }
             "shell" => {
                 let rear = req(id, &spec.name, "rear_open", spec.rear_open)?;
                 (dome_shell(&size, dens, rear), Joint::Static)
@@ -794,26 +832,21 @@ fn add_tail(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) -> Resul
     Ok(())
 }
 
-fn add_cannon(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, catalog: &[VPart]) -> Result<(), String> {
-    let tail = catalog.iter().find(|part| part.name == "tail").ok_or_else(|| format!("{id} cannon has no tail part"))?;
-    if tail.segment_scale <= 0.0 {
-        return Err(format!("{id} cannon tail is missing segment_scale"));
-    }
-    let len = tail.size.get(1).copied().filter(|n| *n > 0.0).ok_or_else(|| format!("{id} cannon tail is missing its length"))?;
-    let parent = parts.iter().rposition(|p| p.name.starts_with("tail")).ok_or_else(|| format!("{id} cannon has no tail segments"))?;
-    let rad = spec.size.first().copied().filter(|r| *r > 0.0).ok_or_else(|| format!("{id} cannon is missing its size"))? * 0.5;
-    let tip_gap = tail.tip_gap;
+fn add_cannon(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens) -> Result<(), String> {
+    let rad = glow_radius(id, spec)?;
     let mut mesh = gem_mesh([rad, rad, rad * 0.92], dens);
-    // Barrel continues along the tail (-Y) and sits clear of the last segment's cap.
-    let mut nozzle = point_z(rad * 1.05, rad * 0.55, rad * 0.32, dens.sides.max(5));
+    // The barrel stays inside the glow sphere, so the mesh is no bigger than visual_radius.
+    let tip_r = rad * 0.32;
+    let along = (rad * rad - tip_r * tip_r).max(0.0).sqrt();
+    let barrel = (along * 0.45).max(0.04);
+    let mut nozzle = point_z(barrel, rad * 0.42, tip_r, dens.sides.max(5));
     geom::rotate_x(&mut nozzle, std::f32::consts::FRAC_PI_2);
-    geom::translate(&mut nozzle, [0.0, -(rad + tip_gap), 0.0]);
+    geom::translate(&mut nozzle, [0.0, barrel - along, 0.0]);
     geom::append(&mut mesh, &nozzle);
-    let pos = [0.0, -(len * tail.segment_scale + rad + tip_gap), 0.0];
     parts.push(Part {
         name: "cannon".into(),
-        parent: Some(parent),
-        rest_pos: pos,
+        parent: None,
+        rest_pos: spec.offset,
         rest_euler: [0.0, 0.0, 0.0],
         mesh: Arc::new(mesh),
         palette: spec.color.clone(),
@@ -865,7 +898,12 @@ fn add_sac_orbs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cata
     } else {
         Dens { slices: 6, stacks: 4, ..Dens::small() }
     };
-    let mesh = Arc::new(gem_mesh([size[0] * 0.5, size[1] * 0.5, size[2] * 0.5], &detail));
+    let rad = if spec.emissive {
+        glow_radius(id, spec)?
+    } else {
+        size[0].max(size[1]).max(size[2]) * 0.5
+    };
+    let mesh = Arc::new(gem_mesh([rad, rad, rad], &detail));
     // Same ellipsoid as the sim pod bake: authored host half-extents, not the
     // faceted sac mesh. Pods and buds share that ring and alternate by phase.
     let host_name = spec.on.as_deref().ok_or_else(|| format!("{id} {} is missing on", spec.name))?;
@@ -882,11 +920,17 @@ fn add_sac_orbs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cata
         let nx = a.cos() * ring;
         let nz = a.sin() * ring;
         let ny = (1.0 - nx * nx - nz * nz).max(ny_floor).sqrt();
-        let pos = [
+        let ring = [
             center[0] + nx * radii[0] * sink,
             center[1] + ny * radii[1] * sink,
             center[2] + nz * radii[2] * sink,
         ];
+        let pos = spec
+            .seats
+            .iter()
+            .find(|seat| seat.index == i)
+            .map(|seat| seat.offset)
+            .unwrap_or(ring);
         let name = if nestled { format!("bud{i}") } else { format!("pod{i}") };
         let pod_slot = if nestled { None } else { Some(i) };
         parts.push(Part {
@@ -914,7 +958,7 @@ fn add_sac_orbs(parts: &mut Vec<Part>, id: &str, spec: &VPart, dens: &Dens, cata
         });
         if !nestled {
             let toward = normalize([center[0] - pos[0], center[1] - pos[1], center[2] - pos[2]]);
-            let pod_r = size[0].max(size[1]).max(size[2]) * 0.5;
+            let pod_r = rad;
             parts.push(Part {
                 name: format!("collar{i}"),
                 parent: None,
@@ -1398,6 +1442,50 @@ fn normalize(v: [f32; 3]) -> [f32; 3] {
     [v[0] / len, v[1] / len, v[2] / len]
 }
 
+fn glow_radius(id: &str, spec: &VPart) -> Result<f32, String> {
+    if spec.visual_radius <= 0.0 {
+        return Err(format!("{id} {} glow is missing visual_radius", spec.name));
+    }
+    if spec.part == "cannon" {
+        let cap = gemini_sim::content::Content::embedded().cast.tail_glow_radius;
+        if spec.visual_radius > cap {
+            return Err(format!(
+                "{id} {} glow radius {:.3} exceeds tail_glow_radius {cap:.3}",
+                spec.name, spec.visual_radius
+            ));
+        }
+    }
+    Ok(spec.visual_radius)
+}
+
+fn add_glow_orb(parts: &mut Vec<Part>, id: &str, spec: &VPart) -> Result<(), String> {
+    let r = glow_radius(id, spec)?;
+    parts.push(Part {
+        name: spec.name.clone(),
+        parent: None,
+        rest_pos: spec.offset,
+        rest_euler: [0.0, 0.0, 0.0],
+        mesh: Arc::new(gem_mesh([r, r, r], &Dens::small())),
+        palette: spec.color.clone(),
+        emissive: true,
+        joint: Joint::Static,
+        mesh_key: format!("{id}:{}", spec.name),
+        gate: spec.gate(),
+        foot: None,
+        grows: false,
+        grow_slot: None,
+        pod_slot: None,
+        sway_rate: 0.0,
+        sway_spread: 0.0,
+        sway_amp: 0.0,
+        swing_hz: 0.0,
+        swing_amp: 0.0,
+        grown_scale: 0.0,
+        grown_glow: 0.0,
+    });
+    Ok(())
+}
+
 fn gem_mesh(radii: [f32; 3], dens: &Dens) -> MeshData {
     let mut mesh = MeshData::new();
     geom::gem(&mut mesh, [0.0, 0.0, 0.0], radii, dens.slices, dens.stacks, WHITE);
@@ -1671,6 +1759,9 @@ struct VPart {
     color: String,
     #[serde(default)]
     emissive: bool,
+    /// Sphere radius of a glow. Separate from the hitbox. Zero unless this part is a glow.
+    #[serde(default)]
+    visual_radius: f32,
     #[serde(default)]
     mirror: bool,
     #[serde(default)]
@@ -1770,6 +1861,15 @@ struct VPart {
     spread: Option<Vec<f32>>,
     #[serde(default)]
     crown_pitch: Option<f32>,
+    /// Pod indices that sit on the cast. The ring still places the rest.
+    #[serde(default)]
+    seats: Vec<VSeat>,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+struct VSeat {
+    index: u32,
+    offset: [f32; 3],
 }
 
 impl VPart {

@@ -1,0 +1,74 @@
+# Cast tint and the review orbit. The mesh crate and the client read these.
+# They do not keep a second copy of the numbers.
+#
+# Bug masks stay binary. Red is the accent palette key. Green is the glow key.
+# An empty bug texel is the base palette key, shaded by the glb's grayscale base.
+# Heroes, guns, and the shield use a four-channel mask and an sRGB shade map.
+# In linear color, albedo = (shade / shade_mid_lin) * sum(weight * palette).
+# `shade_mid_lin` is that divisor. The painter reads it from here.
+# Hero shade PNGs are sRGB, so the painter gamma-decodes them first. A bug's
+# embedded base already stores the linear factor (its byte fraction sits on
+# `shade_mid_lin`). Decoding that again crushes the body to black.
+# `hitbox_fill` is how close each cast axis must sit to its body hitbox.
+# The fit scales from that hitbox. It does not keep a second size in code.
+# `axis_scale_limit` is the max allowed max(axis scale) / min(axis scale) on
+# the unscaled mesh. The fit checks that ratio before it stretches any vertex.
+# `hit_surface_gap` is how far a glow center may sit from the cast, in meters.
+# 0.05 is 5 cm. Weak points, pods, and every other emissive part use this bar.
+# A center past it fails the load.
+# `tail_glow_radius` is the tyrant tail glow. The cannon authors this radius.
+# A glow radius past it fails the load. There is no silent clamp. It stays
+# under the cannon hit radius and is still readable at 15 m.
+# `min_island_coverage` is the smallest share of a UV island whose mask channel
+# matches the face that covers it. A channel mask under this fails the load.
+# `rim_strength` scales the rim on an unmasked bug texel when a model has a rim key.
+# `rim_fill` is the facing share of that rim. The fresnel takes the rest at the silhouette.
+# Overdrive lights one mask channel on the equipped gun. `overdrive_emissive_channel`
+# is `primary`, `secondary`, `accent`, or `fourth`. The trim brightens toward `hero_<id>`.
+# `overdrive_emissive_gain` is the factor on `hero_<id>`. The client uses it as the
+# HDR emissive color. The still clamps the same product into the display.
+# Brood pod emissive is `pod_glow_key` times `pod_glow_base + glow * pod_glow_per_glow`.
+# A glow disc is `(1 - t^glow_falloff) * (1 - glow_show_through * t^glow_falloff)`.
+# `t` is 0 at the center and 1 at the rim. The core stays the palette color.
+# `glow_core_perp` and `glow_core_depth` pull that core in front of an overhang.
+# `needle_extent` and `needle_area` are the sliver test. The painter reads them
+# from here. It does not keep a second copy of those numbers.
+# The review orbit is the camera from the approved side_<id>.png sheets
+# (distance is radii, vertical field of view in degrees).
+
+shade_mid_lin = 0.2623
+# Each fitted axis is within this fraction of the body hitbox. 0.02 rejects
+# a cast that only fills about half the box.
+hitbox_fill = 0.02
+# Spitter is the most stretched shipped cast, about 2.01. A thinner mesh fails.
+axis_scale_limit = 2.15
+# Tyrant tail tip. The cannon hit radius stays 0.83. The authored visual
+# radius is this number. A larger one fails the load.
+tail_glow_radius = 0.40
+# Guns and the shield. Each UV island has to agree with its faces at this rate.
+min_island_coverage = 0.98
+# 5 cm. A glow center farther from the cast than this fails the load.
+hit_surface_gap = 0.05
+rim_strength = 1.0
+rim_fill = 0.30
+overdrive_emissive_channel = "accent"
+overdrive_emissive_gain = [5.0, 2.2, 0.4]
+pod_glow_key = "swarmer_glow"
+pod_glow_base = 2.8
+pod_glow_per_glow = 1.7
+glow_falloff = 2.0
+glow_show_through = 0.45
+# A glow core whose radial distance is under `glow_core_perp` is pulled forward
+# so a shell does not hide the palette texel. It never lands closer than
+# `glow_core_depth`.
+glow_core_perp = 0.25
+glow_core_depth = 0.05
+# A needle's longest edge is more than `needle_extent` times the model extent,
+# and its area over longest-edge squared is under `needle_area`. Those triangles
+# are dropped. The mesh test reads these two numbers.
+needle_extent = 0.12
+needle_area = 0.02
+review_yaw_deg = -24.0
+review_elev_deg = 20.0
+review_distance = 3.2
+review_fov_deg = 40.0

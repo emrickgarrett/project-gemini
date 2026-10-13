@@ -1,0 +1,116 @@
+# Meshy bug casts. Hitboxes and weak points stay in bugs.toml.
+# `file` is under assets/. A missing or unknown file fails at load.
+# `triangles` and `bytes` are the budgets. `fit = "hitbox"` scales the mesh
+# into that bug's body hitbox. Colors are palette.toml keys.
+# Red in the mask uses `accent`. Green uses `glow` (acid, emissive).
+# The brute mask has no red. Its crack color was a scatter of specks; the crack is the emissive part.
+
+[[model]]
+id = "swarmer"
+file = "models/swarmer.glb"
+sha256 = "b1cb949ed55dc3dd5ce0a5a0e8d828867efabcbdc5f6739bf7c184975681c3ea"
+mask = "masks/swarmer_mask.png"
+triangles = 7200
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = ""
+base = "swarmer_amber"
+accent = "spitter_glow"
+glow = "swarmer_glow"
+rim = ""
+fit = "hitbox"
+grip_root = false
+size = 0.0
+yaw_deg = 0.0
+at = [0.0, 0.0, 0.0]
+grip = [0.0, 0.0, 0.0]
+view = [0.0, 0.0, 0.0]
+
+[[model]]
+id = "spitter"
+file = "models/spitter.glb"
+sha256 = "c3ab090267e0ee4e522d19dd2eb1a231fbb1d7c3b36169ee16c10008a308070f"
+mask = "masks/spitter_mask.png"
+triangles = 8000
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-07b4-77f7-92d7-6b273530504d"
+base = "spitter_carapace"
+accent = "spitter_glow"
+glow = "swarmer_glow"
+rim = "spitter_rim"
+fit = "hitbox"
+grip_root = false
+size = 0.0
+yaw_deg = 0.0
+at = [0.0, 0.0, 0.0]
+grip = [0.0, 0.0, 0.0]
+view = [0.0, 0.0, 0.0]
+
+[[model]]
+id = "brute"
+file = "models/brute.glb"
+sha256 = "f55c8ccaf85f8a49ddc96c6d16de4215ed769d8b508d390de5a400851c11a528"
+mask = "masks/brute_mask.png"
+triangles = 16500
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-0821-7782-a83c-d920709db581"
+base = "brute_amber"
+accent = "brute_cracks"
+glow = "swarmer_glow"
+rim = ""
+fit = "hitbox"
+grip_root = false
+size = 0.0
+yaw_deg = 0.0
+at = [0.0, 0.0, 0.0]
+grip = [0.0, 0.0, 0.0]
+view = [0.0, 0.0, 0.0]
+
+[[model]]
+id = "brood_mother"
+file = "models/brood_mother.glb"
+sha256 = "98b986694a2f8e422debb93a23c2e5d03ebaafe8bb90bf7e88e21c498f808d03"
+mask = "masks/brood_mother_mask.png"
+triangles = 16000
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-07ff-709c-8474-341c65290b70"
+base = "brood_sac"
+accent = "spitter_glow"
+glow = "swarmer_glow"
+rim = ""
+fit = "hitbox"
+grip_root = false
+size = 0.0
+yaw_deg = 0.0
+at = [0.0, 0.0, 0.0]
+grip = [0.0, 0.0, 0.0]
+view = [0.0, 0.0, 0.0]
+
+[[model]]
+id = "hive_tyrant"
+file = "models/hive_tyrant.glb"
+sha256 = "c1f44e49404248bab70ed99e2d7659f8fca100953bef49e6ea2840526345253c"
+mask = "masks/hive_tyrant_mask.png"
+triangles = 16500
+bytes = 1100000
+source = "Meshy"
+license = "Generated from Gorkasso's concepts"
+task = "01a13151-07ff-709d-8a31-1645d04d96be"
+base = "brute_amber"
+accent = "spitter_glow"
+glow = "swarmer_glow"
+rim = ""
+fit = "hitbox"
+grip_root = false
+size = 0.0
+yaw_deg = 0.0
+at = [0.0, 0.0, 0.0]
+grip = [0.0, 0.0, 0.0]
+view = [0.0, 0.0, 0.0]

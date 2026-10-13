@@ -25,6 +25,178 @@ pub fn still_anim() -> AnimInput {
     }
 }
 
+/// Fitted cast at the side-sheet orbit (`cast.toml` review yaw, elevation, and distance).
+/// Bugs use `arena_sky` so the spitter rim can be checked against it. Feedback parts glow at the hitbox.
+pub fn raster_model(id: &str, width: u32, height: u32) -> Vec<u8> {
+    let content = gemini_sim::content::Content::embedded();
+    let look = &content.cast;
+    let mesh = crate::cast(id);
+    // fit_weapon yaws a gun -90° about Y. The sheet rendered the raw gun, so the camera follows that yaw.
+    let yaw = if mesh.fit == "weapon" {
+        look.review_yaw_deg - 90.0
+    } else {
+        look.review_yaw_deg
+    };
+    let (eye, target) = review_eye(&mesh.positions, yaw, look.review_elev_deg, look.review_distance);
+    if matches!(id, "swarmer" | "spitter" | "brute" | "brood_mother" | "hive_tyrant") {
+        let sky = content.palette.key("arena_sky");
+        let bg = [byte(sky[0]), byte(sky[1]), byte(sky[2])];
+        let palette = |name: &str| content.palette.key(name);
+        return draw_scene(
+            bug(id),
+            &palette,
+            width,
+            height,
+            false,
+            false,
+            Some((eye, target, look.review_fov_deg)),
+            [0.0, 0.0, 0.0],
+            bg,
+            &[],
+        );
+    }
+    let palette = palette_of();
+    draw_model(mesh, &palette, width, height, eye, target, look.review_fov_deg, BG)
+}
+
+/// The same review camera and `sample4` path as `raster_model`, reading the glb
+/// baseColorTexture instead of the mask palette. A coherent gun means the mesh
+/// UVs match that texture. Noise means the mesh or the reader is wrong.
+pub fn raster_embedded(id: &str, width: u32, height: u32) -> Vec<u8> {
+    let content = gemini_sim::content::Content::embedded();
+    let look = &content.cast;
+    let mesh = crate::cast(id);
+    let yaw = if mesh.fit == "weapon" {
+        look.review_yaw_deg - 90.0
+    } else {
+        look.review_yaw_deg
+    };
+    let (eye, target) = review_eye(&mesh.positions, yaw, look.review_elev_deg, look.review_distance);
+    let w = width.max(8);
+    let h = height.max(8);
+    let mut color = Vec::with_capacity((w * h * 3) as usize);
+    for _ in 0..(w * h) {
+        color.extend_from_slice(&BG);
+    }
+    let mut depth = vec![f32::INFINITY; (w * h) as usize];
+    let forward = norm(sub(target, eye));
+    let hint = if forward[1].abs() > 0.92 { [0.0, 0.0, 1.0] } else { [0.0, 1.0, 0.0] };
+    let right = norm(cross(forward, hint));
+    let up = cross(right, forward);
+    let fov = look.review_fov_deg.to_radians();
+    let cam = crate::PaintCam {
+        eye,
+        right,
+        up,
+        forward,
+        focal: 1.0 / (fov * 0.5).tan(),
+        aspect: w as f32 / h as f32,
+        w,
+        h,
+        key: norm([-0.2, 0.92, 0.28]),
+        fill: norm([0.55, 0.35, -0.45]),
+    };
+    let palette = palette_of();
+    crate::cast::paint_embedded_base(
+        &mut color,
+        &mut depth,
+        &mesh,
+        crate::Placement {
+            pre_yaw: 0.0,
+            pre_shift: [0.0, 0.0, 0.0],
+            yaw_deg: 0.0,
+            lean: 0.0,
+            pivot: [0.0, 0.0, 0.0],
+            shift: [0.0, 0.0, 0.0],
+        },
+        &palette,
+        &cam,
+    );
+    color
+}
+
+/// Same orbit as `render.py`: eye sits `distance` radii from the bounds center.
+fn review_eye(positions: &[[f32; 3]], yaw_deg: f32, elev_deg: f32, distance: f32) -> ([f32; 3], [f32; 3]) {
+    let (mn, mx) = mesh_bounds(positions);
+    let center = [(mn[0] + mx[0]) * 0.5, (mn[1] + mx[1]) * 0.5, (mn[2] + mx[2]) * 0.5];
+    let ext = [mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]];
+    let radius = (ext[0] * ext[0] + ext[1] * ext[1] + ext[2] * ext[2]).sqrt() * 0.5;
+    let yaw = yaw_deg.to_radians();
+    let elev = elev_deg.to_radians();
+    let dist = radius.max(0.05) * distance;
+    let eye = [
+        center[0] + dist * yaw.sin() * elev.cos(),
+        center[1] + dist * elev.sin(),
+        center[2] + dist * yaw.cos() * elev.cos(),
+    ];
+    (eye, center)
+}
+
+fn mesh_bounds(positions: &[[f32; 3]]) -> ([f32; 3], [f32; 3]) {
+    let mut mn = [f32::MAX; 3];
+    let mut mx = [f32::MIN; 3];
+    for p in positions {
+        for i in 0..3 {
+            mn[i] = mn[i].min(p[i]);
+            mx[i] = mx[i].max(p[i]);
+        }
+    }
+    (mn, mx)
+}
+
+fn draw_model(
+    mesh: &crate::CastMesh,
+    palette: &dyn Fn(&str) -> [f32; 4],
+    width: u32,
+    height: u32,
+    eye: [f32; 3],
+    target: [f32; 3],
+    fov_deg: f32,
+    bg: [u8; 3],
+) -> Vec<u8> {
+    let w = width.max(8);
+    let h = height.max(8);
+    let mut color = Vec::with_capacity((w * h * 3) as usize);
+    for _ in 0..(w * h) {
+        color.extend_from_slice(&bg);
+    }
+    let mut depth = vec![f32::INFINITY; (w * h) as usize];
+    let forward = norm(sub(target, eye));
+    let hint = if forward[1].abs() > 0.92 { [0.0, 0.0, 1.0] } else { [0.0, 1.0, 0.0] };
+    let right = norm(cross(forward, hint));
+    let up = cross(right, forward);
+    let fov = fov_deg.to_radians();
+    let cam = crate::PaintCam {
+        eye,
+        right,
+        up,
+        forward,
+        focal: 1.0 / (fov * 0.5).tan(),
+        aspect: w as f32 / h as f32,
+        w,
+        h,
+        key: norm([-0.2, 0.92, 0.28]),
+        fill: norm([0.55, 0.35, -0.45]),
+    };
+    crate::cast::paint(
+        &mut color,
+        &mut depth,
+        mesh,
+        crate::Placement {
+            pre_yaw: 0.0,
+            pre_shift: [0.0, 0.0, 0.0],
+            yaw_deg: 0.0,
+            lean: 0.0,
+            pivot: [0.0, 0.0, 0.0],
+            shift: [0.0, 0.0, 0.0],
+        },
+        palette,
+        &cam,
+        false,
+    );
+    color
+}
+
 pub fn raster_bug(id: &str, width: u32, height: u32) -> Vec<u8> {
     let visual = bug(id);
     let palette = palette_of();
@@ -100,6 +272,11 @@ pub fn raster_viewmodel(width: u32, height: u32, frame: &ViewmodelFrame) -> Vec<
     raster_viewmodel_yaw(width, height, frame, 0.0, 0.0)
 }
 
+/// Look yaw and pitch orbit this point. The gloves and the gun share it.
+/// The gun's authored view pitch stays on the grip, in mesh space, which is
+/// the same origin while this pivot is the camera.
+const VIEW_PIVOT: [f32; 3] = [0.0, 0.0, 0.0];
+
 /// Same still, with the posed viewmodel turned. Zero yaw and pitch is the unrotated raster.
 pub fn raster_viewmodel_yaw(width: u32, height: u32, frame: &ViewmodelFrame, yaw_deg: f32, pitch_deg: f32) -> Vec<u8> {
     let glove = gemini_sim::content::Content::embedded().heroes_visual.glove;
@@ -107,30 +284,40 @@ pub fn raster_viewmodel_yaw(width: u32, height: u32, frame: &ViewmodelFrame, yaw
     let palette = palette_of();
     let shift = frame.offset;
     let orange = frame.accent;
-    let mut parts = vec![
+    // Gloves stay procedural. The rifle is the fitted cast, grip at the origin, muzzle down -Z.
+    // Cobalt here is the old untextured rifle receiver plus the sleeve. It draws as a
+    // blue blob over the cast gun. The gloves that stay are the teal and white pieces.
+    // Yaw and pitch turn the camera about VIEW_PIVOT. The gloves are not spun on
+    // their own center.
+    let parts = vec![
         (shifted(&vm.teal, shift), palette("hero_teal"), false),
-        (shifted(&vm.cobalt, shift), palette("hero_cobalt"), false),
         (shifted(&vm.white, shift), palette("hero_white"), false),
     ];
-    // Idle barrel is cobalt. Overdrive turns the whole tube orange. The stripe stays accent.
-    let barrel_color = if frame.overdrive { orange } else { palette("hero_cobalt") };
-    parts.push((shifted(&vm.barrel, shift), barrel_color, frame.overdrive));
-    parts.push((shifted(&vm.accent, shift), orange, true));
-    parts.push((shifted(&vm.core, shift), palette("hero_teal"), true));
-    if yaw_deg != 0.0 || pitch_deg != 0.0 {
-        for (mesh, _, _) in &mut parts {
-            *mesh = crate::portrait::turn_mesh(mesh, yaw_deg, pitch_deg);
-        }
-    }
+    let (forward, right, up) = view_look(yaw_deg, pitch_deg);
+    let target = [
+        VIEW_PIVOT[0] + forward[0],
+        VIEW_PIVOT[1] + forward[1],
+        VIEW_PIVOT[2] + forward[2],
+    ];
     let w = width.max(8);
     let h = height.max(8);
-    let mut rgb = draw_parts(&parts, [0.0, 0.0, 0.0], [0.0, 0.0, -1.0], frame.fov, w, h);
+    let mut color = Vec::with_capacity((w * h * 3) as usize);
+    for _ in 0..(w * h) {
+        color.extend_from_slice(&BG);
+    }
+    let mut depth = vec![f32::INFINITY; (w * h) as usize];
+    draw_parts_into(&mut color, &mut depth, &parts, VIEW_PIVOT, target, frame.fov, w, h);
+    paint_view_gun(&mut color, &mut depth, frame, w, h, (forward, right, up));
+    let mut rgb = color;
     if frame.overdrive {
         edge_tint(&mut rgb, w, h, orange);
         let local = crate::muzzle_local();
         let tip = [shift[0] + local[0], shift[1] + local[1], shift[2] + local[2]];
         let moved = crate::muzzle_on_barrel(tip, frame.fov, w as f32, h as f32, frame.glow_tip_px);
-        if let Some(screen) = crate::project_view(moved, frame.fov, w as f32, h as f32) {
+        let fov = frame.fov.to_radians();
+        let aspect = w as f32 / h as f32;
+        let focal = 1.0 / (fov * 0.5).tan();
+        if let Some(screen) = project(moved, VIEW_PIVOT, right, up, forward, focal, aspect, w, h) {
             let radius = crate::radius_px(frame.glow_radius, screen[2], frame.fov, h as f32);
             paint_muzzle_bloom(&mut rgb, w, h, screen[0], screen[1], radius, frame.glow_core, frame.glow_falloff, frame.glow_color);
         }
@@ -215,6 +402,72 @@ fn shifted(mesh: &crate::MeshData, by: [f32; 3]) -> crate::MeshData {
     copy
 }
 
+/// Camera at `VIEW_PIVOT`, looking down -Z, then yawed and pitched.
+/// Zero of both is the unrotated first-person basis.
+fn view_look(yaw_deg: f32, pitch_deg: f32) -> ([f32; 3], [f32; 3], [f32; 3]) {
+    let (ys, yc) = yaw_deg.to_radians().sin_cos();
+    let (ps, pc) = pitch_deg.to_radians().sin_cos();
+    let z1 = -yc;
+    let forward = norm([ys * -1.0, -ps * z1, pc * z1]);
+    let hint = if forward[1].abs() > 0.92 { [0.0, 0.0, 1.0] } else { [0.0, 1.0, 0.0] };
+    let right = norm(cross(forward, hint));
+    let up = cross(right, forward);
+    (forward, right, up)
+}
+
+fn paint_view_gun(
+    color: &mut [u8],
+    depth: &mut [f32],
+    frame: &ViewmodelFrame,
+    w: u32,
+    h: u32,
+    look: ([f32; 3], [f32; 3], [f32; 3]),
+) {
+    let content = gemini_sim::content::Content::embedded();
+    let hero = content.hero.id.as_str();
+    let gun = crate::cast(&format!("{hero}_gun"));
+    let model = content
+        .models
+        .iter()
+        .find(|model| model.id == gun.id)
+        .unwrap_or_else(|| panic!("{} has no cast record", gun.id));
+    let shift = frame.offset;
+    let grip = [
+        model.view[0] + shift[0],
+        model.view[1] + shift[1],
+        model.view[2] + shift[2],
+    ];
+    // Mesh origin is the grip. view_pitch turns there, then the rifle moves to
+    // the viewmodel grip. Look yaw and pitch use VIEW_PIVOT, the same point as
+    // the glove camera, and are not added onto the grip.
+    let place = crate::Placement {
+        pre_yaw: 0.0,
+        pre_shift: [0.0, 0.0, 0.0],
+        yaw_deg: 0.0,
+        lean: model.view_pitch_deg.to_radians(),
+        pivot: VIEW_PIVOT,
+        shift: grip,
+    };
+    let eye = VIEW_PIVOT;
+    let (forward, right, up) = look;
+    let fov = frame.fov.to_radians();
+    let aspect = w as f32 / h as f32;
+    let cam = crate::PaintCam {
+        eye,
+        right,
+        up,
+        forward,
+        focal: 1.0 / (fov * 0.5).tan(),
+        aspect,
+        w,
+        h,
+        key: norm([-0.35, 0.86, 0.4]),
+        fill: norm([0.6, 0.25, -0.35]),
+    };
+    let palette = palette_of();
+    crate::cast::paint_approved_gun(color, depth, gun, place, &palette, &cam, frame.overdrive);
+}
+
 fn draw_parts(
     parts: &[(crate::MeshData, [f32; 4], bool)],
     eye: [f32; 3],
@@ -230,6 +483,22 @@ fn draw_parts(
         color.extend_from_slice(&BG);
     }
     let mut depth = vec![f32::INFINITY; (w * h) as usize];
+    draw_parts_into(&mut color, &mut depth, parts, eye, target, fov_deg, w, h);
+    color
+}
+
+fn draw_parts_into(
+    color: &mut [u8],
+    depth: &mut [f32],
+    parts: &[(crate::MeshData, [f32; 4], bool)],
+    eye: [f32; 3],
+    target: [f32; 3],
+    fov_deg: f32,
+    width: u32,
+    height: u32,
+) {
+    let w = width.max(8);
+    let h = height.max(8);
     let forward = norm(sub(target, eye));
     let right = norm(cross(forward, [0.0, 1.0, 0.0]));
     let up = cross(right, forward);
@@ -264,10 +533,9 @@ fn draw_parts(
             let Some(c) = project(mesh.positions[ic], eye, right, up, forward, focal, aspect, w, h) else {
                 continue;
             };
-            fill_tri(&mut color, &mut depth, w, h, a, b, c, rgb);
+            fill_tri(color, depth, w, h, a, b, c, rgb);
         }
     }
-    color
 }
 
 fn compose(id: &str, panel: u32, open_shell: bool, camera: Option<([f32; 3], [f32; 3], f32)>) -> (u32, u32, Vec<u8>) {
@@ -375,48 +643,38 @@ fn draw_scene(
     let aspect = w as f32 / h as f32;
     let focal = 1.0 / (fov * 0.5).tan();
 
-    for (part, xf) in visual.parts.iter().zip(posed.xforms.iter()) {
-        if !xf.visible {
-            continue;
-        }
-        let albedo = palette(part.palette.as_str());
-        let mesh = &part.mesh;
-        let mut verts = Vec::with_capacity(mesh.positions.len());
-        for p in &mesh.positions {
-            let scaled = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
-            let r = crate::pose::rotate_vec(xf.rot, scaled);
-            verts.push([r[0] + xf.pos[0] + shift[0], r[1] + xf.pos[1] + shift[1], r[2] + xf.pos[2] + shift[2]]);
-        }
-        for tri in mesh.indices.chunks(3) {
-            if tri.len() < 3 {
-                continue;
-            }
-            let ia = tri[0] as usize;
-            let ib = tri[1] as usize;
-            let ic = tri[2] as usize;
-            let nw = crate::pose::rotate_vec(xf.rot, mesh.normals[ia]);
-            let ndot = (nw[0] * key[0] + nw[1] * key[1] + nw[2] * key[2]).clamp(0.0, 1.0);
-            let ndot2 = (nw[0] * fill[0] + nw[1] * fill[1] + nw[2] * fill[2]).clamp(0.0, 1.0);
-            let shade = (0.62 + 0.40 * ndot + 0.22 * ndot2).clamp(0.0, 1.0);
-            let rgb = if silhouette {
-                [SILHOUETTE[0] as f32 / 255.0, SILHOUETTE[1] as f32 / 255.0, SILHOUETTE[2] as f32 / 255.0]
-            } else if part.emissive {
-                // Exact palette RGB. Unlit, so the color survives with bloom disabled.
-                [albedo[0], albedo[1], albedo[2]]
-            } else {
-                [albedo[0] * shade, albedo[1] * shade, albedo[2] * shade]
-            };
-            let Some(a) = project(verts[ia], eye, right, up, forward, focal, aspect, w, h) else {
-                continue;
-            };
-            let Some(b) = project(verts[ib], eye, right, up, forward, focal, aspect, w, h) else {
-                continue;
-            };
-            let Some(c) = project(verts[ic], eye, right, up, forward, focal, aspect, w, h) else {
-                continue;
-            };
-            fill_tri(&mut color, &mut depth, w, h, a, b, c, rgb);
-        }
+    let (bob, lean) = crate::root_motion(visual, anim);
+    let cam = crate::PaintCam {
+        eye,
+        right,
+        up,
+        forward,
+        focal,
+        aspect,
+        w,
+        h,
+        key,
+        fill,
+    };
+    let cast_mesh = crate::cast(&visual.id);
+    crate::cast::paint(
+        &mut color,
+        &mut depth,
+        cast_mesh,
+        crate::Placement {
+            pre_yaw: 0.0,
+            pre_shift: [0.0, 0.0, 0.0],
+            yaw_deg: 0.0,
+            lean,
+            pivot: [0.0, 0.0, 0.0],
+            shift: [shift[0], shift[1] + bob, shift[2]],
+        },
+        palette,
+        &cam,
+        silhouette,
+    );
+    if !silhouette {
+        paint_feedback_parts(&mut color, &mut depth, visual, &posed, palette, &cam, shift, bob, lean);
     }
     if !silhouette {
         for (mesh, albedo) in extras {
@@ -448,8 +706,187 @@ fn draw_scene(
     color
 }
 
-/// In-arena color still. The eye stands on the deck, `review_distance` meters from the bug.
-pub fn raster_in_arena(id: &str, width: u32, height: u32) -> Vec<u8> {
+/// Glow, pods, and buds. Same parent as the live game: pose, then the root lean and bob.
+/// Emissive parts use their palette key with no shade, so a missing weak point fails the still.
+fn paint_feedback_parts(
+    color: &mut [u8],
+    depth: &mut [f32],
+    visual: &EnemyVisual,
+    posed: &crate::Pose,
+    palette: &dyn Fn(&str) -> [f32; 4],
+    cam: &crate::PaintCam,
+    shift: [f32; 3],
+    bob: f32,
+    lean: f32,
+) {
+    let (ls, lc) = lean.sin_cos();
+    let look = &gemini_sim::content::Content::embedded().cast;
+    for (part, xf) in visual.parts.iter().zip(posed.xforms.iter()) {
+        if !(part.emissive || part.grows || part.pod_slot.is_some()) || !xf.visible {
+            continue;
+        }
+        let albedo = palette(part.palette.as_str());
+        let rgb = [albedo[0], albedo[1], albedo[2]];
+        let mut radius = 0.0_f32;
+        for p in &part.mesh.positions {
+            let scaled = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
+            radius = radius.max((scaled[0] * scaled[0] + scaled[1] * scaled[1] + scaled[2] * scaled[2]).sqrt());
+        }
+        let origin = xf.pos;
+        let center = lean_shift(origin, ls, lc, shift, bob);
+        for tri in part.mesh.indices.chunks(3) {
+            if tri.len() < 3 {
+                continue;
+            }
+            let mut projected = [[0.0; 3]; 3];
+            let mut world = [[0.0; 3]; 3];
+            let mut ok = true;
+            for (slot, index) in tri.iter().enumerate() {
+                let p = part.mesh.positions[*index as usize];
+                let p = [p[0] * xf.scale[0], p[1] * xf.scale[1], p[2] * xf.scale[2]];
+                let p = crate::pose::rotate_vec(xf.rot, p);
+                let p = [p[0] + origin[0], p[1] + origin[1], p[2] + origin[2]];
+                let placed = lean_shift(p, ls, lc, shift, bob);
+                let Some(screen) = project(placed, cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
+                    ok = false;
+                    break;
+                };
+                projected[slot] = screen;
+                world[slot] = placed;
+            }
+            if !ok {
+                continue;
+            }
+            if part.emissive && radius > 0.0 {
+                fill_glow_tri(
+                    color,
+                    depth,
+                    cam.w,
+                    cam.h,
+                    projected[0],
+                    projected[1],
+                    projected[2],
+                    world,
+                    center,
+                    radius,
+                    cam.forward,
+                    rgb,
+                    look.glow_falloff,
+                    look.glow_show_through,
+                    look.glow_core_perp,
+                    look.glow_core_depth,
+                );
+            } else {
+                fill_tri(color, depth, cam.w, cam.h, projected[0], projected[1], projected[2], rgb);
+            }
+        }
+    }
+}
+
+/// Four heroes on the deck, `review_distance` meters from a teammate's eye, with `arena_sky` behind them.
+pub fn raster_heroes_at_15m(width: u32, height: u32) -> Vec<u8> {
+    use gemini_sim::content::Content;
+    let content = Content::embedded();
+    let dress = &content.arena_dressing;
+    let platform = &content.arena.platform;
+    let deck = platform.height;
+    let stature = content
+        .models
+        .iter()
+        .filter(|model| model.fit == "hero")
+        .map(|model| model.size)
+        .fold(0.0_f32, f32::max);
+    let eye_y = deck + content.controller.camera.eye_height;
+    let look_y = deck + stature * dress.review_look_height;
+    let dy = eye_y - look_y;
+    let horiz = (dress.review_distance * dress.review_distance - dy * dy).max(0.25).sqrt();
+    let hero_z = platform.center.z - horiz * 0.5;
+    let eye = [platform.center.x, eye_y, platform.center.z + horiz * 0.5];
+    let look = [platform.center.x, look_y, hero_z];
+    let sky = content.palette.key("arena_sky");
+    let bg = [byte(sky[0]), byte(sky[1]), byte(sky[2])];
+    let w = width.max(8);
+    let h = height.max(8);
+    let mut color = Vec::with_capacity((w * h * 3) as usize);
+    for _ in 0..(w * h) {
+        color.extend_from_slice(&bg);
+    }
+    let mut depth = vec![f32::INFINITY; (w * h) as usize];
+    let forward = norm(sub(look, eye));
+    let right = norm(cross(forward, [0.0, 1.0, 0.0]));
+    let up = cross(right, forward);
+    let fov = content.controller.camera.fov_default.to_radians();
+    let cam = crate::PaintCam {
+        eye,
+        right,
+        up,
+        forward,
+        focal: 1.0 / (fov * 0.5).tan(),
+        aspect: w as f32 / h as f32,
+        w,
+        h,
+        key: norm([-0.2, 0.92, 0.28]),
+        fill: norm([0.55, 0.35, -0.45]),
+    };
+    let palette = |name: &str| content.palette.key(name);
+    let ground = crate::review_ground(&content);
+    paint_flat(&mut color, &mut depth, &ground, palette("arena_dark"), &cam);
+    for piece in crate::arena_pieces(&content) {
+        paint_flat(&mut color, &mut depth, &piece.mesh, palette(&piece.palette), &cam);
+    }
+    let spacing = 1.15_f32;
+    let ids = ["vex", "nyra", "brakk", "kip"];
+    for (i, id) in ids.iter().enumerate() {
+        let x = (i as f32 - 1.5) * spacing;
+        let at = [platform.center.x + x, deck, hero_z];
+        paint_named_hero(&mut color, &mut depth, &cam, id, at, eye);
+    }
+    color
+}
+
+fn paint_named_hero(color: &mut [u8], depth: &mut [f32], cam: &crate::PaintCam, hero_id: &str, at: [f32; 3], eye: [f32; 3]) {
+    let content = gemini_sim::content::Content::embedded();
+    let fx = eye[0] - at[0];
+    let fz = eye[2] - at[2];
+    let yaw = (-fx).atan2(-fz).to_degrees();
+    let pivot = crate::body_pivot(&content, hero_id);
+    let palette = |name: &str| content.palette.key(name);
+    for mesh in crate::hero_pieces(hero_id) {
+        let place = crate::hero_placement(&content, mesh, at, pivot, yaw, 0.0);
+        crate::cast::paint(color, depth, mesh, place, &palette, cam, false);
+    }
+}
+
+fn paint_flat(color: &mut [u8], depth: &mut [f32], mesh: &crate::MeshData, albedo: [f32; 4], cam: &crate::PaintCam) {
+    let key = cam.key;
+    let fill = cam.fill;
+    for tri in mesh.indices.chunks(3) {
+        if tri.len() < 3 {
+            continue;
+        }
+        let ia = tri[0] as usize;
+        let ib = tri[1] as usize;
+        let ic = tri[2] as usize;
+        let nw = mesh.normals[ia];
+        let ndot = (nw[0] * key[0] + nw[1] * key[1] + nw[2] * key[2]).clamp(0.0, 1.0);
+        let ndot2 = (nw[0] * fill[0] + nw[1] * fill[1] + nw[2] * fill[2]).clamp(0.0, 1.0);
+        let shade = (0.62 + 0.40 * ndot + 0.22 * ndot2).clamp(0.0, 1.0);
+        let rgb = [albedo[0] * shade, albedo[1] * shade, albedo[2] * shade];
+        let Some(a) = project(mesh.positions[ia], cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
+            continue;
+        };
+        let Some(b) = project(mesh.positions[ib], cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
+            continue;
+        };
+        let Some(c) = project(mesh.positions[ic], cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
+            continue;
+        };
+        fill_tri(color, depth, cam.w, cam.h, a, b, c, rgb);
+    }
+}
+
+/// Eye on the deck at `eye_height`. The look point is `review_distance` meters away.
+fn arena_review_camera(id: &str) -> ([f32; 3], [f32; 3], f32, [f32; 3]) {
     use gemini_sim::content::Content;
     let content = Content::embedded();
     let dress = &content.arena_dressing;
@@ -477,6 +914,15 @@ pub fn raster_in_arena(id: &str, width: u32, height: u32) -> Vec<u8> {
     ];
     let eye = [platform.center.x + flat[0] * half, eye_y, platform.center.z + flat[1] * half];
     let look = [bug_at[0], look_y, bug_at[2]];
+    (eye, look, visual.camera.fov, bug_at)
+}
+
+/// In-arena color still. The eye stands on the deck, `review_distance` meters from the bug.
+pub fn raster_in_arena(id: &str, width: u32, height: u32) -> Vec<u8> {
+    use gemini_sim::content::Content;
+    let content = Content::embedded();
+    let visual = bug(id);
+    let (eye, look, fov, bug_at) = arena_review_camera(id);
     let sky = content.palette.key("arena_sky");
     let bg = [byte(sky[0]), byte(sky[1]), byte(sky[2])];
     let palette = |name: &str| content.palette.key(name);
@@ -495,7 +941,7 @@ pub fn raster_in_arena(id: &str, width: u32, height: u32) -> Vec<u8> {
         height,
         false,
         false,
-        Some((eye, look, visual.camera.fov)),
+        Some((eye, look, fov)),
         bug_at,
         bg,
         &extras,
@@ -586,6 +1032,75 @@ fn player_reference(content: &gemini_sim::content::Content, at: [f32; 3]) -> Vec
         .collect()
 }
 
+/// One software frame of `count` swarmers on the deck. Used to time a client-style
+/// raster with the live-enemy cap on screen. Not a GPU frame.
+pub fn raster_crowd(count: usize, width: u32, height: u32) -> Vec<u8> {
+    use gemini_sim::content::Content;
+    let content = Content::embedded();
+    let visual = bug("swarmer");
+    let palette = palette_of();
+    let w = width.max(8);
+    let h = height.max(8);
+    let sky = content.palette.key("arena_sky");
+    let bg = [byte(sky[0]), byte(sky[1]), byte(sky[2])];
+    let mut color = Vec::with_capacity((w * h * 3) as usize);
+    for _ in 0..(w * h) {
+        color.extend_from_slice(&bg);
+    }
+    let mut depth = vec![f32::INFINITY; (w * h) as usize];
+    let cols = (count as f32).sqrt().ceil().max(1.0) as usize;
+    let rows = count.div_ceil(cols).max(1);
+    let spacing = 1.4f32;
+    let span_x = (cols.saturating_sub(1) as f32) * spacing;
+    let span_z = (rows.saturating_sub(1) as f32) * spacing;
+    let eye = [span_x * 0.5, 8.0, -18.0];
+    let target = [span_x * 0.5, 0.4, span_z * 0.35];
+    let forward = norm(sub(target, eye));
+    let right = norm(cross(forward, [0.0, 1.0, 0.0]));
+    let up = cross(right, forward);
+    let fov = 55.0_f32.to_radians();
+    let cam = crate::PaintCam {
+        eye,
+        right,
+        up,
+        forward,
+        focal: 1.0 / (fov * 0.5).tan(),
+        aspect: w as f32 / h as f32,
+        w,
+        h,
+        key: norm([-0.2, 0.92, 0.28]),
+        fill: norm([0.55, 0.35, -0.45]),
+    };
+    let mut anim = still_anim();
+    anim.vulnerable = false;
+    let posed = pose(visual, anim, &[]);
+    let (bob, lean) = crate::root_motion(visual, anim);
+    let cast_mesh = crate::cast(&visual.id);
+    for index in 0..count {
+        let col = index % cols;
+        let row = index / cols;
+        let shift = [col as f32 * spacing, 0.0, row as f32 * spacing];
+        crate::cast::paint(
+            &mut color,
+            &mut depth,
+            cast_mesh,
+            crate::Placement {
+                pre_yaw: 0.0,
+                pre_shift: [0.0, 0.0, 0.0],
+                yaw_deg: 0.0,
+                lean,
+                pivot: [0.0, 0.0, 0.0],
+                shift: [shift[0], shift[1] + bob, shift[2]],
+            },
+            &palette,
+            &cam,
+            false,
+        );
+        paint_feedback_parts(&mut color, &mut depth, visual, &posed, &palette, &cam, shift, bob, lean);
+    }
+    color
+}
+
 pub fn palette_of() -> impl Fn(&str) -> [f32; 4] {
     let text = include_str!("../../../content/palette.toml");
     let keys: std::collections::HashMap<String, String> = {
@@ -602,7 +1117,7 @@ pub fn palette_of() -> impl Fn(&str) -> [f32; 4] {
                 continue;
             }
             let Some((k, v)) = line.split_once('=') else { continue };
-            let hex = v.trim().trim_matches('"').to_string();
+            let hex = palette_value_hex(v);
             let key = if section == "keys" {
                 k.trim().to_string()
             } else {
@@ -613,7 +1128,7 @@ pub fn palette_of() -> impl Fn(&str) -> [f32; 4] {
         map
     };
     move |name: &str| {
-        let hex = keys.get(name).map(|s| s.as_str()).unwrap_or("#C67A2E");
+        let hex = keys.get(name).unwrap_or_else(|| panic!("unknown palette key {name}"));
         hex_rgb(hex)
     }
 }
@@ -634,14 +1149,30 @@ fn byte(c: f32) -> u8 {
     (c.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
+/// A `{ hex = "#RRGGBB", ... }` row stores the quoted hex. A bare quoted hex is itself.
+fn palette_value_hex(value: &str) -> String {
+    let value = value.trim();
+    if value.starts_with('{') {
+        let Some(start) = value.find('"') else {
+            return String::new();
+        };
+        let rest = &value[start + 1..];
+        let Some(end) = rest.find('"') else {
+            return String::new();
+        };
+        return rest[..end].to_string();
+    }
+    value.trim_matches('"').to_string()
+}
+
 fn hex_rgb(hex: &str) -> [f32; 4] {
     let hex = hex.trim().trim_start_matches('#');
-    let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(180) as f32 / 255.0;
-    if hex.len() >= 6 {
-        [byte(0), byte(2), byte(4), 1.0]
-    } else {
-        [0.7, 0.5, 0.2, 1.0]
+    let digits = hex.len() >= 6 && hex.as_bytes()[..6].iter().all(|b| b.is_ascii_hexdigit());
+    if !digits {
+        panic!("palette hex \"{hex}\" does not resolve");
     }
+    let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap() as f32 / 255.0;
+    [byte(0), byte(2), byte(4), 1.0]
 }
 
 fn project(
@@ -667,6 +1198,104 @@ fn project(
         (1.0 - (y * 0.5 + 0.5)) * h as f32,
         z,
     ])
+}
+
+fn lean_shift(p: [f32; 3], ls: f32, lc: f32, shift: [f32; 3], bob: f32) -> [f32; 3] {
+    let y2 = lc * p[1] - ls * p[2];
+    let z2 = ls * p[1] + lc * p[2];
+    [p[0] + shift[0], y2 + shift[1] + bob, z2 + shift[2]]
+}
+
+/// Solid core, soft edge. `t` is 0 at the center and 1 at the rim.
+/// `cover = (1 - t^falloff) * (1 - show_through * t^falloff)`. Both keys come from cast.toml.
+/// The exponent keeps the core at the palette color and lets the rim fade out.
+fn glow_cover(perp: f32, falloff: f32, show_through: f32) -> f32 {
+    let t = perp.clamp(0.0, 1.0);
+    let fade = t.powf(falloff);
+    let glow = (1.0 - fade).clamp(0.0, 1.0);
+    (glow * (1.0 - show_through * fade)).clamp(0.0, 1.0)
+}
+
+fn fill_glow_tri(
+    color: &mut [u8],
+    depth: &mut [f32],
+    w: u32,
+    h: u32,
+    a: [f32; 3],
+    b: [f32; 3],
+    c: [f32; 3],
+    world: [[f32; 3]; 3],
+    center: [f32; 3],
+    radius: f32,
+    forward: [f32; 3],
+    rgb: [f32; 3],
+    falloff: f32,
+    show_through: f32,
+    core_perp: f32,
+    core_depth: f32,
+) {
+    let min_x = a[0].min(b[0]).min(c[0]).floor().max(0.0) as i32;
+    let max_x = a[0].max(b[0]).max(c[0]).ceil().min(w as f32 - 1.0) as i32;
+    let min_y = a[1].min(b[1]).min(c[1]).floor().max(0.0) as i32;
+    let max_y = a[1].max(b[1]).max(c[1]).ceil().min(h as f32 - 1.0) as i32;
+    let area = edge(a, b, c);
+    if area.abs() < 1e-4 {
+        return;
+    }
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let p = [x as f32 + 0.5, y as f32 + 0.5, 0.0];
+            let w0 = edge(b, c, p) / area;
+            let w1 = edge(c, a, p) / area;
+            let w2 = edge(a, b, p) / area;
+            if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                continue;
+            }
+            let mut z = a[2] * w0 + b[2] * w1 + c[2] * w2;
+            let idx = (y as u32 * w + x as u32) as usize;
+            let at = [
+                world[0][0] * w0 + world[1][0] * w1 + world[2][0] * w2,
+                world[0][1] * w0 + world[1][1] * w1 + world[2][1] * w2,
+                world[0][2] * w0 + world[1][2] * w1 + world[2][2] * w2,
+            ];
+            let offset = sub(at, center);
+            let along = dot(offset, forward);
+            let perp_v = [offset[0] - forward[0] * along, offset[1] - forward[1] * along, offset[2] - forward[2] * along];
+            let perp = (perp_v[0] * perp_v[0] + perp_v[1] * perp_v[1] + perp_v[2] * perp_v[2]).sqrt() / radius;
+            let cover = glow_cover(perp, falloff, show_through);
+            // The core sits on the cast. Pull it forward by its own radius so a
+            // shell that overhangs the pole does not hide the palette texel.
+            if perp < core_perp {
+                z = (z - radius).max(core_depth);
+            }
+            if z >= depth[idx] {
+                continue;
+            }
+            let o = idx * 3;
+            let under = [
+                color[o] as f32 / 255.0,
+                color[o + 1] as f32 / 255.0,
+                color[o + 2] as f32 / 255.0,
+            ];
+            depth[idx] = z;
+            // The body mask already wrote this glow color. Keep it. The rim still
+            // fades everywhere else, and a near-core texel snaps to the palette.
+            let pure = [byte(rgb[0]), byte(rgb[1]), byte(rgb[2])];
+            if [color[o], color[o + 1], color[o + 2]] == pure {
+                continue;
+            }
+            let mixed = [
+                byte(rgb[0] * cover + under[0] * (1.0 - cover)),
+                byte(rgb[1] * cover + under[1] * (1.0 - cover)),
+                byte(rgb[2] * cover + under[2] * (1.0 - cover)),
+            ];
+            let snap = mixed.iter().zip(pure).all(|(got, want)| (*got as i16 - want as i16).abs() <= 1);
+            let out = if snap { pure } else { mixed };
+            color[o] = out[0];
+            color[o + 1] = out[1];
+            color[o + 2] = out[2];
+        }
+    }
 }
 
 fn fill_tri(
@@ -735,6 +1364,41 @@ fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 fn norm(v: [f32; 3]) -> [f32; 3] {
     let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt().max(1e-6);
     [v[0] / len, v[1] / len, v[2] / len]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glow_falloff_softens_the_disc() {
+        let look = &gemini_sim::content::Content::embedded().cast;
+        let core = glow_cover(0.0, look.glow_falloff, look.glow_show_through);
+        let mid = glow_cover(0.5, look.glow_falloff, look.glow_show_through);
+        let edge = glow_cover(1.0, look.glow_falloff, look.glow_show_through);
+        assert!((core - 1.0).abs() < 1.0e-4, "core {core}");
+        assert!(mid < 0.75, "mid {mid} is still a hard disc");
+        assert!(edge < 0.2, "edge {edge}");
+    }
+
+    #[test]
+    fn arena_stills_are_15m_from_eye_height() {
+        let content = gemini_sim::content::Content::embedded();
+        let deck = content.arena.platform.height;
+        let eye_y = deck + content.controller.camera.eye_height;
+        for id in ["spitter", "hive_tyrant"] {
+            let (eye, look, fov, _bug_at) = arena_review_camera(id);
+            let visual = bug(id);
+            assert!((eye[1] - eye_y).abs() < 1.0e-4, "{id} eye y {}", eye[1]);
+            let d = sub(eye, look);
+            let d = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            assert!(
+                (d - content.arena_dressing.review_distance).abs() < 1.0e-3,
+                "{id} distance {d}"
+            );
+            assert!((fov - visual.camera.fov).abs() < 1.0e-4, "{id} fov {fov}");
+        }
+    }
 }
 
 pub fn painted_pixels(rgb: &[u8]) -> usize {

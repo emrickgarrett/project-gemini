@@ -914,21 +914,22 @@ fn weakpoint_hitboxes_overlap_their_glowing_parts() {
     for (bug, row) in content.bugs.rows() {
         for (slot, shape) in row.hitbox.anchored() {
             saw += 1;
-            let name = shape.anchor.as_str();
-            let anchor = visual_anchor(&row.visual, name)
-                .unwrap_or_else(|| panic!("{bug} {slot} anchor {name:?} did not resolve after load"));
+            let anchor_name = shape.anchor.as_str();
+            let part_name = if shape.name.is_empty() { anchor_name } else { shape.name.as_str() };
+            let anchor = visual_anchor(&row.visual, anchor_name)
+                .unwrap_or_else(|| panic!("{bug} {slot} anchor {anchor_name:?} did not resolve after load"));
             assert_eq!(
                 shape.offset, anchor,
                 "{bug} {slot} was not baked from its visual anchor"
             );
-            let glow = glow_bounds(&row.visual, name)
-                .unwrap_or_else(|| panic!("{bug} {slot} anchor {name} has no glowing volume"));
+            let glow = glow_bounds(&row.visual, anchor_name, part_name)
+                .unwrap_or_else(|| panic!("{bug} {slot} part {part_name} has no glowing volume"));
             let hit = hit_bounds(shape);
             assert!(
                 hit.overlaps(glow),
                 "{bug} {slot} hitbox {hit:?} does not overlap its glowing part {glow:?}"
             );
-            if let Some(part) = row.visual.parts.iter().find(|part| part.name == name) {
+            if let Some(part) = row.visual.parts.iter().find(|part| part.name == anchor_name) {
                 if let Some(phase) = part.phase_max {
                     assert_eq!(shape.active_phase, phase, "{bug} {slot} phase");
                 }
@@ -936,6 +937,92 @@ fn weakpoint_hitboxes_overlap_their_glowing_parts() {
         }
     }
     assert!(saw >= 6, "expected every glowing weak point, saw {saw}");
+}
+
+#[test]
+fn cast_hit_centers_stay_on_the_moved_anchors() {
+    use gemini_sim::content::EnemyKind;
+    let content = Content::embedded();
+    let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1.0e-4);
+
+    let spitter = content.bug(EnemyKind::Spitter);
+    let sac = spitter.hitbox.weak().expect("spitter sac");
+    assert!(
+        near(sac.offset, [0.06444810, 0.62343204, -0.29764500]),
+        "spitter sac {:?}",
+        sac.offset
+    );
+    assert!((sac.radius - 0.36).abs() < 1.0e-4, "spitter sac radius {}", sac.radius);
+
+    let brute = content.bug(EnemyKind::Brute);
+    let cracks = brute.hitbox.weak().expect("brute cracks");
+    assert!(near(cracks.offset, [0.05768617, 1.36893320, 0.16571500]), "brute cracks {:?}", cracks.offset);
+    assert!(
+        near(cracks.half_extents, [0.75, 0.50, 0.62]),
+        "brute cracks half {:?}",
+        cracks.half_extents
+    );
+
+    let brood = content.bug(EnemyKind::BroodMother);
+    let gland = brood.hitbox.weak().expect("brood gland");
+    assert!(near(gland.offset, [-0.01607708, 1.45470980, 1.18440960]), "brood gland {:?}", gland.offset);
+    assert!((gland.radius - 0.50).abs() < 1.0e-4, "gland radius {}", gland.radius);
+    let pod = brood.visual.parts.iter().find(|part| part.name == "pod").expect("pod");
+    assert!((pod.ring_radius - 0.72).abs() < 1.0e-4, "pod ring {}", pod.ring_radius);
+    let sink = pod.sink.expect("pod sink");
+    assert!((sink - 0.88).abs() < 1.0e-4, "pod sink {sink}");
+    assert!((brood.hitbox.pod_radius().unwrap() - 0.65).abs() < 1.0e-4);
+    assert!(
+        near(brood.hitbox.pods[1].offset, [0.05874630, 2.24043730, 0.67323030]),
+        "pod1 {:?}",
+        brood.hitbox.pods[1].offset
+    );
+    assert!(
+        near(brood.hitbox.pods[4].offset, [-0.17627156, 2.53861070, -1.13850710]),
+        "pod4 {:?}",
+        brood.hitbox.pods[4].offset
+    );
+
+    let hive = content.bug(EnemyKind::HiveTyrant);
+    let core = hive.hitbox.core.as_ref().expect("hive core");
+    assert!(
+        near(core.offset, [-0.03506386, 2.3284526, 0.77563494]),
+        "hive core {:?}",
+        core.offset
+    );
+    assert!((core.radius - 0.70).abs() < 1.0e-4, "hive core radius {}", core.radius);
+    let cannon = hive.hitbox.cannon.as_ref().expect("hive cannon");
+    assert_eq!(cannon.anchor, "tail_tip");
+    assert!(
+        near(cannon.offset, [-0.00517016, 5.0, -0.70474398]),
+        "cannon {:?}",
+        cannon.offset
+    );
+    assert!((cannon.radius - 0.83).abs() < 1.0e-4, "cannon radius {}", cannon.radius);
+}
+
+/// Floors are written here. A smaller content value fails. A larger one does not.
+#[test]
+fn hit_radii_do_not_drop_below_their_pins() {
+    use gemini_sim::content::EnemyKind;
+    let content = Content::embedded();
+    let at_least = |got: f32, pin: f32, what: &str| {
+        assert!(got + 1.0e-4 >= pin, "{what} is {got}, below the pinned {pin}");
+    };
+    let abdomen = content.bug(EnemyKind::Swarmer).hitbox.weak().expect("abdomen");
+    at_least(abdomen.radius, 0.15, "swarmer abdomen");
+    let sac = content.bug(EnemyKind::Spitter).hitbox.weak().expect("sac");
+    at_least(sac.radius, 0.36, "spitter sac");
+    let cracks = content.bug(EnemyKind::Brute).hitbox.weak().expect("cracks");
+    at_least(cracks.half_extents[0], 0.75, "brute cracks x");
+    at_least(cracks.half_extents[1], 0.50, "brute cracks y");
+    at_least(cracks.half_extents[2], 0.62, "brute cracks z");
+    let brood = content.bug(EnemyKind::BroodMother);
+    at_least(brood.hitbox.weak().expect("gland").radius, 0.5, "brood gland");
+    at_least(brood.hitbox.pod_radius().expect("pod"), 0.65, "brood pod");
+    let hive = content.bug(EnemyKind::HiveTyrant);
+    at_least(hive.hitbox.core.as_ref().expect("core").radius, 0.70, "hive core");
+    at_least(hive.hitbox.cannon.as_ref().expect("cannon").radius, 0.83, "hive cannon");
 }
 
 #[test]
@@ -976,6 +1063,15 @@ fn missing_weakpoint_anchor_fails_content_load() {
     assert!(err.contains("abdomenn"), "{err}");
     assert!(err.contains("does not resolve"), "{err}");
 
+    let clash = bugs.replacen(
+        "tail_tip = [-0.00517016, 5.0, -0.70474398]",
+        "tail_tip = [-0.00517016, 5.0, -0.70474398]\ncannon = [0.0, 0.0, 0.0]",
+        1,
+    );
+    assert_ne!(clash, bugs, "the cannon point must change the table");
+    let err = load(&clash).expect_err("a point that is also a part must fail");
+    assert!(err.contains("both a visual point and a part"), "{err}");
+
     let missing = bugs.replacen("anchor = \"abdomen\"", "anchor = \"\"", 1);
     let missing = missing.replacen("name = \"abdomen\"", "name = \"\"", 1);
     let err = load(&missing).expect_err("a weak point with no name must fail load");
@@ -996,6 +1092,100 @@ fn missing_weakpoint_anchor_fails_content_load() {
     let no_radius = bugs.replacen("pod = { shape = \"sphere\", radius = 0.65 }", "pod = { shape = \"sphere\" }", 1);
     let err = load(&no_radius).expect_err("a pod hitbox without a radius must fail load");
     assert!(err.contains("pod radius"), "{err}");
+
+    let duplicated = bugs.replacen(
+        "seats=[{index=1, offset=[0.05874630, 2.24043730, 0.67323030]}, {index=3, offset=[-0.84399520, 2.38568780, -0.40689278]}, {index=4, offset=[-0.17627156, 2.53861070, -1.13850710]}, {index=5, offset=[0.79067680, 2.40897870, -0.64160660]}]",
+        "seats=[{index=1, offset=[0.05874630, 2.24043730, 0.67323030]}, {index=1, offset=[-0.17627156, 2.53861070, -1.13850710]}, {index=3, offset=[-0.84399520, 2.38568780, -0.40689278]}, {index=4, offset=[-0.17627156, 2.53861070, -1.13850710]}, {index=5, offset=[0.79067680, 2.40897870, -0.64160660]}]",
+        1,
+    );
+    assert_ne!(duplicated, bugs, "the duplicate seat must change the table");
+    let err = load(&duplicated).expect_err("a duplicated pod seat must fail load");
+    assert!(err.contains("duplicated"), "{err}");
+
+    let head = bugs.replacen(
+        "{ name=\"head\",   part=\"head\",    shape=\"cone\",    size=[0.85,1.05], offset=[0,5.05,1.15], color=\"brute_amber\", point=\"up\" }",
+        "{ name=\"head\",   part=\"head\",    shape=\"cone\",    size=[0.85,1.05], offset=[0,5.05,1.15], color=\"brute_amber\", point=\"up\", emissive=true, visual_radius=0.20 }",
+        1,
+    );
+    assert_ne!(head, bugs, "the head glow must change the table");
+    let err = load(&head).expect_err("a head glow must fail load");
+    assert!(err.contains("head has no glow"), "{err}");
+
+    let bare = bugs.replacen("core = { anchor = \"core\", shape = \"sphere\", radius = 0.7 }\n", "", 1);
+    assert_ne!(bare, bugs, "dropping the core hit must change the table");
+    let err = load(&bare).expect_err("a core glow without a weak point must fail load");
+    assert!(err.contains("glow has no weak point"), "{err}");
+
+    let wide = bugs.replacen(
+        "name=\"cannon\", part=\"cannon\",  shape=\"sphere\",  size=[0.7,0.7,0.7], offset=[-0.00517016, 5.0, -0.70474398], color=\"spitter_glow\", emissive=true, phase_max=1, visual_radius=0.40",
+        "name=\"cannon\", part=\"cannon\",  shape=\"sphere\",  size=[0.7,0.7,0.7], offset=[-0.00517016, 5.0, -0.70474398], color=\"spitter_glow\", emissive=true, phase_max=1, visual_radius=0.90",
+        1,
+    );
+    assert_ne!(wide, bugs, "a wider cannon must change the table");
+    let err = load(&wide).expect_err("a tail glow past the cap must fail load");
+    assert!(err.contains("exceeds tail_glow_radius"), "{err}");
+}
+
+#[test]
+fn emissive_is_a_palette_field_not_a_name_suffix() {
+    let content = Content::embedded();
+    assert!(content.palette.emissive("gear_nyra_gun_glow"));
+    assert!(content.palette.emissive("gear_brakk_gun_glow"));
+    assert!(!content.palette.emissive("hero_vex_glow"), "body A is a fourth color");
+    assert!(!content.palette.emissive("hero_nyra_glow"));
+    assert!(!content.palette.emissive("swarmer_glow"), "a _glow suffix is not emissive");
+    assert!((content.cast.shade_mid_lin - 0.2623).abs() < 1.0e-4);
+    assert_eq!(content.cast.overdrive_emissive_channel, "accent");
+    assert_eq!(content.cast.overdrive_channel_index(), 2);
+
+    let base = gemini_sim::content::embedded_sources();
+    let palette = include_str!("../../../content/palette.toml");
+    let bugs = include_str!("../../../content/bugs.toml");
+    let load = |palette: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            waves: base.waves,
+            difficulty: base.difficulty,
+            controller: base.controller,
+            run_upgrades: base.run_upgrades,
+            endless: base.endless,
+            currency: base.currency,
+            banners: base.banners,
+            duplicate_ranks: base.duplicate_ranks,
+            bosses: base.bosses,
+            weapons: base.weapons,
+            hero: base.hero,
+            arena: base.arena,
+            presentation: base.presentation,
+            combat: base.combat,
+            palette,
+            music: base.music,
+            audio: base.audio,
+            bugs,
+            crate_reveal: base.crate_reveal,
+            coop: base.coop,
+            cosmetics: base.cosmetics,
+            ui: base.ui,
+            heroes_visual: base.heroes_visual,
+            arena_visual: base.arena_visual,
+        })
+    };
+    let missing = palette.replacen("gear_nyra_gun_glow = { hex = \"#62E3F7\", emissive = true }", "gear_nyra_gun_glow = \"#62E3F7\"", 1);
+    assert_ne!(missing, palette);
+    let err = load(&missing).expect_err("a glow key without emissive must fail load");
+    assert!(err.contains("emissive") || err.contains("gear_nyra_gun_glow"), "{err}");
+    let off = palette.replacen(
+        "gear_brakk_gun_glow = { hex = \"#39673D\", emissive = true }",
+        "gear_brakk_gun_glow = { hex = \"#39673D\", emissive = false }",
+        1,
+    );
+    let err = load(&off).expect_err("emissive = false must fail load");
+    assert!(err.contains("emissive must be true"), "{err}");
+}
+
+#[test]
+#[should_panic(expected = "unknown palette key")]
+fn emissive_rejects_an_unknown_name() {
+    Content::embedded().palette.emissive("not_a_palette_key");
 }
 
 #[test]
@@ -3152,3 +3342,4 @@ fn sources_ranks<'a>(
         arena_visual: base.arena_visual,
     }
 }
+

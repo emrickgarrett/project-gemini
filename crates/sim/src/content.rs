@@ -39,8 +39,12 @@ pub struct Content {
     pub ui: Ui,
     /// Full-body card meshes and the first-person glove. One list with the portraits.
     pub heroes_visual: HeroesVisual,
+    /// Meshy casts. Bodies, weapons, and bugs. The sim stores the record and does not read the files.
+    pub models: Vec<CastModel>,
     /// Deck, low rim, and the review camera. Not a collider.
     pub arena_dressing: ArenaDressing,
+    /// Mask threshold, rim strength, overdrive emissive, and the side-sheet orbit.
+    pub cast: CastLook,
 }
 
 pub struct Sources<'a> {
@@ -133,13 +137,32 @@ impl Content {
         ]);
         let mut bugs: crate::bugs::BugBook = parse("bugs.toml", src.bugs)?;
         crate::bugs::bind_weak_anchors(&mut bugs).map_err(|err| format!("bugs.toml: {err}"))?;
+        crate::bugs::require_point_names_are_not_parts(&bugs).map_err(|err| format!("bugs.toml: {err}"))?;
+        crate::bugs::require_glow_hit_centers(&bugs).map_err(|err| format!("bugs.toml: {err}"))?;
         crate::bugs::require_leg_layout(&bugs).map_err(|err| format!("bugs.toml: {err}"))?;
         let bosses = load_bosses(src.bosses).map_err(|err| format!("bosses.toml: {err}"))?;
         require_spawn_clearance(&bosses, &bugs).map_err(|err| format!("bosses.toml: {err}"))?;
         let mut palette: Palette = parse("palette.toml", src.palette)?;
+        validate_lit_keys(&palette).map_err(|err| format!("palette.toml: {err}"))?;
         let heroes_visual = load_heroes_visual(src.heroes_visual, &palette)?;
+        let bug_models = load_model_table(
+            include_str!("../../../content/bugs_visual.toml"),
+            &palette,
+            "bugs_visual.toml",
+        )?;
+        let mut models = heroes_visual.models.clone();
+        for model in bug_models {
+            if models.iter().any(|have| have.id == model.id) {
+                return Err(format!("duplicate cast model \"{}\"", model.id));
+            }
+            models.push(model);
+        }
         let mesh_ids: Vec<String> = heroes_visual.meshes.iter().map(|mesh| mesh.id.clone()).collect();
         let (mut hero, guns, roster, heroes, warnings) = load_characters(src.hero, &mesh_ids)?;
+        require_cast_roster(&models, &heroes, &bugs)?;
+        let cast = load_cast_look(include_str!("../../../content/cast.toml"), &palette)?;
+        crate::bugs::require_tail_glow_radius(&bugs, cast.tail_glow_radius)
+            .map_err(|err| format!("bugs.toml: {err}"))?;
         for mesh in &heroes_visual.meshes {
             if !heroes.iter().any(|card| card.portrait.mesh == mesh.id) {
                 return Err(format!(
@@ -233,7 +256,9 @@ impl Content {
             cosmetics: load_cosmetics(src.cosmetics).map_err(|err| format!("cosmetics.toml: {err}"))?,
             ui,
             heroes_visual,
+            models,
             arena_dressing,
+            cast,
         })
     }
 
@@ -1301,6 +1326,101 @@ pub struct HeroPortrait {
 pub struct HeroesVisual {
     pub meshes: Vec<HeroMesh>,
     pub glove: GloveSpec,
+    pub models: Vec<CastModel>,
+}
+
+/// One Meshy cast. Paths, budgets, and palette keys live here. The mesh crate reads the file.
+#[derive(Clone, Debug)]
+pub struct CastModel {
+    pub id: String,
+    /// Hero id for a weapon. Empty on bodies, shields, and bugs.
+    pub hero: String,
+    pub file: String,
+    /// SHA-256 of the shipped glb. The mesh crate checks the file bytes.
+    pub sha256: String,
+    /// The glb parents the mesh under a `*_grip_root` node. Guns and the shield.
+    pub grip_root: bool,
+    /// Cleaned mask PNG under assets/. Red is accent, green is glow.
+    pub mask: String,
+    pub triangles: u32,
+    pub bytes: u32,
+    pub source: String,
+    pub license: String,
+    pub task: String,
+    pub base: String,
+    /// Mask red. Empty on a bug cast.
+    pub primary: String,
+    /// Mask green. Empty on a bug cast.
+    pub secondary: String,
+    pub accent: String,
+    /// Mask alpha, a fourth color. Empty when that channel has no weight.
+    pub fourth: String,
+    /// sRGB shade map under assets/. Empty on a bug cast.
+    pub shade: String,
+    pub glow: String,
+    pub rim: String,
+    pub fit: String,
+    pub size: f32,
+    pub yaw_deg: f32,
+    pub at: [f32; 3],
+    pub grip: [f32; 3],
+    pub view: [f32; 3],
+    /// Pitch of a weapon around its grip, in degrees, before `viewmodel_offset`.
+    /// Positive raises the muzzle. Bodies and bugs stay at 0.
+    pub view_pitch_deg: f32,
+    /// Stock panel UV on TEXCOORD_0. `v = 0` is the top row. Weapons only.
+    pub stock_uv: Option<[f32; 2]>,
+    /// `primary` or `secondary`. Empty when this model has no stock point.
+    pub stock_channel: String,
+    /// Rail panel UV on TEXCOORD_0. Weapons only.
+    pub rail_uv: Option<[f32; 2]>,
+    /// `primary` or `secondary`. Empty when this model has no rail point.
+    pub rail_channel: String,
+}
+
+/// Tint scalars and the side-sheet camera. Colors stay palette keys.
+#[derive(Clone, Debug)]
+pub struct CastLook {
+    /// Linear divisor for a shade map. Albedo is `(shade / shade_mid_lin) * sum(weight * color)`.
+    pub shade_mid_lin: f32,
+    /// A fitted cast axis must land within this fraction of its body hitbox.
+    pub hitbox_fill: f32,
+    /// Max allowed max(axis scale) / min(axis scale), checked before the fit stretches.
+    pub axis_scale_limit: f32,
+    /// Authored radius of the tyrant tail glow. A larger cannon glow fails the load.
+    pub tail_glow_radius: f32,
+    /// Smallest share of a UV island that must match its face's mask channel.
+    pub min_island_coverage: f32,
+    /// Meters a glow center may sit off the cast. Past this, the mesh load fails.
+    pub hit_surface_gap: f32,
+    pub rim_strength: f32,
+    /// Facing share of the rim color on an unmasked bug texel. The fresnel takes the rest.
+    pub rim_fill: f32,
+    /// Mask channel Overdrive lights on the equipped gun: primary, secondary, accent, or fourth.
+    pub overdrive_emissive_channel: String,
+    /// HDR multiplier on `hero_<id>` while that channel is emissive.
+    pub overdrive_emissive_gain: [f32; 3],
+    /// Palette key for a live brood pod.
+    pub pod_glow_key: String,
+    /// Emissive multiplier is `pod_glow_base + glow * pod_glow_per_glow`.
+    pub pod_glow_base: f32,
+    pub pod_glow_per_glow: f32,
+    /// Exponent on the glow's radial edge. Higher keeps a solid core.
+    pub glow_falloff: f32,
+    /// How much of the painted sac shows through at the glow's edge. The core stays solid.
+    pub glow_show_through: f32,
+    /// Radial distance, in radii, inside which a glow core is pulled forward.
+    pub glow_core_perp: f32,
+    /// Closest a pulled glow core may sit to the camera, in the same units as the radius.
+    pub glow_core_depth: f32,
+    /// Longest edge, as a fraction of the model extent, before a triangle can be a needle.
+    pub needle_extent: f32,
+    /// Area over longest-edge squared below which that long triangle is a needle.
+    pub needle_area: f32,
+    pub review_yaw_deg: f32,
+    pub review_elev_deg: f32,
+    pub review_distance: f32,
+    pub review_fov_deg: f32,
 }
 
 /// One hero's ability, as the act-now cues read it. No hero or ability id.
@@ -1679,7 +1799,7 @@ fn load_portrait(
 fn load_heroes_visual(text: &str, palette: &Palette) -> Result<HeroesVisual, String> {
     let root: toml::Value = toml::from_str(text).map_err(|err| format!("heroes_visual.toml: {err}"))?;
     let table = root.as_table().ok_or_else(|| "heroes_visual.toml is not a table".to_string())?;
-    expect_keys(table, &["mesh", "glove"], "heroes_visual.toml")?;
+    expect_keys(table, &["mesh", "glove", "model"], "heroes_visual.toml")?;
     let rows = table
         .get("mesh")
         .and_then(|v| v.as_array())
@@ -1713,7 +1833,376 @@ fn load_heroes_visual(text: &str, palette: &Palette) -> Result<HeroesVisual, Str
         .get("glove")
         .and_then(|v| v.as_table())
         .ok_or_else(|| "heroes_visual.toml is missing [glove]".to_string())?;
-    Ok(HeroesVisual { meshes, glove: load_glove(glove_row)? })
+    let models = load_model_rows(
+        table.get("model").and_then(|v| v.as_array()),
+        palette,
+        "heroes_visual.toml",
+    )?;
+    Ok(HeroesVisual {
+        meshes,
+        glove: load_glove(glove_row)?,
+        models,
+    })
+}
+
+fn load_model_table(text: &str, palette: &Palette, what: &str) -> Result<Vec<CastModel>, String> {
+    let root: toml::Value = toml::from_str(text).map_err(|err| format!("{what}: {err}"))?;
+    let table = root.as_table().ok_or_else(|| format!("{what} is not a table"))?;
+    expect_keys(table, &["model"], what)?;
+    load_model_rows(table.get("model").and_then(|v| v.as_array()), palette, what)
+}
+
+fn load_model_rows(
+    rows: Option<&Vec<toml::Value>>,
+    palette: &Palette,
+    what: &str,
+) -> Result<Vec<CastModel>, String> {
+    let rows = rows.ok_or_else(|| format!("{what} is missing [[model]]"))?;
+    if rows.is_empty() {
+        return Err(format!("{what} has no [[model]]"));
+    }
+    let mut models: Vec<CastModel> = Vec::new();
+    for row in rows {
+        let map = row.as_table().ok_or_else(|| format!("{what} model is not a table"))?;
+        let fit_peek = map.get("fit").and_then(|v| v.as_str()).unwrap_or("");
+        let channeled = matches!(fit_peek, "hero" | "weapon" | "shield");
+        let mut keys = vec![
+            "id", "file", "sha256", "mask", "triangles", "bytes", "source", "license", "task", "base", "accent", "rim", "fit",
+            "grip_root", "size", "yaw_deg", "at", "grip", "view",
+        ];
+        if channeled {
+            keys.extend(["primary", "secondary", "fourth", "shade"]);
+        } else {
+            keys.push("glow");
+        }
+        if fit_peek == "weapon" {
+            keys.extend(["hero", "stock_uv", "stock_channel", "rail_uv", "rail_channel", "view_pitch_deg"]);
+        }
+        expect_keys(map, &keys, &format!("{what} model"))?;
+        let id = vis_str(map, "id", &format!("{what} model"))?.to_string();
+        if id.is_empty() || models.iter().any(|model| model.id == id) {
+            return Err(format!("{what} duplicate or empty model id \"{id}\""));
+        }
+        let file = vis_str(map, "file", &format!("{what} {id}"))?.to_string();
+        let expected = format!("models/{id}.glb");
+        if file != expected {
+            return Err(format!("{what} {id} file \"{file}\" is unknown"));
+        }
+        let sha256 = vis_str(map, "sha256", &format!("{what} {id}"))?.to_ascii_lowercase();
+        if sha256.len() != 64 || !sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(format!("{what} {id} sha256 must be 64 hex characters"));
+        }
+        let mask = vis_str(map, "mask", &format!("{what} {id}"))?.to_string();
+        let expected_mask = if channeled {
+            format!("masks/{id}_mask_rgba.png")
+        } else {
+            format!("masks/{id}_mask.png")
+        };
+        if mask != expected_mask {
+            return Err(format!("{what} {id} mask \"{mask}\" is unknown"));
+        }
+        let shade = if channeled {
+            let shade = vis_str(map, "shade", &format!("{what} {id}"))?.to_string();
+            let expected_shade = format!("masks/{id}_shade.png");
+            if shade != expected_shade {
+                return Err(format!("{what} {id} shade \"{shade}\" is unknown"));
+            }
+            shade
+        } else {
+            String::new()
+        };
+        let fit = vis_str(map, "fit", &format!("{what} {id}"))?.to_string();
+        if !matches!(fit.as_str(), "hero" | "hitbox" | "weapon" | "shield") {
+            return Err(format!("{what} {id} fit \"{fit}\" is unknown"));
+        }
+        let grip_root = vis_bool(map, "grip_root", &format!("{what} {id}"))?;
+        if grip_root && !matches!(fit.as_str(), "weapon" | "shield") {
+            return Err(format!("{what} {id} grip_root is only for a weapon or a shield"));
+        }
+        if !grip_root && matches!(fit.as_str(), "weapon" | "shield") {
+            return Err(format!("{what} {id} needs grip_root; there is no +X fallback"));
+        }
+        let size = vis_f32(map, "size", &format!("{what} {id}"))?;
+        if fit != "hitbox" && !(size > 0.0) {
+            return Err(format!("{what} {id} size must be > 0"));
+        }
+        let labeled = id.clone();
+        let color = |key: &str| -> Result<String, String> {
+            let name = vis_str(map, key, &format!("{what} {labeled}"))?.to_string();
+            if name.is_empty() {
+                if key == "rim" || (channeled && (key == "accent" || key == "fourth")) {
+                    return Ok(name);
+                }
+                return Err(format!("{what} {labeled} {key} is empty"));
+            }
+            let resolved = palette.hex(&name).unwrap_or("");
+            if resolved.trim().trim_start_matches('#').len() < 6 {
+                return Err(format!("{what} {labeled} {key} \"{name}\" does not resolve"));
+            }
+            Ok(name)
+        };
+        let source = vis_str(map, "source", &format!("{what} {id}"))?.to_string();
+        let license = vis_str(map, "license", &format!("{what} {id}"))?.to_string();
+        let task = vis_str(map, "task", &format!("{what} {id}"))?.to_string();
+        if source.is_empty() || license.is_empty() {
+            return Err(format!("{what} {id} source and license are required"));
+        }
+        if task == "not-in-handoff" {
+            return Err(format!(
+                "{what} {id} has no task id; leave task empty instead of a placeholder"
+            ));
+        }
+        let yaw_deg = vis_f32(map, "yaw_deg", &format!("{what} {id}"))?;
+        if !yaw_deg.is_finite() {
+            return Err(format!("{what} {id} yaw_deg must be finite"));
+        }
+        let hero = if fit == "weapon" {
+            let hero = vis_str(map, "hero", &format!("{what} {id}"))?.to_string();
+            if hero.is_empty() {
+                return Err(format!("{what} {id} hero is empty"));
+            }
+            hero
+        } else {
+            String::new()
+        };
+        let (stock_uv, stock_channel, rail_uv, rail_channel) = if fit == "weapon" {
+            let stock_uv = vis_vec2(map, "stock_uv", &format!("{what} {id}"))?;
+            let rail_uv = vis_vec2(map, "rail_uv", &format!("{what} {id}"))?;
+            let stock_channel = vis_str(map, "stock_channel", &format!("{what} {id}"))?.to_string();
+            let rail_channel = vis_str(map, "rail_channel", &format!("{what} {id}"))?.to_string();
+            for (name, uv) in [("stock_uv", stock_uv), ("rail_uv", rail_uv)] {
+                if uv.iter().any(|n| !n.is_finite() || !(0.0..=1.0).contains(n)) {
+                    return Err(format!("{what} {id} {name} must be finite and in 0..=1"));
+                }
+            }
+            for (name, channel) in [("stock_channel", &stock_channel), ("rail_channel", &rail_channel)] {
+                if !matches!(channel.as_str(), "primary" | "secondary") {
+                    return Err(format!("{what} {id} {name} \"{channel}\" is unknown"));
+                }
+            }
+            (Some(stock_uv), stock_channel, Some(rail_uv), rail_channel)
+        } else {
+            (None, String::new(), None, String::new())
+        };
+        let view_pitch_deg = if fit == "weapon" {
+            let pitch = vis_f32(map, "view_pitch_deg", &format!("{what} {labeled}"))?;
+            if !pitch.is_finite() || !(-80.0..=80.0).contains(&pitch) {
+                return Err(format!("{what} {labeled} view_pitch_deg must be finite and in -80..=80"));
+            }
+            pitch
+        } else {
+            0.0
+        };
+        models.push(CastModel {
+            id,
+            hero,
+            file,
+            sha256,
+            mask,
+            triangles: vis_u32(map, "triangles", &format!("{what} model"))?,
+            bytes: vis_u32(map, "bytes", &format!("{what} model"))?,
+            source,
+            license,
+            task,
+            base: color("base")?,
+            primary: if channeled { color("primary")? } else { String::new() },
+            secondary: if channeled { color("secondary")? } else { String::new() },
+            accent: color("accent")?,
+            fourth: if channeled { color("fourth")? } else { String::new() },
+            shade,
+            glow: if channeled { String::new() } else { color("glow")? },
+            rim: color("rim")?,
+            fit,
+            grip_root,
+            size,
+            yaw_deg,
+            at: vis_vec3(map, "at", &format!("{what} model"))?,
+            grip: vis_vec3(map, "grip", &format!("{what} model"))?,
+            view: vis_vec3(map, "view", &format!("{what} model"))?,
+            view_pitch_deg,
+            stock_uv,
+            stock_channel,
+            rail_uv,
+            rail_channel,
+        });
+    }
+    Ok(models)
+}
+
+fn require_cast_roster(models: &[CastModel], heroes: &[HeroCard], bugs: &crate::bugs::BugBook) -> Result<(), String> {
+    let mut need = Vec::new();
+    for hero in heroes {
+        need.push(format!("{}_body", hero.id));
+        need.push(format!("{}_gun", hero.id));
+        if hero.id == "brakk" {
+            need.push("brakk_shield".to_string());
+        }
+    }
+    for (id, _) in bugs.rows() {
+        need.push(id.to_string());
+    }
+    for id in &need {
+        if !models.iter().any(|model| model.id == *id) {
+            return Err(format!("cast model \"{id}\" is missing"));
+        }
+    }
+    if models.len() != need.len() {
+        let extra: Vec<&str> = models
+            .iter()
+            .filter(|model| !need.iter().any(|id| id == &model.id))
+            .map(|model| model.id.as_str())
+            .collect();
+        return Err(format!(
+            "cast roster has {} models, expected {} (extra {extra:?})",
+            models.len(),
+            need.len()
+        ));
+    }
+    Ok(())
+}
+
+fn load_cast_look(text: &str, palette: &Palette) -> Result<CastLook, String> {
+    let root: toml::Value = toml::from_str(text).map_err(|err| format!("cast.toml: {err}"))?;
+    let table = root.as_table().ok_or_else(|| "cast.toml is not a table".to_string())?;
+    expect_keys(
+        table,
+        &[
+            "shade_mid_lin",
+            "hitbox_fill",
+            "axis_scale_limit",
+            "tail_glow_radius",
+            "min_island_coverage",
+            "hit_surface_gap",
+            "rim_strength",
+            "rim_fill",
+            "overdrive_emissive_channel",
+            "overdrive_emissive_gain",
+            "pod_glow_key",
+            "pod_glow_base",
+            "pod_glow_per_glow",
+            "glow_falloff",
+            "glow_show_through",
+            "glow_core_perp",
+            "glow_core_depth",
+            "needle_extent",
+            "needle_area",
+            "review_yaw_deg",
+            "review_elev_deg",
+            "review_distance",
+            "review_fov_deg",
+        ],
+        "cast.toml",
+    )?;
+    let shade_mid_lin = vis_f32(table, "shade_mid_lin", "cast.toml")?;
+    let rim_strength = vis_f32(table, "rim_strength", "cast.toml")?;
+    if !(shade_mid_lin > 0.0 && shade_mid_lin <= 1.0) {
+        return Err("cast.toml shade_mid_lin must be > 0 and <= 1".into());
+    }
+    let hitbox_fill = vis_f32(table, "hitbox_fill", "cast.toml")?;
+    if !(hitbox_fill >= 0.0 && hitbox_fill < 0.5) {
+        return Err("cast.toml hitbox_fill must be >= 0 and < 0.5".into());
+    }
+    let axis_scale_limit = vis_f32(table, "axis_scale_limit", "cast.toml")?;
+    if !(axis_scale_limit >= 1.0 && axis_scale_limit <= 3.0) {
+        return Err("cast.toml axis_scale_limit must be >= 1 and <= 3".into());
+    }
+    let tail_glow_radius = vis_f32(table, "tail_glow_radius", "cast.toml")?;
+    if !(tail_glow_radius > 0.0 && tail_glow_radius < 2.0) {
+        return Err("cast.toml tail_glow_radius must be > 0 and < 2".into());
+    }
+    let min_island_coverage = vis_f32(table, "min_island_coverage", "cast.toml")?;
+    if !(min_island_coverage >= 0.98 && min_island_coverage <= 1.0) {
+        return Err("cast.toml min_island_coverage must be >= 0.98 and <= 1".into());
+    }
+    let hit_surface_gap = vis_f32(table, "hit_surface_gap", "cast.toml")?;
+    if !(hit_surface_gap > 0.0 && hit_surface_gap <= 0.2) {
+        return Err("cast.toml hit_surface_gap must be > 0 and <= 0.2".into());
+    }
+    if !(rim_strength >= 0.0 && rim_strength <= 1.0) {
+        return Err("cast.toml rim_strength must be between 0 and 1".into());
+    }
+    let rim_fill = vis_f32(table, "rim_fill", "cast.toml")?;
+    if !(rim_fill >= 0.0 && rim_fill < 1.0) {
+        return Err("cast.toml rim_fill must be >= 0 and < 1".into());
+    }
+    let overdrive_emissive_channel = vis_str(table, "overdrive_emissive_channel", "cast.toml")?.to_string();
+    if channel_index(&overdrive_emissive_channel).is_none() {
+        return Err(format!(
+            "cast.toml overdrive_emissive_channel \"{overdrive_emissive_channel}\" is unknown"
+        ));
+    }
+    let gain_value = table
+        .get("overdrive_emissive_gain")
+        .ok_or_else(|| "cast.toml is missing overdrive_emissive_gain".to_string())?;
+    let overdrive_emissive_gain = nums3(gain_value, "cast.toml overdrive_emissive_gain")?;
+    if overdrive_emissive_gain.iter().any(|n| !n.is_finite() || *n < 0.0) {
+        return Err("cast.toml overdrive_emissive_gain must be finite and >= 0".into());
+    }
+    let pod_glow_key = vis_str(table, "pod_glow_key", "cast.toml")?.to_string();
+    if palette.hex(&pod_glow_key).is_none() {
+        return Err(format!("cast.toml pod_glow_key \"{pod_glow_key}\" does not resolve"));
+    }
+    let pod_glow_base = vis_f32(table, "pod_glow_base", "cast.toml")?;
+    let pod_glow_per_glow = vis_f32(table, "pod_glow_per_glow", "cast.toml")?;
+    if !pod_glow_base.is_finite() || pod_glow_base < 0.0 || !pod_glow_per_glow.is_finite() || pod_glow_per_glow < 0.0 {
+        return Err("cast.toml pod glow multipliers must be finite and >= 0".into());
+    }
+    let glow_falloff = vis_f32(table, "glow_falloff", "cast.toml")?;
+    let glow_show_through = vis_f32(table, "glow_show_through", "cast.toml")?;
+    if !(glow_falloff > 1.0 && glow_falloff <= 8.0) {
+        return Err("cast.toml glow_falloff must be > 1 and <= 8".into());
+    }
+    if !(glow_show_through >= 0.0 && glow_show_through < 1.0) {
+        return Err("cast.toml glow_show_through must be >= 0 and < 1".into());
+    }
+    let glow_core_perp = vis_f32(table, "glow_core_perp", "cast.toml")?;
+    let glow_core_depth = vis_f32(table, "glow_core_depth", "cast.toml")?;
+    if !(glow_core_perp > 0.0 && glow_core_perp <= 1.0) {
+        return Err("cast.toml glow_core_perp must be > 0 and <= 1".into());
+    }
+    if !(glow_core_depth > 0.0 && glow_core_depth < 1.0) {
+        return Err("cast.toml glow_core_depth must be > 0 and < 1".into());
+    }
+    let needle_extent = vis_f32(table, "needle_extent", "cast.toml")?;
+    let needle_area = vis_f32(table, "needle_area", "cast.toml")?;
+    if !(needle_extent > 0.0 && needle_extent <= 1.0) {
+        return Err("cast.toml needle_extent must be > 0 and <= 1".into());
+    }
+    if !(needle_area > 0.0 && needle_area < 1.0) {
+        return Err("cast.toml needle_area must be > 0 and < 1".into());
+    }
+    let review_yaw_deg = vis_f32(table, "review_yaw_deg", "cast.toml")?;
+    let review_elev_deg = vis_f32(table, "review_elev_deg", "cast.toml")?;
+    let review_distance = vis_f32(table, "review_distance", "cast.toml")?;
+    let review_fov_deg = vis_f32(table, "review_fov_deg", "cast.toml")?;
+    if !(review_distance > 0.0) || !(review_fov_deg > 0.0 && review_fov_deg < 180.0) {
+        return Err("cast.toml review camera is out of range".into());
+    }
+    Ok(CastLook {
+        shade_mid_lin,
+        hitbox_fill,
+        axis_scale_limit,
+        tail_glow_radius,
+        min_island_coverage,
+        hit_surface_gap,
+        rim_strength,
+        rim_fill,
+        overdrive_emissive_channel,
+        overdrive_emissive_gain,
+        pod_glow_key,
+        pod_glow_base,
+        pod_glow_per_glow,
+        glow_falloff,
+        glow_show_through,
+        glow_core_perp,
+        glow_core_depth,
+        needle_extent,
+        needle_area,
+        review_yaw_deg,
+        review_elev_deg,
+        review_distance,
+        review_fov_deg,
+    })
 }
 
 fn load_hero_part(value: &toml::Value, id: &str, palette: &Palette) -> Result<HeroPart, String> {
@@ -2025,6 +2514,30 @@ fn vis_bool(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) 
         .get(key)
         .and_then(|v| v.as_bool())
         .ok_or_else(|| format!("{what} {key} must be a bool"))
+}
+
+fn vis_vec2(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<[f32; 2], String> {
+    let arr = table
+        .get(key)
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| format!("{what} {key} must be 2 numbers"))?;
+    if arr.len() != 2 {
+        return Err(format!("{what} {key} must be 2 numbers"));
+    }
+    let mut out = [0.0; 2];
+    for (i, slot) in arr.iter().enumerate() {
+        if let Some(n) = slot.as_float() {
+            out[i] = n as f32;
+        } else if let Some(n) = slot.as_integer() {
+            out[i] = n as f32;
+        } else {
+            return Err(format!("{what} {key} must be 2 numbers"));
+        }
+        if !out[i].is_finite() {
+            return Err(format!("{what} {key} is not finite"));
+        }
+    }
+    Ok(out)
 }
 
 fn vis_vec3(table: &toml::map::Map<String, toml::Value>, key: &str, what: &str) -> Result<[f32; 3], String> {
@@ -3368,6 +3881,14 @@ pub struct BugColors {
     pub magenta: String,
 }
 
+/// A palette color that declares whether it is emissive. The name is not the flag.
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LitKey {
+    pub hex: String,
+    pub emissive: bool,
+}
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct PaletteKeys {
     pub swarmer_amber: String,
@@ -3386,9 +3907,42 @@ pub struct PaletteKeys {
     pub hero_nyra: String,
     pub hero_brakk: String,
     pub hero_kip: String,
+    pub spitter_rim: String,
     pub hero_plate: String,
     pub portrait_field: String,
     pub arena_sky: String,
+    pub hero_vex_primary: String,
+    pub hero_vex_secondary: String,
+    pub hero_vex_accent: String,
+    pub hero_vex_glow: String,
+    pub hero_nyra_primary: String,
+    pub hero_nyra_secondary: String,
+    pub hero_nyra_accent: String,
+    pub hero_nyra_glow: String,
+    pub hero_brakk_primary: String,
+    pub hero_brakk_secondary: String,
+    pub hero_brakk_accent: String,
+    pub hero_brakk_glow: String,
+    pub hero_kip_primary: String,
+    pub hero_kip_secondary: String,
+    pub hero_kip_accent: String,
+    pub hero_kip_glow: String,
+    pub gear_vex_gun_primary: String,
+    pub gear_vex_gun_secondary: String,
+    pub gear_vex_gun_accent: String,
+    pub gear_nyra_gun_primary: String,
+    pub gear_nyra_gun_secondary: String,
+    pub gear_nyra_gun_accent: String,
+    pub gear_nyra_gun_glow: LitKey,
+    pub gear_brakk_gun_primary: String,
+    pub gear_brakk_gun_secondary: String,
+    pub gear_brakk_gun_glow: LitKey,
+    pub gear_kip_gun_primary: String,
+    pub gear_kip_gun_secondary: String,
+    pub gear_kip_gun_accent: String,
+    pub gear_brakk_shield_primary: String,
+    pub gear_brakk_shield_secondary: String,
+    pub gear_brakk_shield_accent: String,
 }
 
 impl Palette {
@@ -3411,9 +3965,42 @@ impl Palette {
             "hero_nyra" => self.keys.hero_nyra.as_str(),
             "hero_brakk" => self.keys.hero_brakk.as_str(),
             "hero_kip" => self.keys.hero_kip.as_str(),
+            "spitter_rim" => self.keys.spitter_rim.as_str(),
             "hero_plate" => self.keys.hero_plate.as_str(),
             "portrait_field" => self.keys.portrait_field.as_str(),
             "arena_sky" => self.keys.arena_sky.as_str(),
+            "hero_vex_primary" => self.keys.hero_vex_primary.as_str(),
+            "hero_vex_secondary" => self.keys.hero_vex_secondary.as_str(),
+            "hero_vex_accent" => self.keys.hero_vex_accent.as_str(),
+            "hero_vex_glow" => self.keys.hero_vex_glow.as_str(),
+            "hero_nyra_primary" => self.keys.hero_nyra_primary.as_str(),
+            "hero_nyra_secondary" => self.keys.hero_nyra_secondary.as_str(),
+            "hero_nyra_accent" => self.keys.hero_nyra_accent.as_str(),
+            "hero_nyra_glow" => self.keys.hero_nyra_glow.as_str(),
+            "hero_brakk_primary" => self.keys.hero_brakk_primary.as_str(),
+            "hero_brakk_secondary" => self.keys.hero_brakk_secondary.as_str(),
+            "hero_brakk_accent" => self.keys.hero_brakk_accent.as_str(),
+            "hero_brakk_glow" => self.keys.hero_brakk_glow.as_str(),
+            "hero_kip_primary" => self.keys.hero_kip_primary.as_str(),
+            "hero_kip_secondary" => self.keys.hero_kip_secondary.as_str(),
+            "hero_kip_accent" => self.keys.hero_kip_accent.as_str(),
+            "hero_kip_glow" => self.keys.hero_kip_glow.as_str(),
+            "gear_vex_gun_primary" => self.keys.gear_vex_gun_primary.as_str(),
+            "gear_vex_gun_secondary" => self.keys.gear_vex_gun_secondary.as_str(),
+            "gear_vex_gun_accent" => self.keys.gear_vex_gun_accent.as_str(),
+            "gear_nyra_gun_primary" => self.keys.gear_nyra_gun_primary.as_str(),
+            "gear_nyra_gun_secondary" => self.keys.gear_nyra_gun_secondary.as_str(),
+            "gear_nyra_gun_accent" => self.keys.gear_nyra_gun_accent.as_str(),
+            "gear_nyra_gun_glow" => self.keys.gear_nyra_gun_glow.hex.as_str(),
+            "gear_brakk_gun_primary" => self.keys.gear_brakk_gun_primary.as_str(),
+            "gear_brakk_gun_secondary" => self.keys.gear_brakk_gun_secondary.as_str(),
+            "gear_brakk_gun_glow" => self.keys.gear_brakk_gun_glow.hex.as_str(),
+            "gear_kip_gun_primary" => self.keys.gear_kip_gun_primary.as_str(),
+            "gear_kip_gun_secondary" => self.keys.gear_kip_gun_secondary.as_str(),
+            "gear_kip_gun_accent" => self.keys.gear_kip_gun_accent.as_str(),
+            "gear_brakk_shield_primary" => self.keys.gear_brakk_shield_primary.as_str(),
+            "gear_brakk_shield_secondary" => self.keys.gear_brakk_shield_secondary.as_str(),
+            "gear_brakk_shield_accent" => self.keys.gear_brakk_shield_accent.as_str(),
             "hero_teal" | "teal" => self.hero.teal.as_str(),
             "hero_cobalt" | "cobalt" => self.hero.cobalt.as_str(),
             "hero_white" | "white" => self.hero.white.as_str(),
@@ -3432,6 +4019,57 @@ impl Palette {
     pub fn key(&self, name: &str) -> [f32; 4] {
         hex_srgb(self.hex(name).unwrap_or_else(|| panic!("unknown palette key {name}")))
     }
+
+    /// True only when that entry's `emissive` field is true. A `_glow` suffix is not enough.
+    /// An unknown name panics, the same way `key` does.
+    pub fn emissive(&self, name: &str) -> bool {
+        if self.hex(name).is_none() {
+            panic!("unknown palette key {name}");
+        }
+        match name {
+            "gear_nyra_gun_glow" => self.keys.gear_nyra_gun_glow.emissive,
+            "gear_brakk_gun_glow" => self.keys.gear_brakk_gun_glow.emissive,
+            _ => false,
+        }
+    }
+}
+
+/// Mask slot. `primary` is 0, `secondary` is 1, `accent` is 2, `fourth` is 3.
+pub fn channel_index(name: &str) -> Option<usize> {
+    match name {
+        "primary" => Some(0),
+        "secondary" => Some(1),
+        "accent" => Some(2),
+        "fourth" => Some(3),
+        _ => None,
+    }
+}
+
+impl CastLook {
+    /// Mask slot for `overdrive_emissive_channel`. Load rejects any other name.
+    pub fn overdrive_channel_index(&self) -> usize {
+        channel_index(&self.overdrive_emissive_channel).unwrap_or_else(|| {
+            panic!(
+                "cast.toml overdrive_emissive_channel \"{}\" is unknown",
+                self.overdrive_emissive_channel
+            )
+        })
+    }
+}
+
+fn validate_lit_keys(palette: &Palette) -> Result<(), String> {
+    for (name, lit) in [
+        ("gear_nyra_gun_glow", &palette.keys.gear_nyra_gun_glow),
+        ("gear_brakk_gun_glow", &palette.keys.gear_brakk_gun_glow),
+    ] {
+        if lit.hex.trim().trim_start_matches('#').len() < 6 {
+            return Err(format!("{name} hex does not resolve"));
+        }
+        if !lit.emissive {
+            return Err(format!("{name} emissive must be true"));
+        }
+    }
+    Ok(())
 }
 
 fn require_palette_keys(
@@ -3977,6 +4615,12 @@ pub struct UiLayout {
     pub portrait_fraction: f32,
     /// Locked portrait glow mixes this far from grayscale back toward the accent.
     pub locked_accent_mix: f32,
+    /// Chroma floor before a locked portrait pixel can count as the accent.
+    pub locked_accent_chroma: f32,
+    /// Value floor before a locked portrait pixel can count as the accent.
+    pub locked_accent_value: f32,
+    /// Hue window, in degrees, around the UI accent.
+    pub locked_hue_window: f32,
     /// Non-accent portrait pixels desaturate this far on a locked card. 1 is fully gray.
     pub locked_body_desaturation: f32,
     pub card_pad: f32,
@@ -4211,6 +4855,15 @@ fn validate_ui(
     if !(layout.locked_accent_mix > 0.0 && layout.locked_accent_mix < 1.0) {
         return Err("ui.toml layout.locked_accent_mix must be in (0, 1)".into());
     }
+    if !(layout.locked_accent_chroma >= 1.0 && layout.locked_accent_chroma <= 64.0) {
+        return Err("ui.toml layout.locked_accent_chroma must be in [1, 64]".into());
+    }
+    if !(layout.locked_accent_value >= 1.0 && layout.locked_accent_value <= 64.0) {
+        return Err("ui.toml layout.locked_accent_value must be in [1, 64]".into());
+    }
+    if !(layout.locked_hue_window > 0.0 && layout.locked_hue_window <= 45.0) {
+        return Err("ui.toml layout.locked_hue_window must be in (0, 45]".into());
+    }
     if !(layout.locked_body_desaturation >= 0.0 && layout.locked_body_desaturation <= 1.0) {
         return Err("ui.toml layout.locked_body_desaturation must be in [0, 1]".into());
     }
@@ -4413,6 +5066,39 @@ fn check_range(name: &str, value: f32, min: f32, max: f32, step: f32) -> Result<
         return Err(format!("ui.toml settings.{name} {value} is outside [{min}, {max}]"));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod cast_look_tests {
+    use super::{load_cast_look, Content};
+
+    #[test]
+    fn overdrive_channel_must_name_a_mask_slot() {
+        let palette = Content::embedded().palette;
+        let text = include_str!("../../../content/cast.toml");
+        let look = load_cast_look(text, &palette).expect("cast.toml");
+        assert_eq!(look.overdrive_emissive_channel, "accent");
+        assert_eq!(look.overdrive_channel_index(), 2);
+        let missing = text.replacen("overdrive_emissive_channel = \"accent\"\n", "", 1);
+        assert_ne!(missing, text);
+        let err = load_cast_look(&missing, &palette).expect_err("a missing channel must fail");
+        assert!(err.contains("overdrive_emissive_channel"), "{err}");
+        let unknown = text.replacen(
+            "overdrive_emissive_channel = \"accent\"",
+            "overdrive_emissive_channel = \"glow\"",
+            1,
+        );
+        let err = load_cast_look(&unknown, &palette).expect_err("an unknown channel must fail");
+        assert!(err.contains("unknown"), "{err}");
+        assert!((look.hit_surface_gap - 0.05).abs() < 1.0e-6, "hit_surface_gap is 5 cm");
+        let missing = text.replacen("hit_surface_gap = 0.05\n", "", 1);
+        assert_ne!(missing, text);
+        let err = load_cast_look(&missing, &palette).expect_err("a missing gap must fail");
+        assert!(err.contains("hit_surface_gap"), "{err}");
+        let wide = text.replacen("hit_surface_gap = 0.05", "hit_surface_gap = 1.0", 1);
+        let err = load_cast_look(&wide, &palette).expect_err("a meter-wide gap must fail");
+        assert!(err.contains("hit_surface_gap"), "{err}");
+    }
 }
 
 fn require_fit(label: &str, scale: u32, glyph: u32, inner: f32, what: &str) -> Result<(), String> {
