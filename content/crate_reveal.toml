@@ -26,6 +26,10 @@ border_mix = 0.42
 gem_height = 0.30
 gem_glow = 0.72
 divider_px = 2
+# Mix of the rule under the gem, the gem rim, and the crack glow.
+divider_blend = 0.45
+gem_edge_blend = 0.45
+crack_glow_blend = 0.45
 stage = "reveal_stage"
 ink_dark = "reveal_ink"
 ink_light = "reveal_paper"
@@ -96,6 +100,16 @@ pod_interval = 0.35
 full_sequence_for = "highest_rarity"
 summary_grid = true
 
+# Item icon on a card face. The box is an integer fraction of the face.
+# A cell is lit when row + col is below (rows + cols) / highlight_div.
+[icon]
+width_num = 3
+width_den = 4
+height_num = 2
+height_den = 5
+highlight_div = 3
+highlight_blend = 0.45
+
 # Ten-pull grid. columns * rows must equal banners.toml cost.pods.
 # fast_flip is the gap between card ticks. The best card keeps its tier time.
 [grid]
@@ -115,6 +129,9 @@ refund_face = "reveal_paper"
 refund_ink = "reveal_ink"
 refund_tick = "ui_count_tick"
 flip_cue = "crate_flip"
+# Failed or replayed PULL AGAIN. The line is this paper color, under the buttons.
+pull_failed = "ui_pull_failed"
+failure_ink = "reveal_paper"
 display = "roll"
 
 # SKIP / ENTER sit small in the bottom-right. Opacity is the prompt's alpha.

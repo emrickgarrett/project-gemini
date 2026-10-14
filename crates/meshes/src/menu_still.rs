@@ -463,34 +463,37 @@ fn paint_crates(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, r
     y += (scale * rows) as i32 + frame.px(ui.layout.title_gap);
     let places = ui.layout.currency_decimals;
     let short = |cost: u32| credits.filter(|have| *have + 1e-3 < cost as f32).map(|have| (cost as f32 - have).max(0.0));
-    for (label, missing) in [(&ui.copy.crates_pull, short(content.banners.cost.single)), (&ui.copy.crates_ten, short(content.banners.cost.ten_pull_cost))] {
-        let Some(missing) = missing else { continue };
-        let text = gemini_sim::content::shortfall_line(&ui.copy, places, missing);
-        let tw = measure(&text, scale, glyph) as i32;
-        blit(rgb, frame.width, frame.height, (frame.width as i32 - tw) / 2, y, &text, paper, scale, glyph);
-        y += (scale * rows) as i32 + frame.px(ui.layout.spacing_block);
-    }
     let mut hits = Vec::new();
     let mut index = 0;
-    let pull_open = short(content.banners.cost.single).is_none();
-    let ten_open = short(content.banners.cost.ten_pull_cost).is_none();
+    let pull_missing = short(content.banners.cost.single);
+    let ten_missing = short(content.banners.cost.ten_pull_cost);
+    let pull_open = pull_missing.is_none();
+    let ten_open = ten_missing.is_none();
     if pull_open {
         let hit = crate_button(rgb, content, frame, y, &ui.copy.crates_pull, focus == index);
         y = hit.y + hit.h + frame.px(ui.layout.row_gap);
         hits.push(Hit { id: "pull".into(), ..hit });
         index += 1;
-    } else {
+    } else if let Some(missing) = pull_missing {
         let hit = crate_button_dim(rgb, content, frame, y, &ui.copy.crates_pull);
-        y = hit.y + hit.h + frame.px(ui.layout.row_gap);
+        y = hit.y + hit.h + frame.px(ui.layout.spacing_block);
+        let text = gemini_sim::content::shortfall_line(&ui.copy, places, missing);
+        let tw = measure(&text, scale, glyph) as i32;
+        blit(rgb, frame.width, frame.height, (frame.width as i32 - tw) / 2, y, &text, paper, scale, glyph);
+        y += (scale * rows) as i32 + frame.px(ui.layout.row_gap);
     }
     if ten_open {
         let hit = crate_button(rgb, content, frame, y, &ui.copy.crates_ten, focus == index);
         y = hit.y + hit.h + frame.px(ui.layout.row_gap);
         hits.push(Hit { id: "ten".into(), ..hit });
         index += 1;
-    } else {
+    } else if let Some(missing) = ten_missing {
         let hit = crate_button_dim(rgb, content, frame, y, &ui.copy.crates_ten);
-        y = hit.y + hit.h + frame.px(ui.layout.row_gap);
+        y = hit.y + hit.h + frame.px(ui.layout.spacing_block);
+        let text = gemini_sim::content::shortfall_line(&ui.copy, places, missing);
+        let tw = measure(&text, scale, glyph) as i32;
+        blit(rgb, frame.width, frame.height, (frame.width as i32 - tw) / 2, y, &text, paper, scale, glyph);
+        y += (scale * rows) as i32 + frame.px(ui.layout.row_gap);
     }
     if rarity.is_some() {
         let hit = crate_button(rgb, content, frame, y, &ui.copy.crates_open, focus == index);

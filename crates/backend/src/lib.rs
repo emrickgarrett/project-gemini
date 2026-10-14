@@ -458,7 +458,7 @@ impl Account {
             }
             for index in 0..pull_keys {
                 let key = read_str(bytes, &mut at)?;
-                let (banner, ten, seq, legacy) = if version >= 4 {
+                let (banner, ten, seq, _legacy) = if version >= 4 {
                     let banner = read_str(bytes, &mut at)?;
                     if banner.is_empty() {
                         return Err("dev account save has a pull key with no banner".into());
@@ -489,7 +489,13 @@ impl Account {
                     if powered > 1 {
                         return Err("dev account save has a bad pull flag".into());
                     }
-                    let item = if version >= 5 { read_str(bytes, &mut at)? } else { String::new() };
+                    if version < 5 {
+                        continue;
+                    }
+                    let item = read_str(bytes, &mut at)?;
+                    if item.is_empty() {
+                        return Err("dev account save has a pull with no item".into());
+                    }
                     pulls.push(Pull {
                         banner,
                         rarity,
@@ -501,8 +507,11 @@ impl Account {
                     });
                 }
                 let fault = read_fault(bytes, &mut at)?;
+                if version < 5 {
+                    continue;
+                }
                 if pulls_by_key
-                    .insert(key, StoredPull { banner, ten, seq, legacy, pulls, fault })
+                    .insert(key, StoredPull { banner, ten, seq, legacy: false, pulls, fault })
                     .is_some()
                 {
                     return Err("dev account save repeats a pull key".into());
@@ -1584,26 +1593,18 @@ mod tests {
         let mid = pods / 2;
         assert!(mid >= 2 && mid < pods, "the threshold has to land inside the ten-pull");
         let price = content.banners.cost.ten_pull_cost as f32;
-        let mut found = None;
-        // Item choice draws the rng after the tier, so the seed that avoids an early legendary moves.
-        for seed in 1..20_000 {
-            let mut account = Account::from_seed(seed);
-            account.credits = price;
-            account.pity.insert(
-                "standard".into(),
-                Pity {
-                    since_legendary: hard - mid,
-                    since_epic: 0,
-                },
-            );
-            let batch = account.pull_ten(&content, "standard", "pity").unwrap();
-            let early = batch.pulls.iter().take(mid as usize - 1).any(|pull| pull.rarity == "legendary");
-            if !early {
-                found = Some(account);
-                break;
-            }
-        }
-        let account = found.expect("a seed where hard pity lands mid ten-pull");
+        let mut account = Account::from_seed(945);
+        account.credits = price;
+        account.pity.insert(
+            "standard".into(),
+            Pity {
+                since_legendary: hard - mid,
+                since_epic: 0,
+            },
+        );
+        let batch = account.pull_ten(&content, "standard", "pity").unwrap();
+        let early = batch.pulls.iter().take(mid as usize - 1).any(|pull| pull.rarity == "legendary");
+        assert!(!early, "seed 945 keeps hard pity inside the ten-pull");
         let rows = &account.audit;
         assert_eq!(rows.len(), pods as usize);
         let hit = &rows[mid as usize - 1];
@@ -1628,6 +1629,121 @@ mod tests {
                 assert_eq!(row.since_legendary, counter);
             }
         }
+    }
+
+    fn pull_section(bytes: &[u8]) -> usize {
+        let mut at = SAVE_V1.len();
+        let _ = read_u32(bytes, &mut at).unwrap();
+        let _ = read_u32(bytes, &mut at).unwrap();
+        let _ = read_f32(bytes, &mut at).unwrap();
+        let _ = read_opt_str(bytes, &mut at).unwrap();
+        let pity_len = read_u32(bytes, &mut at).unwrap() as usize;
+        for _ in 0..pity_len {
+            let _ = read_str(bytes, &mut at).unwrap();
+            let _ = read_u32(bytes, &mut at).unwrap();
+            let _ = read_u32(bytes, &mut at).unwrap();
+        }
+        let audit_len = read_u32(bytes, &mut at).unwrap() as usize;
+        for _ in 0..audit_len {
+            let _ = read_str(bytes, &mut at).unwrap();
+            let _ = read_str(bytes, &mut at).unwrap();
+            let _ = read_opt_str(bytes, &mut at).unwrap();
+            let _ = read_u32(bytes, &mut at).unwrap();
+            let _ = read_u32(bytes, &mut at).unwrap();
+            let _ = read_u8(bytes, &mut at).unwrap();
+            let _ = read_f32(bytes, &mut at).unwrap();
+            let _ = read_u32(bytes, &mut at).unwrap();
+            let _ = read_u32(bytes, &mut at).unwrap();
+            let _ = read_u32(bytes, &mut at).unwrap();
+            let _ = read_u32(bytes, &mut at).unwrap();
+        }
+        let _ = read_exact(bytes, &mut at, 32).unwrap();
+        let _ = read_u64(bytes, &mut at).unwrap();
+        let _ = read_u64(bytes, &mut at).unwrap();
+        let bank_len = read_u32(bytes, &mut at).unwrap() as usize;
+        for _ in 0..bank_len {
+            let _ = read_u64(bytes, &mut at).unwrap();
+            let _ = read_u64(bytes, &mut at).unwrap();
+            let _ = read_f32(bytes, &mut at).unwrap();
+            let _ = read_f32(bytes, &mut at).unwrap();
+        }
+        at
+    }
+
+    /// Rewrite a v5 save's receipts as an older header. v3 and v4 have no item string.
+    fn rewrite_pulls(bytes: &[u8], version: u32, blank_item: bool) -> Vec<u8> {
+        let at = pull_section(bytes);
+        let mut out = bytes[..at].to_vec();
+        let header = match version {
+            3 => SAVE_V3,
+            4 => SAVE_V4,
+            5 => SAVE_V5,
+            _ => panic!("save version {version}"),
+        };
+        out[..header.len()].copy_from_slice(header);
+        let mut cursor = at;
+        let pull_keys = read_u32(bytes, &mut cursor).unwrap();
+        write_u32(&mut out, pull_keys);
+        for _ in 0..pull_keys {
+            let key = read_str(bytes, &mut cursor).unwrap();
+            write_str(&mut out, &key);
+            let banner = read_str(bytes, &mut cursor).unwrap();
+            let kind = read_u8(bytes, &mut cursor).unwrap();
+            let seq = read_u64(bytes, &mut cursor).unwrap();
+            if version >= 4 {
+                write_str(&mut out, &banner);
+                out.push(kind);
+                write_u64(&mut out, seq);
+            }
+            let pull_len = read_u32(bytes, &mut cursor).unwrap();
+            write_u32(&mut out, pull_len);
+            for pull_index in 0..pull_len {
+                let pod_banner = read_str(bytes, &mut cursor).unwrap();
+                let rarity = read_str(bytes, &mut cursor).unwrap();
+                let fakeout = read_opt_str(bytes, &mut cursor).unwrap();
+                let rank = read_u32(bytes, &mut cursor).unwrap();
+                let shards = read_u32(bytes, &mut cursor).unwrap();
+                let powered = read_u8(bytes, &mut cursor).unwrap();
+                let item = read_str(bytes, &mut cursor).unwrap();
+                write_str(&mut out, &pod_banner);
+                write_str(&mut out, &rarity);
+                write_opt_str(&mut out, fakeout.as_deref());
+                write_u32(&mut out, rank);
+                write_u32(&mut out, shards);
+                out.push(powered);
+                if version >= 5 {
+                    let written = if blank_item && pull_index == 0 { "" } else { item.as_str() };
+                    write_str(&mut out, written);
+                }
+            }
+            let fault = read_fault(bytes, &mut cursor).unwrap();
+            write_fault(&mut out, &fault).unwrap();
+        }
+        assert_eq!(cursor, bytes.len());
+        out
+    }
+
+    #[test]
+    fn branch_receipts_without_an_item_are_dropped_and_a_blank_v5_item_fails() {
+        let content = Content::embedded();
+        let mut account = funded(14, &content);
+        let price = content.banners.cost.ten_pull_cost as f32;
+        account.credits = price * 2.0;
+        account.pull_ten(&content, "standard", "branch-key").unwrap();
+        let credits = account.credits();
+        let bytes = account.to_bytes(&content).unwrap();
+        for version in [3u32, 4] {
+            let older = rewrite_pulls(&bytes, version, false);
+            let loaded = Account::from_bytes(&older, &content).unwrap();
+            assert!(loaded.pulls_by_key.is_empty(), "v{version} receipts are dropped");
+            assert!((loaded.credits() - credits).abs() < 1e-3);
+            let mut again = loaded;
+            let replay = again.pull_ten(&content, "standard", "branch-key").unwrap();
+            assert!(replay.fresh, "a dropped v{version} key is not a replay");
+        }
+        let blank = rewrite_pulls(&bytes, 5, true);
+        let err = Account::from_bytes(&blank, &content).unwrap_err();
+        assert!(err.contains("no item"), "{err}");
     }
 
     #[test]

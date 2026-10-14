@@ -4355,6 +4355,7 @@ pub struct PaletteKeys {
     pub fog_violet: String,
     pub sky_haze: String,
     pub key_warm: String,
+    pub mark_ink: String,
     pub fill_cool: String,
     pub ambient_haze: String,
 }
@@ -4435,6 +4436,7 @@ impl Palette {
             "fog_violet" => self.keys.fog_violet.as_str(),
             "sky_haze" => self.keys.sky_haze.as_str(),
             "key_warm" => self.keys.key_warm.as_str(),
+            "mark_ink" => self.keys.mark_ink.as_str(),
             "fill_cool" => self.keys.fill_cool.as_str(),
             "ambient_haze" => self.keys.ambient_haze.as_str(),
             "hero_teal" | "teal" => self.hero.teal.as_str(),
@@ -4571,6 +4573,7 @@ pub struct CrateReveal {
     pub grid: CrateGrid,
     pub hint: RevealHint,
     pub card: CardTitle,
+    pub icon: CrateIcon,
     pub layout: RevealLayout,
 }
 
@@ -4606,6 +4609,9 @@ pub struct RevealLayout {
     pub gem_height: f32,
     pub gem_glow: f32,
     pub divider_px: u32,
+    pub divider_blend: f32,
+    pub gem_edge_blend: f32,
+    pub crack_glow_blend: f32,
     pub stage: String,
     pub ink_dark: String,
     pub ink_light: String,
@@ -4660,6 +4666,15 @@ fn validate_reveal_panel(layout: &RevealLayout) -> Result<(), String> {
     }
     if layout.divider_px == 0 {
         return Err("crate_reveal.toml layout divider_px must be > 0".into());
+    }
+    for (name, blend) in [
+        ("divider_blend", layout.divider_blend),
+        ("gem_edge_blend", layout.gem_edge_blend),
+        ("crack_glow_blend", layout.crack_glow_blend),
+    ] {
+        if !(blend > 0.0 && blend <= 1.0) {
+            return Err(format!("crate_reveal.toml layout {name} must be in (0, 1]"));
+        }
     }
     let face_w = layout.panel_width - border * 2.0;
     let legend = 9.0 * layout.title_glyph_px as f32;
@@ -4762,7 +4777,19 @@ pub struct CrateGrid {
     pub refund_ink: String,
     pub refund_tick: String,
     pub flip_cue: String,
+    pub pull_failed: String,
+    pub failure_ink: String,
     pub display: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct CrateIcon {
+    pub width_num: u32,
+    pub width_den: u32,
+    pub height_num: u32,
+    pub height_den: u32,
+    pub highlight_div: u32,
+    pub highlight_blend: f32,
 }
 
 impl CrateReveal {
@@ -5703,12 +5730,46 @@ fn validate_ten_grid(reveal: &CrateReveal, banners: &Banners, ui: &Ui, audio: &A
     if grid.refund_tick == ui.sounds.bank_chime || grid.refund_tick == grid.flip_cue {
         return Err("crate_reveal.toml grid.refund_tick must be a neutral UI tick".into());
     }
-    if audio.sting.iter().any(|row| row.id == grid.refund_tick || row.id == grid.flip_cue) {
+    let failed_cue = audio
+        .sfx
+        .iter()
+        .find(|row| row.id == grid.pull_failed)
+        .ok_or_else(|| format!("crate_reveal.toml grid.pull_failed {} is missing from the mix", grid.pull_failed))?;
+    if !failed_cue.category_ui {
+        return Err(format!("audio_mix.toml {} must be a UI sound", grid.pull_failed));
+    }
+    if grid.pull_failed == ui.sounds.bank_chime
+        || grid.pull_failed == ui.sounds.count_tick
+        || grid.pull_failed == grid.flip_cue
+        || grid.pull_failed == grid.refund_tick
+    {
+        return Err("crate_reveal.toml grid.pull_failed must not be the chime, the flip, or the tick".into());
+    }
+    if grid.failure_ink != reveal.layout.ink_light {
+        return Err("crate_reveal.toml grid.failure_ink must be the paper color".into());
+    }
+    if grid.failure_ink.starts_with("rarity_") || grid.failure_ink == ui.colors.defeat {
+        return Err("crate_reveal.toml grid.failure_ink must not be a rarity or alarm color".into());
+    }
+    if palette.hex(&grid.failure_ink).is_none() {
+        return Err(format!("crate_reveal.toml grid.failure_ink \"{}\" does not resolve", grid.failure_ink));
+    }
+    let icon = &reveal.icon;
+    if icon.width_den == 0 || icon.height_den == 0 || icon.highlight_div == 0 {
+        return Err("crate_reveal.toml icon divisors must be > 0".into());
+    }
+    if icon.width_num == 0 || icon.width_num > icon.width_den || icon.height_num == 0 || icon.height_num > icon.height_den {
+        return Err("crate_reveal.toml icon box must be a positive fraction of the face".into());
+    }
+    if !(icon.highlight_blend > 0.0 && icon.highlight_blend <= 1.0) {
+        return Err("crate_reveal.toml icon.highlight_blend must be in (0, 1]".into());
+    }
+    if audio.sting.iter().any(|row| row.id == grid.refund_tick || row.id == grid.flip_cue || row.id == grid.pull_failed) {
         return Err("crate_reveal.toml grid cues must not be crate stings".into());
     }
     let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
     if assets.is_dir() {
-        for row in [flip, tick] {
+        for row in [flip, tick, failed_cue] {
             if !assets.join(&row.path).is_file() {
                 return Err(format!("{} file {} is missing", row.id, row.path));
             }
@@ -6185,6 +6246,40 @@ mod ten_pull_keys {
         sources.crate_reveal = &missing_rank;
         let err = Content::parse(&sources).expect_err("rank is required");
         assert!(err.contains("rank"), "{err}");
+
+        let missing_icon = src.crate_reveal.replace("highlight_blend = 0.45\n", "");
+        assert_ne!(missing_icon, src.crate_reveal);
+        sources.crate_reveal = &missing_icon;
+        let err = Content::parse(&sources).expect_err("highlight_blend is required");
+        assert!(err.contains("highlight_blend"), "{err}");
+
+        let missing_cue = src.crate_reveal.replace("pull_failed = \"ui_pull_failed\"\n", "");
+        assert_ne!(missing_cue, src.crate_reveal);
+        sources.crate_reveal = &missing_cue;
+        let err = Content::parse(&sources).expect_err("pull_failed is required");
+        assert!(err.contains("pull_failed"), "{err}");
+
+        let missing_ink = src.crate_reveal.replace("failure_ink = \"reveal_paper\"\n", "");
+        assert_ne!(missing_ink, src.crate_reveal);
+        sources.crate_reveal = &missing_ink;
+        let err = Content::parse(&sources).expect_err("failure_ink is required");
+        assert!(err.contains("failure_ink"), "{err}");
+
+        let missing_rule = src.crate_reveal.replace("divider_blend = 0.45\n", "");
+        assert_ne!(missing_rule, src.crate_reveal);
+        sources.crate_reveal = &missing_rule;
+        let err = Content::parse(&sources).expect_err("divider_blend is required");
+        assert!(err.contains("divider_blend"), "{err}");
+
+        let flip_cue = src.crate_reveal.replace("pull_failed = \"ui_pull_failed\"", "pull_failed = \"crate_flip\"");
+        sources.crate_reveal = &flip_cue;
+        let err = Content::parse(&sources).expect_err("the failure cue is not the flip");
+        assert!(err.contains("chime") && err.contains("flip"), "{err}");
+
+        let rarity_ink = src.crate_reveal.replace("failure_ink = \"reveal_paper\"", "failure_ink = \"rarity_legendary\"");
+        sources.crate_reveal = &rarity_ink;
+        let err = Content::parse(&sources).expect_err("the failure line is not a rarity color");
+        assert!(err.contains("failure_ink"), "{err}");
 
         sources.crate_reveal = src.crate_reveal;
         sources.banners = src.banners;

@@ -69,6 +69,7 @@ pub(crate) struct PaintKey {
     ready: bool,
     again: bool,
     shortfall: String,
+    failure: String,
     items: Vec<String>,
 }
 
@@ -259,6 +260,7 @@ pub fn paint(
     let afford = ten_affordable(&content, crate_box.credits);
     let shortfall = if afford { String::new() } else { ten_shortfall(&content, crate_box.credits) };
     let again = afford && !crate_box.pull_busy;
+    let failure = crate_box.reason.clone();
     let (kind, items, ready) = match &playback.0 {
         RevealShow::Single(_) => return,
         RevealShow::Grid(run) => {
@@ -275,6 +277,7 @@ pub fn paint(
         ready,
         again,
         shortfall: shortfall.clone(),
+        failure: failure.clone(),
         items: items.clone(),
     };
     if cached.as_deref() == Some(&key) {
@@ -285,9 +288,9 @@ pub fn paint(
         RevealShow::Single(_) => return,
         RevealShow::Grid(_) => {
             let faces: Vec<Option<&str>> = items.iter().map(|item| if item.is_empty() { None } else { Some(item.as_str()) }).collect();
-            paint_grid(&content, &GridStill { items: &faces, ready, again, focus: focus.0, shortfall: &shortfall }, width, height)
+            paint_grid(&content, &GridStill { items: &faces, ready, again, focus: focus.0, shortfall: &shortfall, failure: &failure }, width, height)
         }
-        RevealShow::Refund(_) => paint_refund(&content, &RefundStill { again, focus: focus.0, shortfall: &shortfall }, width, height),
+        RevealShow::Refund(_) => paint_refund(&content, &RefundStill { again, focus: focus.0, shortfall: &shortfall, failure: &failure }, width, height),
     };
     let Ok((rgb, painted_hits)) = painted else {
         hits.0.clear();

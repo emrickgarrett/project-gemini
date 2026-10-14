@@ -694,26 +694,113 @@ mod tests {
     }
 
     #[test]
-    fn pull_again_fades_voices_from_the_previous_pull() {
+    fn a_failed_pull_again_keeps_the_grid_and_plays_one_cue() {
         let _guard = settings_lock();
         let mut app = menu_app();
         let content = gemini_sim::content::Content::embedded();
+        pull_host::clear_scripted_pull();
         open_grid(&mut app, true);
         let old_gen = app.world().resource::<flow::ServerCrate>().reveal_gen;
+        let credits = app.world().resource::<flow::ServerCrate>().credits;
+        let before = grid_faces(&mut app);
         app.world_mut().spawn(reveal_ui::RevealVoice { id: "crate_legendary".into(), gen: old_gen, gain: 1.0 });
+
+        app.world_mut().resource_mut::<flow::ServerCrate>().buttons_ready = false;
         app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
         app.world_mut().run_system_once(flow::reveal_act).unwrap();
-        let new_gen = app.world().resource::<flow::ServerCrate>().reveal_gen;
-        assert!(new_gen > old_gen);
-        app.world_mut().spawn(reveal_ui::RevealVoice { id: "crate_tease".into(), gen: new_gen, gain: 1.0 });
+        assert!(ui_cues(&mut app).iter().all(|id| id != &content.crate_reveal.grid.pull_failed), "a disabled click plays no failure cue");
+        assert!(app.world().resource::<flow::ServerCrate>().sent_keys.is_empty());
+        app.world_mut().resource_mut::<flow::ServerCrate>().buttons_ready = true;
+
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        let cues = ui_cues(&mut app);
+        assert_eq!(cues.iter().filter(|id| *id == &content.crate_reveal.grid.pull_failed).count(), 1, "one failure cue: {cues:?}");
+        assert!(cues.iter().any(|id| id == &content.ui.sounds.confirm), "the accepted press still clicks: {cues:?}");
+        let crate_box = app.world().resource::<flow::ServerCrate>();
+        assert_eq!(crate_box.reveal_gen, old_gen);
+        assert_eq!(crate_box.credits, credits);
+        assert_eq!(crate_box.reason, content.ui.copy.pull_needs_server);
+        assert_eq!(grid_faces(&mut app), before);
+        app.world_mut().run_system_once(reveal_ui::mark_fades).unwrap();
+        assert_eq!(fading_voices(&mut app), 0, "a failed reply does not fade the sting");
+
+        app.world_mut().run_system_once(flow::release_pull).unwrap();
+        app.update();
+        let ids = reveal_buttons(&mut app);
+        assert!(ids.iter().any(|id| id == "continue") && ids.iter().any(|id| id == "pull_again"), "{ids:?}");
+        assert_eq!(app.world().resource::<flow::ServerCrate>().reveal_gen, old_gen);
+        assert_eq!(grid_faces(&mut app), before);
+        let width = content.ui.layout.fit_width.round() as u32;
+        let height = content.ui.layout.fit_height.round() as u32;
+        let faces: Vec<Option<&str>> = before.iter().map(|item| item.as_deref()).collect();
+        let (rgb, _) = gemini_meshes::paint_grid(
+            &content,
+            &gemini_meshes::GridStill {
+                items: &faces,
+                ready: true,
+                again: true,
+                focus: 0,
+                shortfall: "",
+                failure: &content.ui.copy.pull_needs_server,
+            },
+            width,
+            height,
+        )
+        .unwrap();
+        assert_eq!(reveal_rgb(&mut app), rgb, "the old grid stays drawn with the failure line");
         let steps = (content.audio.warning_fade / (1.0 / 60.0)).ceil() as u32 + 3;
         for _ in 0..steps {
             app.update();
         }
+        assert_eq!(app.world().resource::<flow::ServerCrate>().reveal_gen, old_gen);
+        assert_eq!(fading_voices(&mut app), 0);
         let mut voices = app.world_mut().query::<&reveal_ui::RevealVoice>();
         let left: Vec<_> = voices.iter(app.world()).map(|voice| (voice.gen, voice.id.clone())).collect();
-        assert!(left.iter().all(|(gen, _)| *gen != old_gen), "no voice from the previous pull survives the fade: {left:?}");
-        assert!(left.iter().any(|(gen, id)| *gen == new_gen && id == "crate_tease"), "the next pull keeps its own voice: {left:?}");
+        assert!(left.iter().any(|(gen, id)| *gen == old_gen && id == "crate_legendary"), "the old sting is still playing: {left:?}");
+    }
+
+    #[test]
+    fn a_replayed_pull_again_keeps_the_grid_and_stays_quiet() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        let content = gemini_sim::content::Content::embedded();
+        pull_host::clear_scripted_pull();
+        open_grid(&mut app, true);
+        let old_gen = app.world().resource::<flow::ServerCrate>().reveal_gen;
+        let credits = app.world().resource::<flow::ServerCrate>().credits;
+        let rank = app.world().resource::<session::Account>().rank;
+        let before = grid_faces(&mut app);
+        app.world_mut().spawn(reveal_ui::RevealVoice { id: "crate_legendary".into(), gen: old_gen, gain: 1.0 });
+        let pods = content.banners.cost.pods as usize;
+        let mut reply_pods = Vec::new();
+        for _ in 0..pods {
+            reply_pods.push(gemini_proto::CratePod { rarity: "rare".into(), fakeout: None, item: "grip".into() });
+        }
+        pull_host::script_next_pull(Ok(gemini_proto::CratePullReply {
+            version: gemini_proto::PROTOCOL_VERSION,
+            rarity: None,
+            fakeout: None,
+            rank: rank.saturating_add(3),
+            fault: None,
+            pods: reply_pods,
+            fresh: false,
+            ten: true,
+            credits: 1.0,
+        }));
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        let cues = ui_cues(&mut app);
+        assert!(cues.iter().all(|id| id != &content.crate_reveal.grid.pull_failed), "a replay plays no failure cue: {cues:?}");
+        assert!(cues.iter().any(|id| id == &content.ui.sounds.confirm), "the accepted press still clicks: {cues:?}");
+        let crate_box = app.world().resource::<flow::ServerCrate>();
+        assert_eq!(crate_box.reveal_gen, old_gen);
+        assert_eq!(crate_box.credits, credits);
+        assert_eq!(crate_box.reason, content.ui.copy.pull_failed);
+        assert_eq!(app.world().resource::<session::Account>().rank, rank);
+        assert_eq!(grid_faces(&mut app), before);
+        app.world_mut().run_system_once(reveal_ui::mark_fades).unwrap();
+        assert_eq!(fading_voices(&mut app), 0, "a replay leaves the old voices alone");
     }
 
     #[test]
@@ -790,11 +877,11 @@ mod tests {
             assert_eq!(run.shown_item(index), Some(pod.item.as_str()));
         }
         let shown: Vec<Option<&str>> = (0..pods).map(|index| run.shown_item(index)).collect();
-        let shot = gemini_meshes::GridStill { items: &shown, ready: true, again: true, focus: 0, shortfall: "" };
+        let shot = gemini_meshes::GridStill { items: &shown, ready: true, again: true, focus: 0, shortfall: "", failure: "" };
         let (rgb, _) = gemini_meshes::paint_grid(&content, &shot, width, height).unwrap();
         let mut swapped = shown.clone();
         swapped[3] = Some("visor");
-        let other_shot = gemini_meshes::GridStill { items: &swapped, ready: true, again: true, focus: 0, shortfall: "" };
+        let other_shot = gemini_meshes::GridStill { items: &swapped, ready: true, again: true, focus: 0, shortfall: "", failure: "" };
         let (other, _) = gemini_meshes::paint_grid(&content, &other_shot, width, height).unwrap();
         assert_ne!(rgb, other, "the painted card is the server item, not a stand-in");
     }
@@ -1122,6 +1209,35 @@ mod tests {
     fn ui_cues(app: &mut App) -> Vec<String> {
         let mut query = app.world_mut().query::<&audio::UiRequest>();
         query.iter(app.world()).map(|request| request.0.clone()).collect()
+    }
+
+    fn grid_faces(app: &mut App) -> Vec<Option<String>> {
+        let playback = app.world().resource::<reveal_ui::RevealPlayback>();
+        let reveal_ui::RevealShow::Grid(run) = &playback.0 else {
+            panic!("the reveal is not a grid");
+        };
+        (0..run.plan.cards.len()).map(|index| run.shown_item(index).map(str::to_string)).collect()
+    }
+
+    fn fading_voices(app: &mut App) -> usize {
+        let mut query = app.world_mut().query::<&reveal_ui::FadingVoice>();
+        query.iter(app.world()).count()
+    }
+
+    fn reveal_rgb(app: &mut App) -> Vec<u8> {
+        let handle = {
+            let mut query = app.world_mut().query_filtered::<&bevy::prelude::ImageNode, With<reveal_ui::RevealRoot>>();
+            query.iter(app.world()).next().expect("reveal image").image.clone()
+        };
+        let rgba = app
+            .world()
+            .resource::<bevy::asset::Assets<bevy::image::Image>>()
+            .get(&handle)
+            .expect("reveal pixels")
+            .data
+            .clone()
+            .expect("reveal bytes");
+        rgba.chunks_exact(4).flat_map(|px| [px[0], px[1], px[2]]).collect()
     }
 
     fn press_hit(app: &mut App, id: &str) {

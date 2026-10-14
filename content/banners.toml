@@ -77,7 +77,8 @@ icon = [".##..##.", "#..##..#", ".##..##.", ".##..##.", "#..##..#", ".##..##."]
 id = "mark"
 name = "MARK"
 rarity = "legendary"
-ink = "key_warm"
+# Darker than key_warm so the icon reads on the paper face.
+ink = "mark_ink"
 icon = ["...##...", "...##...", ".######.", "...##...", "..#..#..", ".#....#."]
 
 [[item]]

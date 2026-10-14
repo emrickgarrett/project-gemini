@@ -1503,7 +1503,7 @@ flat = true
             assert!(super::occupies_voice(&audio, &live), "{id} holds a cap voice");
             assert!(super::is_stealable_voice(&audio, &live), "{id} can be taken");
         }
-        for id in ["ui_count_tick", "ui_bank_chime", "crate_flip"] {
+        for id in ["ui_count_tick", "ui_bank_chime", "crate_flip", "ui_pull_failed"] {
             let row = audio.sfx.iter().find(|row| row.id == id).unwrap_or_else(|| panic!("missing {id}"));
             assert!(row.outside_voice_cap, "{id}");
             assert!(row.category_ui, "{id}");
