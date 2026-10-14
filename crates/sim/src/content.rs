@@ -960,6 +960,8 @@ pub struct BannerCost {
     pub single: u32,
     pub pods: u32,
     pub ten_pull_cost: u32,
+    /// Added to a balance before it is compared with a pull cost.
+    pub credit_slack: f32,
 }
 
 /// How many pull receipts a save keeps. Older keys are dropped.
@@ -5665,12 +5667,15 @@ fn validate_banners(banners: &Banners) -> Result<(), String> {
     if banners.cost.single == 0 || banners.cost.pods == 0 || banners.cost.ten_pull_cost == 0 {
         return Err("banners.toml costs must be > 0".into());
     }
+    if !(banners.cost.credit_slack.is_finite() && banners.cost.credit_slack >= 0.0) {
+        return Err("banners.toml cost.credit_slack must be >= 0".into());
+    }
     if banners.saved.max_keys == 0 {
         return Err("banners.toml saved.max_keys must be > 0".into());
     }
     validate_items(banners)?;
     let grant = banners.dev.starting_credits;
-    if !(grant.is_finite() && grant + 1e-3 >= banners.cost.ten_pull_cost as f32) {
+    if !(grant.is_finite() && grant + banners.cost.credit_slack >= banners.cost.ten_pull_cost as f32) {
         return Err("banners.toml dev.starting_credits must cover cost.ten_pull_cost".into());
     }
     Ok(())
@@ -6422,6 +6427,17 @@ mod ten_pull_keys {
         sources.banners = stripped;
         let err = Content::parse(&sources).expect_err("items are required");
         assert!(err.contains("item"), "{err}");
+    }
+
+    #[test]
+    fn credit_slack_is_required() {
+        let src = embedded_sources();
+        let stripped = src.banners.replace("credit_slack = 0.001\n", "");
+        assert_ne!(stripped, src.banners);
+        let mut sources = embedded_sources();
+        sources.banners = &stripped;
+        let err = Content::parse(&sources).expect_err("credit_slack is required");
+        assert!(err.contains("credit_slack"), "{err}");
     }
 }
 

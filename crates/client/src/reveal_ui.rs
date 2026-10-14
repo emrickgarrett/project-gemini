@@ -78,6 +78,16 @@ pub(crate) struct PaintKey {
     items: Vec<String>,
 }
 
+impl PaintKey {
+    pub(crate) fn shortfall(&self) -> &str {
+        &self.shortfall
+    }
+
+    pub(crate) fn again(&self) -> bool {
+        self.again
+    }
+}
+
 pub fn enter(mut commands: Commands, mut focus: ResMut<flow::Focus>, mut hits: ResMut<flow::Hits>, existing: Query<Entity, With<RevealCam>>) {
     focus.0 = 0;
     hits.0.clear();
@@ -383,7 +393,7 @@ fn note_seen_save(prefs: &mut Prefs, showing: &str, in_flight: bool, crate_box: 
 
 fn ten_affordable(content: &Content, credits: Option<f32>) -> bool {
     let cost = content.banners.cost.ten_pull_cost as f32;
-    !credits.is_some_and(|have| have + 1e-3 < cost)
+    !credits.is_some_and(|have| have + content.banners.cost.credit_slack < cost)
 }
 
 fn ten_shortfall(content: &Content, credits: Option<f32>) -> String {
