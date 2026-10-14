@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bevy::audio::{
@@ -1780,9 +1780,10 @@ fn within_new_instance_cap(
     events
         .into_iter()
         .filter(|event| {
-            let Some(def) = game.content.sfx(&event.id) else {
-                return false;
-            };
+            let def = game
+                .content
+                .sfx(&event.id)
+                .unwrap_or_else(|| panic!("voice {} is not in the mix", event.id));
             let already = live.get(&event.id).copied().unwrap_or(0);
             let extra = spawned.entry(event.id.clone()).or_default();
             if def.max_instances > 0 && already + *extra >= def.max_instances {
@@ -1802,9 +1803,10 @@ fn cold_stealable_loops(
     events
         .iter()
         .filter(|event| {
-            let Some(def) = game.content.sfx(&event.id) else {
-                return false;
-            };
+            let def = game
+                .content
+                .sfx(&event.id)
+                .unwrap_or_else(|| panic!("voice {} is not in the mix", event.id));
             def.stealable
                 && def.looped
                 && !playing
@@ -1858,12 +1860,20 @@ fn loop_position(id: &str, elapsed: f32) -> f32 {
 }
 
 fn prop_loop_seconds(id: &str) -> f32 {
+    static CACHE: Mutex<BTreeMap<String, f32>> = Mutex::new(BTreeMap::new());
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(|err| panic!("loop duration cache poisoned: {err}"));
+    if let Some(seconds) = cache.get(id).copied() {
+        return seconds;
+    }
     let name = format!("{id}.ogg");
     let bytes = arena_audio_bytes(&name).unwrap_or_else(|err| panic!("{err}"));
     let seconds = vorbis_seconds(bytes).unwrap_or_else(|| panic!("{id} has no duration"));
     if !(seconds > 0.0) {
         panic!("{id} duration must be > 0");
     }
+    cache.insert(id.to_string(), seconds);
     seconds
 }
 
@@ -2365,6 +2375,7 @@ mod tests {
             token: 0,
             seat: 0,
             pending_pick: None,
+            match_id: None,
         };
         let mut app = App::new();
         app.add_plugins((
@@ -2688,5 +2699,48 @@ mod tests {
             .iter()
             .any(|row| row.id == tower.id && row.pos == right));
         assert!(waiting.iter().all(|row| row.id != nest.id));
+    }
+
+    fn bare_game() -> crate::session::Game {
+        let content = gemini_sim::content::Content::embedded();
+        let fov = content.hero.viewmodel_fov;
+        let sim = gemini_sim::sim::Sim::new(&content, "normal", 1);
+        crate::session::Game {
+            content,
+            sim,
+            yaw: 0.0,
+            pitch: 0.0,
+            fov,
+            bob: false,
+            dip: 0.0,
+            difficulty: "normal".into(),
+            token: 0,
+            seat: 0,
+            pending_pick: None,
+            match_id: None,
+        }
+    }
+
+    fn unknown_loop() -> gemini_sim::audio_mix::SoundEvent {
+        gemini_sim::audio_mix::SoundEvent {
+            id: "missing_loop".into(),
+            pos: gemini_sim::math::Vec3::ZERO,
+            owner: 0,
+            priority: None,
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "voice missing_loop is not in the mix")]
+    fn a_cold_stealable_loop_panics_on_an_unknown_id() {
+        let game = bare_game();
+        super::cold_stealable_loops(&game, &[unknown_loop()], &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "voice missing_loop is not in the mix")]
+    fn a_new_instance_cap_panics_on_an_unknown_id() {
+        let game = bare_game();
+        super::within_new_instance_cap(&game, &[], vec![unknown_loop()]);
     }
 }

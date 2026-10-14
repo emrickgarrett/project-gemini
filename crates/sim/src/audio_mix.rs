@@ -47,6 +47,7 @@ pub struct VoicePick {
     /// A newcomer waiting on a fade is not a slot.
     pub warning_slots: usize,
     /// Slots still open after this pick. Stolen loops resume into these.
+    /// Each warning still waiting on a fade holds one.
     pub free: usize,
 }
 
@@ -168,7 +169,8 @@ pub fn select_voices(
     // Loops already sounding are kept here and are not taken out of `room` again.
     voices.extend(continuing);
     // One-shots already sounding are not in `voices`. Warnings are `warning_slots`.
-    // A warning that did not fit is waiting on a fade, so it is not in either count.
+    // A warning waiting on a fade is not inside `warning_slots`; the voice it is
+    // replacing already is. It still claims the next open slot.
     // Stealable prop loops already sounding are in `live`, including while they fade.
     let live = playing.iter().filter(|voice| occupies_voice(audio, voice)).count();
     let used = crowd_slots + warning_slots + live;
@@ -196,7 +198,7 @@ pub fn select_voices(
         voices,
         fade,
         warning_slots,
-        free: room.saturating_sub(taken + over),
+        free: room.saturating_sub(taken + over + waiting.len()),
     }
 }
 
@@ -1606,6 +1608,71 @@ flat = true
         let err = load_mix(&extra).expect_err("unlisted row");
         assert!(err.contains("jump"), "{err}");
         assert!(err.contains("not listed"), "{err}");
+    }
+
+    #[test]
+    fn free_slots_subtract_warnings_that_are_still_waiting() {
+        let audio = load_mix(include_str!("../../../content/audio_mix.toml")).expect("audio mix");
+        let vent = audio.sfx.iter().find(|row| row.id == "vent_warn").expect("vent_warn");
+        assert_eq!(vent.max_instances, 3);
+        let crowd =
+            super::budget_voices(&audio.sfx, |row| row.crowd && row.looped).expect("crowd") as usize;
+        assert_eq!(crowd, 1);
+        let mut playing = Vec::new();
+        for index in 0..vent.max_instances {
+            playing.push(super::LiveVoice {
+                id: vent.id.clone(),
+                pos: crate::math::Vec3::new(20.0 + index as f32, 0.0, 0.0),
+                priority: vent.priority,
+                fading: index + 1 == vent.max_instances,
+            });
+        }
+        let events = vec![super::SoundEvent {
+            id: vent.id.clone(),
+            pos: crate::math::Vec3::new(1.0, 0.0, 0.0),
+            owner: 0,
+            priority: None,
+        }];
+        let mut waiting = Vec::new();
+        let pick = super::select_voices(
+            &audio,
+            &events,
+            crate::math::Vec3::ZERO,
+            &playing,
+            &mut waiting,
+        );
+        assert_eq!(waiting.len(), 1, "a full warning row keeps the newcomer waiting");
+        assert_eq!(pick.warning_slots, vent.max_instances as usize);
+        assert!(
+            pick.voices.iter().all(|voice| voice.id != vent.id),
+            "the waiting warning does not start"
+        );
+        assert_eq!(
+            pick.free,
+            audio.voice_cap - crowd - pick.warning_slots - waiting.len(),
+            "each waiting warning holds one open slot"
+        );
+
+        let filler = audio
+            .sfx
+            .iter()
+            .find(|row| {
+                row.stealable && !row.looped && !row.is_warning && !row.outside_voice_cap && row.id == row.row_id
+            })
+            .expect("stealable one-shot");
+        let full: Vec<super::LiveVoice> = (0..audio.voice_cap - crowd)
+            .map(|index| super::LiveVoice {
+                id: filler.id.clone(),
+                pos: crate::math::Vec3::new(index as f32 + 1.0, 0.0, 0.0),
+                priority: filler.priority,
+                fading: false,
+            })
+            .collect();
+        let mut waiting = Vec::new();
+        let stolen = super::select_voices(&audio, &events, crate::math::Vec3::ZERO, &full, &mut waiting);
+        assert_eq!(waiting.len(), 1, "a full voice cap makes the warning wait");
+        assert_eq!(stolen.fade.len(), 1);
+        assert_eq!(stolen.free, 0, "the waiting warning leaves no free voice");
     }
 }
 
