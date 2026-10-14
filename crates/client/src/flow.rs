@@ -1092,26 +1092,7 @@ pub(crate) fn reveal_act(
     let failed_cue = content.crate_reveal.grid.pull_failed.clone();
     match crate::pull_host::round_trip(&content.banners.id, &key, ten) {
         Ok(reply) => {
-            let (mut landed, pulled_rank) = crate_from_reply(&content, &reply);
-            let refund = is_refund(&reply.fault);
-            if refund {
-                if let Some(pulled_rank) = pulled_rank {
-                    rank.rank = pulled_rank;
-                }
-                landed.credits = Some(reply.credits);
-                landed.reason.clear();
-                keep_session(&mut landed, kept_keys, true, kept_gen + 1, true);
-                *crate_box = landed;
-                if let Some(playback) = playback.as_mut() {
-                    playback.show = RevealShow::Refund(RefundRun::start(&content, ten));
-                    playback.key.clear();
-                }
-                if clear_pull_memory(&mut prefs).is_err() {
-                    crate_box.reason = content.ui.copy.pull_failed.clone();
-                    audio::ui_cue(&mut commands, &assets, &content, &prefs, &failed_cue);
-                }
-                return;
-            }
+            let (landed, _) = crate_from_reply(&content, &reply);
             let seen_replay = !reply.fresh && has_seen(&prefs, &key) && !landed.failed;
             if seen_replay {
                 if let Err(err) = settle_success(&mut prefs, &key) {
@@ -1135,7 +1116,7 @@ pub(crate) fn reveal_act(
                     return;
                 }
                 let next_cost = content.banners.cost.ten_pull_cost as f32;
-                if kept_credits.is_some_and(|have| have + 1e-3 < next_cost) {
+                if reply.credits + content.banners.cost.credit_slack < next_cost {
                     crate_box.reason = content.ui.copy.last_pull_confirmed.clone();
                     crate_box.buttons_ready = true;
                     crate_box.pull_busy = true;
@@ -1162,90 +1143,9 @@ pub(crate) fn reveal_act(
                 deliver_new_pull(&content, new_key, &mut commands, &mut next, &mut crate_box, &mut rank, &mut playback, &mut prefs, &assets, kept_gen, kept_credits, kept_keys);
                 return;
             }
-            let playable = !landed.failed
-                && !is_short(&reply.fault)
-                && ((ten && !landed.pods.is_empty()) || (!ten && landed.rarity.is_some()));
-            if playable {
-                match reveal_show(&content, &landed) {
-                    Ok(show) => {
-                        if let Some(playback) = playback.as_mut() {
-                            playback.show = show;
-                            playback.key = key.clone();
-                        } else {
-                            commands.insert_resource(RevealPlayback { show, key: key.clone() });
-                        }
-                        commands.insert_resource(reveal_ui::RevealFrom::Crates);
-                        next.set_if_different(AppState::Reveal);
-                        if let Some(pulled_rank) = pulled_rank {
-                            rank.rank = pulled_rank;
-                        }
-                        landed.credits = Some(reply.credits);
-                        landed.reason.clear();
-                        keep_session(&mut landed, kept_keys, true, kept_gen + 1, false);
-                        *crate_box = landed;
-                        let mut next_prefs = prefs.clone();
-                        next_prefs.pull_key = key;
-                        next_prefs.pull_ten = ten;
-                        next_prefs.pull_awaiting = false;
-                        if persist(&mut prefs, next_prefs).is_err() {
-                            crate_box.reason = content.ui.copy.pull_failed.clone();
-                            audio::ui_cue(&mut commands, &assets, &content, &prefs, &failed_cue);
-                        }
-                    }
-                    Err(message) => {
-                        eprintln!("ten pull reveal failed: {message}");
-                        if let Some(pulled_rank) = pulled_rank {
-                            rank.rank = pulled_rank;
-                        }
-                        crate_box.credits = Some(reply.credits);
-                        crate_box.reason.clear();
-                        crate_box.buttons_ready = true;
-                        crate_box.pull_busy = true;
-                        crate_box.sent_keys = kept_keys;
-                        crate_box.reveal_gen = kept_gen;
-                    }
-                }
-                return;
-            }
-            if is_short(&reply.fault) {
-                crate_box.reason = if clear_pull_memory(&mut prefs).is_err() {
-                    content.ui.copy.pull_failed.clone()
-                } else {
-                    landed.reason
-                };
-                crate_box.buttons_ready = true;
-                crate_box.pull_busy = true;
-                crate_box.sent_keys = kept_keys;
-                crate_box.reveal_gen = kept_gen;
-                crate_box.credits = Some(reply.credits);
-                return;
-            }
-            if clear_pull_memory(&mut prefs).is_err() {
-                landed.reason = content.ui.copy.pull_failed.clone();
-            }
-            crate_box.reason = if landed.reason.is_empty() { content.ui.copy.pull_failed.clone() } else { landed.reason };
-            crate_box.buttons_ready = true;
-            crate_box.pull_busy = true;
-            crate_box.sent_keys = kept_keys;
-            crate_box.reveal_gen = kept_gen;
-            crate_box.credits = kept_credits;
-            if landed.failed {
-                audio::ui_cue(&mut commands, &assets, &content, &prefs, &failed_cue);
-            }
+            apply_pull_reply(&content, &key, ten, Ok(reply), &mut commands, &mut next, &mut crate_box, &mut rank, &mut playback, &mut prefs, &assets, kept_gen, kept_credits, kept_keys);
         }
-        Err(err) => {
-            eprintln!("crate pull failed: {err}");
-            crate_box.reason = match mark_lost(&mut prefs) {
-                Ok(()) => transport_lost(&err, &content.ui.copy),
-                Err(_) => content.ui.copy.pull_failed.clone(),
-            };
-            crate_box.buttons_ready = true;
-            crate_box.pull_busy = true;
-            crate_box.sent_keys = kept_keys;
-            crate_box.reveal_gen = kept_gen;
-            crate_box.credits = kept_credits;
-            audio::ui_cue(&mut commands, &assets, &content, &prefs, &failed_cue);
-        }
+        Err(err) => apply_pull_reply(&content, &key, ten, Err(err), &mut commands, &mut next, &mut crate_box, &mut rank, &mut playback, &mut prefs, &assets, kept_gen, kept_credits, kept_keys),
     }
 }
 
@@ -1266,8 +1166,30 @@ fn deliver_new_pull(
 ) {
     push_sent(&mut kept_keys, key.clone());
     audio::ui_cue(commands, assets, content, prefs, &content.ui.sounds.confirm);
+    let reply = crate::pull_host::round_trip(&content.banners.id, &key, true);
+    apply_pull_reply(content, &key, true, reply, commands, next, crate_box, rank, playback, prefs, assets, kept_gen, kept_credits, kept_keys);
+}
+
+/// Refund, reveal, short wallet, confirmed fault, and a lost reply.
+/// A seen settle stays in `reveal_act` and does not come through here.
+fn apply_pull_reply(
+    content: &Content,
+    key: &str,
+    ten: bool,
+    reply: Result<CratePullReply, crate::pull_host::PullHostError>,
+    commands: &mut Commands,
+    next: &mut NextState<AppState>,
+    crate_box: &mut ServerCrate,
+    rank: &mut Account,
+    playback: &mut Option<ResMut<RevealPlayback>>,
+    prefs: &mut Prefs,
+    assets: &AssetServer,
+    kept_gen: u64,
+    kept_credits: Option<f32>,
+    kept_keys: Vec<String>,
+) {
     let failed_cue = content.crate_reveal.grid.pull_failed.clone();
-    match crate::pull_host::round_trip(&content.banners.id, &key, true) {
+    match reply {
         Ok(reply) => {
             let (mut landed, pulled_rank) = crate_from_reply(content, &reply);
             if is_refund(&reply.fault) {
@@ -1276,29 +1198,27 @@ fn deliver_new_pull(
                 }
                 landed.credits = Some(reply.credits);
                 landed.reason.clear();
-                if clear_pull_memory(prefs).is_err() {
-                    landed.reason = content.ui.copy.pull_failed.clone();
-                    audio::ui_cue(commands, assets, content, prefs, &failed_cue);
-                }
                 keep_session(&mut landed, kept_keys, true, kept_gen + 1, true);
                 *crate_box = landed;
                 if let Some(playback) = playback.as_mut() {
-                    playback.show = RevealShow::Refund(RefundRun::start(content, true));
+                    playback.show = RevealShow::Refund(RefundRun::start(content, ten));
                     playback.key.clear();
+                }
+                if clear_pull_memory(prefs).is_err() {
+                    crate_box.reason = content.ui.copy.pull_failed.clone();
+                    audio::ui_cue(commands, assets, content, prefs, &failed_cue);
                 }
                 return;
             }
-            let playable = !landed.failed
-                && !is_short(&reply.fault)
-                && !landed.pods.is_empty();
+            let playable = !landed.failed && !is_short(&reply.fault) && ((ten && !landed.pods.is_empty()) || (!ten && landed.rarity.is_some()));
             if playable {
                 match reveal_show(content, &landed) {
                     Ok(show) => {
                         if let Some(playback) = playback.as_mut() {
                             playback.show = show;
-                            playback.key = key.clone();
+                            playback.key = key.to_string();
                         } else {
-                            commands.insert_resource(RevealPlayback { show, key: key.clone() });
+                            commands.insert_resource(RevealPlayback { show, key: key.to_string() });
                         }
                         commands.insert_resource(reveal_ui::RevealFrom::Crates);
                         next.set_if_different(AppState::Reveal);
@@ -1309,10 +1229,11 @@ fn deliver_new_pull(
                         landed.reason.clear();
                         keep_session(&mut landed, kept_keys, true, kept_gen + 1, false);
                         *crate_box = landed;
-                        prefs.pull_key = key;
-                        prefs.pull_ten = true;
-                        prefs.pull_awaiting = false;
-                        if save_settings(prefs).is_err() {
+                        let mut next_prefs = prefs.clone();
+                        next_prefs.pull_key = key.to_string();
+                        next_prefs.pull_ten = ten;
+                        next_prefs.pull_awaiting = false;
+                        if persist(prefs, next_prefs).is_err() {
                             crate_box.reason = content.ui.copy.pull_failed.clone();
                             audio::ui_cue(commands, assets, content, prefs, &failed_cue);
                         }
@@ -1333,7 +1254,11 @@ fn deliver_new_pull(
                 return;
             }
             if is_short(&reply.fault) {
-                crate_box.reason = if clear_pull_memory(prefs).is_err() { content.ui.copy.pull_failed.clone() } else { landed.reason };
+                crate_box.reason = if clear_pull_memory(prefs).is_err() {
+                    content.ui.copy.pull_failed.clone()
+                } else {
+                    landed.reason
+                };
                 crate_box.buttons_ready = true;
                 crate_box.pull_busy = true;
                 crate_box.sent_keys = kept_keys;
@@ -1620,10 +1545,6 @@ fn paint_prefs(prefs: &Prefs) -> PaintPrefs {
         music: prefs.music,
         effects: prefs.effects,
     }
-}
-
-fn save_settings(prefs: &Prefs) -> Result<(), String> {
-    settings::store(&Content::embedded(), prefs)
 }
 
 fn persist(prefs: &mut Prefs, next: Prefs) -> Result<(), String> {

@@ -18,6 +18,8 @@ single = 100
 pods = 10
 # Required. This is 10x single. Loading fails when the key is missing.
 ten_pull_cost = 1000
+# Added to a balance before it is compared with a pull cost.
+credit_slack = 0.001
 
 # Receipts kept with the save. Older keys are dropped so a save always loads.
 [saved]

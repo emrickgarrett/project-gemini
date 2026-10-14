@@ -873,7 +873,8 @@ fn paint_result_chrome(
         if short_y < 0 {
             return Err("crate reveal shortfall does not fit above the buttons".into());
         }
-        blit_centered(rgb, width, height, 0, width as i32, short_y, shortfall, paper, ui.layout.button_scale, layout);
+        let again_x = x + button_w + gap;
+        blit_centered(rgb, width, height, again_x, button_w, short_y, shortfall, paper, ui.layout.button_scale, layout);
     }
     if y < 0 {
         return Err("crate reveal buttons do not fit".into());
@@ -1387,6 +1388,48 @@ mod tests {
             assert_eq!(image.dimensions(), (width, height), "{name}");
             assert_eq!(image.as_raw(), &rgb, "{name} does not match the painter");
         }
+    }
+
+    #[test]
+    fn the_confirmed_need_line_sits_over_pull_again() {
+        let content = Content::embedded();
+        let width = content.ui.layout.fit_width.round() as u32;
+        let height = content.ui.layout.fit_height.round() as u32;
+        let pods = (content.crate_reveal.grid.columns * content.crate_reveal.grid.rows) as usize;
+        let visor = content.crate_item("visor").expect("visor");
+        let mark = content.crate_item("mark").expect("mark");
+        let mut faces = vec![Some(visor.id.as_str()); pods];
+        faces[pods / 2] = Some(mark.id.as_str());
+        let shortfall = gemini_sim::content::shortfall_line(&content.ui.copy, content.ui.layout.currency_decimals, content.banners.cost.ten_pull_cost as f32);
+        let failure = content.ui.copy.last_pull_confirmed.as_str();
+        let (with_need, hits) = paint_grid(
+            &content,
+            &GridStill { items: &faces, ready: true, again: false, focus: 0, shortfall: &shortfall, failure, retry: false },
+            width,
+            height,
+        )
+        .unwrap();
+        let (bare, _) = paint_grid(
+            &content,
+            &GridStill { items: &faces, ready: true, again: false, focus: 0, shortfall: "", failure, retry: false },
+            width,
+            height,
+        )
+        .unwrap();
+        let continue_hit = hits.iter().find(|hit| hit.id == "continue").expect("continue");
+        let gap = content.ui.layout.row_gap.round() as i32;
+        let again_x = continue_hit.x + continue_hit.w + gap;
+        let again_r = again_x + continue_hit.w;
+        let mut saw = false;
+        for (index, (px, other)) in with_need.chunks_exact(3).zip(bare.chunks_exact(3)).enumerate() {
+            if px == other {
+                continue;
+            }
+            let x = (index as u32 % width) as i32;
+            saw = true;
+            assert!(x >= again_x && x < again_r, "NEED pixel at {x} is outside PULL AGAIN {again_x}..{again_r}");
+        }
+        assert!(saw, "the NEED line is drawn over PULL AGAIN");
     }
 
     fn rounded_card(rgb: &[u8], width: u32, slot: (u32, u32, u32, u32), content: &Content) -> Vec<u8> {
