@@ -1387,10 +1387,10 @@ fn save_settings(prefs: &Prefs) {
     }
 }
 
-/// The key a press will send. An unseen saved key is resent, whichever button was pressed.
+/// The key a press will send. A saved key is resent, seen or not, so a seen pull stays on that key.
 /// A new key is written before the request so a crash still has it. A failed write sends nothing.
 fn claim_key(prefs: &mut Prefs, ten: bool) -> Result<(String, bool), String> {
-    if !prefs.pull_key.is_empty() && !has_seen(prefs, &prefs.pull_key) {
+    if !prefs.pull_key.is_empty() {
         return Ok((prefs.pull_key.clone(), prefs.pull_ten));
     }
     let key = pull_key();
