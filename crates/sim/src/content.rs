@@ -4312,6 +4312,8 @@ pub struct PaletteKeys {
     pub reveal_stage: String,
     pub reveal_ink: String,
     pub reveal_paper: String,
+    /// Win title and panel outline. Not legendary gold.
+    pub victory: String,
     pub hero_vex: String,
     pub hero_nyra: String,
     pub hero_brakk: String,
@@ -4393,6 +4395,7 @@ impl Palette {
             "reveal_stage" => self.keys.reveal_stage.as_str(),
             "reveal_ink" => self.keys.reveal_ink.as_str(),
             "reveal_paper" => self.keys.reveal_paper.as_str(),
+            "victory" => self.keys.victory.as_str(),
             "hero_vex" => self.keys.hero_vex.as_str(),
             "hero_nyra" => self.keys.hero_nyra.as_str(),
             "hero_brakk" => self.keys.hero_brakk.as_str(),
@@ -5879,6 +5882,9 @@ fn validate_ui(
     }
     if ui.colors.bank_count == "rarity_legendary" || ui.colors.bank_bonus == "rarity_legendary" {
         return Err("ui.toml bank count and bonus must not use legendary gold".into());
+    }
+    if ui.colors.victory == "rarity_legendary" {
+        return Err("ui.toml colors.victory must not use legendary gold".into());
     }
     if !(layout.border_px > 0.0) {
         return Err("ui.toml layout.border_px must be > 0".into());

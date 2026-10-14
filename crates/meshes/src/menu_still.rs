@@ -1180,6 +1180,13 @@ mod tests {
         let defeat_color = bytes(&content, &content.ui.colors.defeat);
         assert_eq!(defeat_color, bytes(&content, "spitter_glow"));
         assert!(lost.chunks(3).any(|px| px == defeat_color), "defeat title uses spitter_glow");
+        let victory_color = bytes(&content, &content.ui.colors.victory);
+        assert_eq!(content.ui.colors.victory, "victory");
+        assert_eq!(victory_color, bytes(&content, "victory"));
+        let gold = bytes(&content, "rarity_legendary");
+        assert_ne!(victory_color, gold);
+        assert!(won.chunks(3).any(|px| px == victory_color), "victory title uses the victory key");
+        assert!(won.chunks(3).all(|px| px != gold), "the win screen does not use legendary gold");
         let whole = paint_menu(&content, &results(BankShow::End, 40.0, 0.0, Some(40.0)), 1280, 720).0;
         let rounded = paint_menu(&content, &results(BankShow::End, 40.4, 0.0, Some(40.0)), 1280, 720).0;
         let next = paint_menu(&content, &results(BankShow::End, 41.0, 0.0, Some(40.0)), 1280, 720).0;
