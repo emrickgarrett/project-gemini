@@ -8,8 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bevy::audio::{
-    AddAudioSource, AudioSinkPlayback, AudioSource, Decodable, GlobalVolume, Sample, SeekError,
-    Source, Volume,
+    AddAudioSource, AudioSinkPlayback, AudioSource, Decodable, GlobalVolume, Sample, SeekError, Source, Volume,
 };
 use bevy::prelude::*;
 
@@ -17,8 +16,8 @@ use gemini_sim::audio_mix::{select_voices, LiveVoice, SoundEvent, Voice};
 use gemini_sim::content::Content;
 use gemini_sim::math::Vec3 as SimVec;
 use gemini_sim::music::{
-    away_mix, bpm_sanity, combat_intensity, plan_switch, switch_clock, FileClock, Lowpass,
-    MusicDirectorCfg, PlannedSwitch, StemMixer, SwitchClock, TrackDef, TransitionKind,
+    away_mix, bpm_sanity, combat_intensity, plan_switch, switch_clock, FileClock, Lowpass, MusicDirectorCfg,
+    PlannedSwitch, StemMixer, SwitchClock, TrackDef, TransitionKind,
 };
 use gemini_sim::ogg::vorbis_seconds;
 use gemini_sim::sim::MusicMoment;
@@ -185,14 +184,14 @@ pub(crate) struct OneShot {
     pos: SimVec,
     /// Content priority this voice was played at, including a teammate step's remote priority.
     priority: i32,
-    /// Seconds this voice has played. A stolen loop resumes at this loop position.
-    elapsed: f32,
-    /// Seconds left on a fade. Zero means this voice is not fading.
+    /// Seconds left on a warning replacement fade. Zero means this voice is not fading.
     fade_left: f32,
     fade_dur: f32,
-    /// A stolen loop fades back in. A warning replacement fades out.
+    /// Seconds this voice has been sounding, or the loop position of a resumed loop.
+    elapsed: f32,
+    /// True while a stolen loop is fading back in. Fade-out completion despawns.
     fade_in: bool,
-    /// Seek here once the sink exists. The loop position captured at the steal.
+    /// Loop position to seek once the sink exists.
     resume_at: Option<f32>,
 }
 
@@ -246,22 +245,9 @@ pub fn boot(mut commands: Commands, assets: Res<AssetServer>, game: Res<Game>) {
     }
     let mut music = Music::default();
     // Menu already started the theme. MatchStart hard-cuts into combat.
-    start_track(
-        &mut commands,
-        &assets,
-        &game.content,
-        &mut music,
-        "theme_main",
-    );
+    start_track(&mut commands, &assets, &game.content, &mut music, "theme_main");
     let moments = game.sim.music.clone();
-    apply_moments(
-        &mut commands,
-        &assets,
-        &game.content,
-        &mut music,
-        &moments,
-        &game.sim,
-    );
+    apply_moments(&mut commands, &assets, &game.content, &mut music, &moments, &game.sim);
     spawn_bed(&mut commands, &assets, &game.content, &music);
     let period = game.content.arena_scene.beacon_glow_period;
     if !(period > 0.0) {
@@ -287,10 +273,7 @@ pub fn play(
     fx: Res<FrameFx>,
     mut music: ResMut<Music>,
     mut crowd: ResMut<Crowd>,
-    mut shots: Query<
-        (Entity, &mut OneShot, Option<&mut AudioSink>),
-        (Without<MusicStem>, Without<PropLoop>),
-    >,
+    mut shots: Query<(Entity, &mut OneShot, Option<&mut AudioSink>), (Without<MusicStem>, Without<PropLoop>)>,
     time: Res<Time>,
     prefs: Res<Prefs>,
     hold: Res<PauseMenu>,
@@ -300,28 +283,13 @@ pub fn play(
     let hud = &game.content.presentation.hud.away;
     let mix = away_mix(away.view.look, hud.music_duck_db, hud.music_duck_lowpass_hz);
     let solo = game.sim.connected_count() <= 1;
-    let (gain, hz) = pause_music(
-        hold.open,
-        solo,
-        mix.gain,
-        mix.lowpass_hz,
-        hud.solo_pause_duck_db,
-        hud.music_duck_lowpass_hz,
-        hud.coop_pause_duck_db,
-    );
+    let (gain, hz) = pause_music(hold.open, solo, mix.gain, mix.lowpass_hz, hud.solo_pause_duck_db, hud.music_duck_lowpass_hz, hud.coop_pause_duck_db);
     music.duck_gain = gain;
     music.filter.0.set_hz(hz);
     music.user_gain = bus_gain(&prefs, true);
     let listener = listener_of(&game);
     if !fx.moments.is_empty() {
-        apply_moments(
-            &mut commands,
-            &assets,
-            &game.content,
-            &mut music,
-            &fx.moments,
-            &game.sim,
-        );
+        apply_moments(&mut commands, &assets, &game.content, &mut music, &fx.moments, &game.sim);
     }
     advance(&game, &mut music, time.delta_secs());
     if let Some(target) = music.pending.clone() {
@@ -382,27 +350,13 @@ pub fn play(
     let cold = cold_stealable_loops(&game, &events, &playing);
     let mix_events: Vec<SoundEvent> = events
         .iter()
-        .filter(|event| {
-            !cold
-                .iter()
-                .any(|held| held.id == event.id && held.pos == event.pos)
-        })
+        .filter(|event| !cold.iter().any(|held| held.id == event.id && held.pos == event.pos))
         .cloned()
         .collect();
-    let pick = select_voices(
-        &game.content.audio,
-        &mix_events,
-        listener,
-        &playing,
-        &mut arena_audio.waiting,
-    );
+    let pick = select_voices(&game.content.audio, &mix_events, listener, &playing, &mut arena_audio.waiting);
     for faded in &pick.fade {
         for (entity, mut shot, mut sink) in &mut shots {
-            if finished.contains(&entity)
-                || shot.fade_dur > 0.0
-                || shot.id != faded.id
-                || shot.pos != faded.pos
-            {
+            if finished.contains(&entity) || shot.fade_dur > 0.0 || shot.id != faded.id || shot.pos != faded.pos {
                 continue;
             }
             begin_warning_fade(&mut shot, game.content.audio.warning_fade);
@@ -412,11 +366,7 @@ pub fn play(
             break;
         }
         for (entity, _, mut shot, mut sink) in &mut prop_loops {
-            if finished.contains(&entity)
-                || shot.fade_dur > 0.0
-                || shot.id != faded.id
-                || shot.pos != faded.pos
-            {
+            if finished.contains(&entity) || shot.fade_dur > 0.0 || shot.id != faded.id || shot.pos != faded.pos {
                 continue;
             }
             begin_warning_fade(&mut shot, game.content.audio.warning_fade);
@@ -430,43 +380,25 @@ pub fn play(
     let mut crowd_vol = 0.0;
     let mut shot_i = 0u32;
     for voice in &selected {
-        let Some(def) = game.content.sfx(&voice.id) else {
-            continue;
-        };
+        let Some(def) = game.content.sfx(&voice.id) else { continue };
         if def.looped && def.category == "prop" {
             continue;
         }
         if voice.crowd {
-            let fullness = if def.loudness > 0.0 {
-                voice.gain / def.loudness
-            } else {
-                1.0
-            };
+            let fullness = if def.loudness > 0.0 { voice.gain / def.loudness } else { 1.0 };
             crowd_vol = def.volume * fullness * bus_gain(&prefs, false);
             continue;
         }
         let mut speed = 1.0;
         if let Some((min, max)) = game.content.pitch_range(&voice.id) {
-            let h = (fx.tick as u32)
-                .wrapping_mul(17)
-                .wrapping_add(shot_i.wrapping_mul(13));
+            let h = (fx.tick as u32).wrapping_mul(17).wrapping_add(shot_i.wrapping_mul(13));
             let t = (h % 1000) as f32 / 1000.0;
             speed = min + (max - min) * t;
             shot_i += 1;
         }
-        let atten = if def.flat {
-            1.0
-        } else {
-            attenuate(&game.content, voice.pos, listener)
-        };
+        let atten = if def.flat { 1.0 } else { attenuate(&game.content, voice.pos, listener) };
         let full = def.volume * atten * bus_gain(&prefs, false);
-        let bus = paused_bus(
-            hold.open,
-            solo,
-            def.category_ui,
-            def.is_warning,
-            hud.coop_pause_duck_db,
-        );
+        let bus = paused_bus(hold.open, solo, def.category_ui, def.is_warning, hud.coop_pause_duck_db);
         if bus == 0.0 {
             continue;
         }
@@ -500,20 +432,12 @@ pub fn play(
             ))
             .id();
         let owner = owner_of(&events, &voice.id, voice.pos);
-        if fx
-            .stops
-            .iter()
-            .any(|s| s.id == voice.id && s.owner == owner)
-        {
+        if fx.stops.iter().any(|s| s.id == voice.id && s.owner == owner) {
             commands.entity(entity).despawn();
         }
     }
     for (entity, shot, _) in &shots {
-        if fx
-            .stops
-            .iter()
-            .any(|s| s.id == shot.id && s.owner == shot.owner)
-        {
+        if fx.stops.iter().any(|s| s.id == shot.id && s.owner == shot.owner) {
             commands.entity(entity).despawn();
         }
     }
@@ -532,19 +456,12 @@ pub fn play(
     );
     let mut playing_after = playing.clone();
     for faded in &pick.fade {
-        if let Some(slot) = playing_after
-            .iter_mut()
-            .find(|voice| voice.id == faded.id && voice.pos == faded.pos)
-        {
+        if let Some(slot) = playing_after.iter_mut().find(|voice| voice.id == faded.id && voice.pos == faded.pos) {
             slot.fading = true;
         }
     }
     for voice in &selected {
-        if voice.crowd
-            || playing_after
-                .iter()
-                .any(|live| live.id == voice.id && live.pos == voice.pos)
-        {
+        if voice.crowd || playing_after.iter().any(|live| live.id == voice.id && live.pos == voice.pos) {
             continue;
         }
         playing_after.push(LiveVoice {
@@ -554,10 +471,7 @@ pub fn play(
             fading: false,
         });
     }
-    arena_audio.stolen.retain(|wait| {
-        cold.iter()
-            .any(|event| event.id == wait.id && event.pos == wait.pos)
-    });
+    arena_audio.stolen.retain(|wait| cold.iter().any(|event| event.id == wait.id && event.pos == wait.pos));
     let resume = take_stolen(&mut arena_audio.stolen, listener, pick.free);
     for row in &resume {
         spawn_prop_loop(
@@ -586,36 +500,20 @@ pub fn play(
     let left: Vec<SoundEvent> = cold
         .into_iter()
         .filter(|event| {
-            !resume
-                .iter()
-                .any(|row| row.id == event.id && row.pos == event.pos)
-                && !arena_audio
-                    .stolen
-                    .iter()
-                    .any(|row| row.id == event.id && row.pos == event.pos)
+            !resume.iter().any(|row| row.id == event.id && row.pos == event.pos)
+                && !arena_audio.stolen.iter().any(|row| row.id == event.id && row.pos == event.pos)
         })
         .collect();
     let left = within_new_instance_cap(&game, &playing_after, left);
     if !left.is_empty() {
         let mut ignored = Vec::new();
-        let more = select_voices(
-            &game.content.audio,
-            &left,
-            listener,
-            &playing_after,
-            &mut ignored,
-        );
+        let more = select_voices(&game.content.audio, &left, listener, &playing_after, &mut ignored);
         for voice in &more.voices {
-            let Some(def) = game.content.sfx(&voice.id) else {
-                continue;
-            };
+            let Some(def) = game.content.sfx(&voice.id) else { continue };
             if !(def.looped && def.category == "prop") {
                 continue;
             }
-            if playing_after
-                .iter()
-                .any(|live| live.id == voice.id && live.pos == voice.pos)
-            {
+            if playing_after.iter().any(|live| live.id == voice.id && live.pos == voice.pos) {
                 continue;
             }
             spawn_prop_loop(
@@ -695,10 +593,7 @@ pub fn flush_ui_cues(
     live: Query<(Entity, &OneShot)>,
     mut arena: Option<ResMut<ArenaAudio>>,
 ) {
-    let asked: Vec<String> = requests
-        .iter()
-        .map(|(_, request)| request.0.clone())
-        .collect();
+    let asked: Vec<String> = requests.iter().map(|(_, request)| request.0.clone()).collect();
     for (entity, _) in &requests {
         commands.entity(entity).despawn();
     }
@@ -727,35 +622,21 @@ pub fn flush_ui_cues(
             )
         })
         .collect();
-    let playing: Vec<Heard> = live
-        .iter()
-        .map(|(_, heard, _, _, _)| heard.clone())
-        .collect();
+    let playing: Vec<Heard> = live.iter().map(|(_, heard, _, _, _)| heard.clone()).collect();
     let admitted = admit_ui(&content.audio, &playing, &asked, time.elapsed_secs());
     for index in admitted.stop {
         if let Some((entity, heard, pos, elapsed, priority)) = live.get(index) {
             if let Some(arena) = arena.as_mut() {
-                remember_stolen_at(
-                    &content,
-                    &mut arena.stolen,
-                    &heard.id,
-                    *pos,
-                    *priority,
-                    *elapsed,
-                    heard.order,
-                );
+                remember_stolen_at(&content, &mut arena.stolen, &heard.id, *pos, *priority, *elapsed, heard.order);
             }
             commands.entity(*entity).despawn();
         }
     }
     for id in admitted.play {
-        let def = content
-            .sfx(&id)
-            .unwrap_or_else(|| panic!("flush_ui_cues: unknown id {id}"));
+        let def = content.sfx(&id).unwrap_or_else(|| panic!("flush_ui_cues: unknown id {id}"));
         commands.spawn((
             AudioPlayer::new(assets.load::<AudioSource>(def.path.clone())),
-            PlaybackSettings::DESPAWN
-                .with_volume(Volume::Linear(def.volume * bus_gain(&prefs, false))),
+            PlaybackSettings::DESPAWN.with_volume(Volume::Linear(def.volume * bus_gain(&prefs, false))),
             OneShot {
                 id,
                 owner: 0,
@@ -811,12 +692,7 @@ fn next_voice_order() -> u32 {
 /// `stealable`. That flag is not derived from `loop`. Equal loudness keeps the
 /// voice with the earlier stored start time as the victim. If every voice has
 /// `stealable = false`, the cue is dropped.
-pub fn admit_ui(
-    audio: &gemini_sim::content::AudioTable,
-    playing: &[Heard],
-    asked: &[String],
-    now: f32,
-) -> UiVoices {
+pub fn admit_ui(audio: &gemini_sim::content::AudioTable, playing: &[Heard], asked: &[String], now: f32) -> UiVoices {
     let cap = audio.voice_cap.max(1);
     let mut occupants: Vec<Occupant> = playing
         .iter()
@@ -845,10 +721,7 @@ pub fn admit_ui(
             continue;
         };
         if def.max_instances > 0 {
-            let live = occupants
-                .iter()
-                .filter(|occupant| occupant.id == def.id)
-                .count() as u32;
+            let live = occupants.iter().filter(|occupant| occupant.id == def.id).count() as u32;
             if live >= def.max_instances {
                 continue;
             }
@@ -863,11 +736,7 @@ pub fn admit_ui(
                     a.loudness
                         .partial_cmp(&b.loudness)
                         .unwrap_or(std::cmp::Ordering::Equal)
-                        .then_with(|| {
-                            a.started
-                                .partial_cmp(&b.started)
-                                .unwrap_or(std::cmp::Ordering::Equal)
-                        })
+                        .then_with(|| a.started.partial_cmp(&b.started).unwrap_or(std::cmp::Ordering::Equal))
                         .then_with(|| a.order.cmp(&b.order))
                 });
             let Some((index, _)) = victim else {
@@ -889,11 +758,7 @@ pub fn admit_ui(
         });
         born += 1;
     }
-    let play = occupants
-        .iter()
-        .filter(|occupant| occupant.playing.is_none())
-        .map(|occupant| occupant.id.clone())
-        .collect();
+    let play = occupants.iter().filter(|occupant| occupant.playing.is_none()).map(|occupant| occupant.id.clone()).collect();
     UiVoices { play, stop }
 }
 
@@ -905,11 +770,7 @@ pub fn menu_levels(prefs: Res<Prefs>, mut music: Option<ResMut<Music>>) {
 }
 
 /// Solo pause stops game sounds. Co-op ducks them. UI cues and act-now warnings stay full.
-pub fn hold_loops(
-    hold: Res<PauseMenu>,
-    game: Res<Game>,
-    mut sinks: Query<(&OneShot, &mut AudioSink)>,
-) {
+pub fn hold_loops(hold: Res<PauseMenu>, game: Res<Game>, mut sinks: Query<(&OneShot, &mut AudioSink)>) {
     let solo = game.sim.connected_count() <= 1;
     let duck = game.content.presentation.hud.away.coop_pause_duck_db;
     for (shot, mut sink) in &mut sinks {
@@ -1423,11 +1284,7 @@ fn fade_gain(gain: f32, left: f32, dur: f32, fade_in: bool) -> f32 {
     if !(left > 0.0) {
         return if fade_in { gain } else { 0.0 };
     }
-    if fade_in {
-        gain * (1.0 - left / dur)
-    } else {
-        gain * left / dur
-    }
+    if fade_in { gain * (1.0 - left / dur) } else { gain * left / dur }
 }
 
 fn warning_fade_gain(gain: f32, left: f32, dur: f32) -> f32 {
@@ -1876,7 +1733,6 @@ fn prop_loop_seconds(id: &str) -> f32 {
     cache.insert(id.to_string(), seconds);
     seconds
 }
-
 fn owner_of(events: &[SoundEvent], id: &str, pos: SimVec) -> u32 {
     events
         .iter()
@@ -1902,14 +1758,10 @@ mod tests {
     fn app_with_stem() -> App {
         let mut app = App::new();
         app.init_resource::<Assets<AudioSource>>();
-        let handle = app
-            .world_mut()
-            .resource_mut::<Assets<AudioSource>>()
-            .add(AudioSource {
-                bytes: Arc::<[u8]>::from(b"riff".as_slice()),
-            });
-        app.world_mut()
-            .spawn((StemFile(handle), MusicStem { index: 0 }));
+        let handle = app.world_mut().resource_mut::<Assets<AudioSource>>().add(AudioSource {
+            bytes: Arc::<[u8]>::from(b"riff".as_slice()),
+        });
+        app.world_mut().spawn((StemFile(handle), MusicStem { index: 0 }));
         app.add_systems(Update, attach_duck);
         app
     }
@@ -1974,24 +1826,11 @@ mod tests {
             .play
             .iter()
             .enumerate()
-            .map(|(index, id)| Heard {
-                id: id.clone(),
-                started: index as f32,
-                order: index as u32,
-            })
+            .map(|(index, id)| Heard { id: id.clone(), started: index as f32, order: index as u32 })
             .collect();
-        assert!(
-            admit_ui(&content.audio, &playing, &asked, 10.0)
-                .play
-                .is_empty(),
-            "live hovers already fill the cap"
-        );
+        assert!(admit_ui(&content.audio, &playing, &asked, 10.0).play.is_empty(), "live hovers already fill the cap");
         let tick = content.ui.sounds.slider.clone();
-        assert_eq!(
-            content.sfx(&tick).unwrap().max_instances,
-            3,
-            "ui_slider_tick max_instances"
-        );
+        assert_eq!(content.sfx(&tick).unwrap().max_instances, 3, "ui_slider_tick max_instances");
         let ticks = vec![tick; 6];
         assert_eq!(admit_ui(&content.audio, &[], &ticks, 0.0).play.len(), 3);
     }
@@ -2006,20 +1845,8 @@ mod tests {
         let voice_cap = content.audio.voice_cap;
         assert_eq!(voice_cap, 32);
         let hover = content.ui.sounds.hover.clone();
-        let warning_ids: Vec<&str> = content
-            .audio
-            .sfx
-            .iter()
-            .filter(|row| row.is_warning)
-            .map(|row| row.id.as_str())
-            .collect();
-        let loop_ids: Vec<&str> = content
-            .audio
-            .sfx
-            .iter()
-            .filter(|row| row.looped)
-            .map(|row| row.id.as_str())
-            .collect();
+        let warning_ids: Vec<&str> = content.audio.sfx.iter().filter(|row| row.is_warning).map(|row| row.id.as_str()).collect();
+        let loop_ids: Vec<&str> = content.audio.sfx.iter().filter(|row| row.looped).map(|row| row.id.as_str()).collect();
         assert!(!warning_ids.is_empty());
         assert!(!loop_ids.is_empty());
         let quiet = content
@@ -2030,18 +1857,9 @@ mod tests {
             .min_by(|a, b| a.loudness.partial_cmp(&b.loudness).unwrap())
             .expect("stealable one-shot");
         let louder = content.audio.sfx.iter().find(|row| {
-            row.stealable
-                && !row.looped
-                && !row.is_warning
-                && row.id != hover
-                && row.id != quiet.id
-                && row.loudness > quiet.loudness
+            row.stealable && !row.looped && !row.is_warning && row.id != hover && row.id != quiet.id && row.loudness > quiet.loudness
         });
-        let cue = |id: &str, started: f32| Heard {
-            id: id.to_string(),
-            started,
-            order: started as u32,
-        };
+        let cue = |id: &str, started: f32| Heard { id: id.to_string(), started, order: started as u32 };
         let mut playing = vec![cue(&quiet.id, 0.0), cue(&quiet.id, 1.0)];
         let mut protected = Vec::new();
         for id in warning_ids.iter().chain(loop_ids.iter()) {
@@ -2051,49 +1869,28 @@ mod tests {
             protected.push(playing.len());
             playing.push(cue(id, 10.0 + playing.len() as f32));
         }
-        assert!(
-            protected.len() >= 2,
-            "the full list includes a warning and a loop"
-        );
+        assert!(protected.len() >= 2, "the full list includes a warning and a loop");
         while playing.len() < voice_cap {
             if let Some(row) = louder {
                 playing.push(cue(&row.id, 20.0 + playing.len() as f32));
             } else {
-                playing.push(cue(
-                    warning_ids[playing.len() % warning_ids.len()],
-                    20.0 + playing.len() as f32,
-                ));
+                playing.push(cue(warning_ids[playing.len() % warning_ids.len()], 20.0 + playing.len() as f32));
             }
         }
         assert_eq!(playing.len(), voice_cap);
         let asked = vec![hover.clone()];
         let stolen = admit_ui(&content.audio, &playing, &asked, 100.0);
         assert_eq!(stolen.play, vec![hover.clone()]);
-        assert_eq!(
-            stolen.stop,
-            vec![0],
-            "the earlier start time of the quietest one-shots is the victim"
-        );
+        assert_eq!(stolen.stop, vec![0], "the earlier start time of the quietest one-shots is the victim");
         for index in &protected {
-            assert!(
-                !stolen.stop.contains(index),
-                "protected {}",
-                playing[*index].id
-            );
+            assert!(!stolen.stop.contains(index), "protected {}", playing[*index].id);
             let row = content.sfx(&playing[*index].id).unwrap();
             assert!(row.is_warning || row.looped);
             assert!(!row.stealable || row.looped);
         }
-        assert_eq!(
-            playing.len() - stolen.stop.len() + stolen.play.len(),
-            voice_cap
-        );
+        assert_eq!(playing.len() - stolen.stop.len() + stolen.play.len(), voice_cap);
 
-        let held_loops: Vec<&str> = loop_ids
-            .iter()
-            .copied()
-            .filter(|id| !content.sfx(id).unwrap().stealable)
-            .collect();
+        let held_loops: Vec<&str> = loop_ids.iter().copied().filter(|id| !content.sfx(id).unwrap().stealable).collect();
         assert!(!held_loops.is_empty(), "the bed and the crowd loop stay");
         let mut blocked = Vec::new();
         while blocked.len() < voice_cap {
@@ -2105,58 +1902,33 @@ mod tests {
             blocked.push(cue(id, blocked.len() as f32));
         }
         let dropped = admit_ui(&content.audio, &blocked, &asked, 100.0);
-        assert!(
-            dropped.play.is_empty(),
-            "a full list of warnings and non-stealable loops drops the cue"
-        );
+        assert!(dropped.play.is_empty(), "a full list of warnings and non-stealable loops drops the cue");
         assert!(dropped.stop.is_empty());
 
         let mut reversed = vec![
-            Heard {
-                id: quiet.id.clone(),
-                started: 4.0,
-                order: 0,
-            },
-            Heard {
-                id: quiet.id.clone(),
-                started: 1.0,
-                order: 9,
-            },
+            Heard { id: quiet.id.clone(), started: 4.0, order: 0 },
+            Heard { id: quiet.id.clone(), started: 1.0, order: 9 },
         ];
         while reversed.len() < voice_cap {
             reversed.push(cue(warning_ids[reversed.len() % warning_ids.len()], 30.0));
         }
         let later = admit_ui(&content.audio, &reversed, &asked, 100.0);
-        assert_eq!(
-            later.stop,
-            vec![1],
-            "the stored start time beats list order"
-        );
+        assert_eq!(later.stop, vec![1], "the stored start time beats list order");
 
         let nest = content.sfx("hive_nest_idle").unwrap();
         assert!(nest.stealable && nest.looped, "the mix row is stealable");
         let mut nest_full = vec![cue(&nest.id, 0.0)];
         while nest_full.len() < voice_cap {
-            nest_full.push(cue(
-                warning_ids[nest_full.len() % warning_ids.len()],
-                nest_full.len() as f32,
-            ));
+            nest_full.push(cue(warning_ids[nest_full.len() % warning_ids.len()], nest_full.len() as f32));
         }
         let took = admit_ui(&content.audio, &nest_full, &asked, 100.0);
-        assert_eq!(
-            took.stop,
-            vec![0],
-            "a stealable prop loop is taken from the row flag"
-        );
+        assert_eq!(took.stop, vec![0], "a stealable prop loop is taken from the row flag");
         assert_eq!(took.play, vec![hover.clone()]);
         let bed = content.sfx("arena_01_bed").unwrap();
         assert!(!bed.stealable && bed.looped);
         let mut bed_full = vec![cue(&bed.id, 0.0)];
         while bed_full.len() < voice_cap {
-            bed_full.push(cue(
-                warning_ids[bed_full.len() % warning_ids.len()],
-                bed_full.len() as f32,
-            ));
+            bed_full.push(cue(warning_ids[bed_full.len() % warning_ids.len()], bed_full.len() as f32));
         }
         let spared = admit_ui(&content.audio, &bed_full, &asked, 100.0);
         assert!(spared.play.is_empty(), "the bed row is not stealable");
@@ -2205,48 +1977,18 @@ mod tests {
         let content = gemini_sim::content::Content::embedded();
         let duck = content.presentation.hud.away.coop_pause_duck_db;
         let ducked = super::paused_bus(true, false, false, false, duck);
-        assert!(
-            ducked > 0.0 && ducked < 1.0,
-            "co-op game sounds duck, got {ducked}"
-        );
+        assert!(ducked > 0.0 && ducked < 1.0, "co-op game sounds duck, got {ducked}");
         assert_eq!(super::db_to_gain(duck), ducked);
-        assert_eq!(
-            super::paused_bus(true, true, false, false, duck),
-            0.0,
-            "solo pause stops game sounds"
-        );
+        assert_eq!(super::paused_bus(true, true, false, false, duck), 0.0, "solo pause stops game sounds");
         let solo_db = content.presentation.hud.away.solo_pause_duck_db;
-        let (gain, hz) = super::pause_music(
-            true,
-            true,
-            1.0,
-            20_000.0,
-            solo_db,
-            content.presentation.hud.away.music_duck_lowpass_hz,
-            duck,
-        );
+        let (gain, hz) = super::pause_music(true, true, 1.0, 20_000.0, solo_db, content.presentation.hud.away.music_duck_lowpass_hz, duck);
         assert!((solo_db - -12.0).abs() < 1e-3);
-        assert!(
-            (gain - super::db_to_gain(solo_db)).abs() < 1e-4,
-            "solo pause ducks music, got {gain}"
-        );
+        assert!((gain - super::db_to_gain(solo_db)).abs() < 1e-4, "solo pause ducks music, got {gain}");
         assert!(gain > 0.0);
         assert!((hz - content.presentation.hud.away.music_duck_lowpass_hz).abs() < 1e-3);
-        assert_eq!(
-            super::paused_bus(true, true, true, false, duck),
-            1.0,
-            "ui stays full in solo"
-        );
-        assert_eq!(
-            super::paused_bus(true, false, false, true, duck),
-            1.0,
-            "warnings stay full in co-op"
-        );
-        assert_eq!(
-            super::paused_bus(true, true, false, true, duck),
-            1.0,
-            "warnings stay full in solo"
-        );
+        assert_eq!(super::paused_bus(true, true, true, false, duck), 1.0, "ui stays full in solo");
+        assert_eq!(super::paused_bus(true, false, false, true, duck), 1.0, "warnings stay full in co-op");
+        assert_eq!(super::paused_bus(true, true, false, true, duck), 1.0, "warnings stay full in solo");
         assert_eq!(super::paused_bus(false, true, false, false, duck), 1.0);
     }
 
@@ -2307,9 +2049,7 @@ mod tests {
         assert_eq!(state.beacon_cycle, cycle);
         assert!(events.iter().all(|event| !event.id.starts_with("step_")));
         assert!(events.iter().all(|event| event.id != "beacon_pulse"));
-        assert!(events
-            .iter()
-            .any(|event| event.id == "hive_nest_idle" || event.id == "relay_tower_hum"));
+        assert!(events.iter().any(|event| event.id == "hive_nest_idle" || event.id == "relay_tower_hum"));
     }
 
     #[test]
@@ -2699,6 +2439,50 @@ mod tests {
             .iter()
             .any(|row| row.id == tower.id && row.pos == right));
         assert!(waiting.iter().all(|row| row.id != nest.id));
+    }
+
+
+    #[test]
+    fn a_waiting_warning_takes_the_one_free_voice_ahead_of_a_hum() {
+        let content = gemini_sim::content::Content::embedded();
+        let warn = content.sfx("vent_warn").expect("vent_warn").clone();
+        let tower = content.sfx("relay_tower_hum").expect("tower").clone();
+        assert!(tower.stealable && tower.looped);
+        let hum_pos = gemini_sim::math::Vec3::new(4.0, 0.0, 0.0);
+        let mut app = play_app(gemini_sim::math::Vec3::ZERO);
+        fill_oneshots(&mut app, content.audio.voice_cap - 1 - 1);
+        {
+            let mut arena = app.world_mut().resource_mut::<super::ArenaAudio>();
+            arena.stolen = vec![super::StolenLoop {
+                id: tower.id.clone(),
+                pos: hum_pos,
+                priority: tower.priority,
+                elapsed: 0.4,
+                order: 1,
+            }];
+            arena.waiting = vec![gemini_sim::audio_mix::Voice {
+                id: warn.id.clone(),
+                score: warn.loudness,
+                critical: warn.critical,
+                crowd: warn.crowd,
+                gain: warn.volume,
+                pos: gemini_sim::math::Vec3::new(0.0, 0.0, 1.0),
+                priority: warn.priority,
+                is_warning: true,
+            }];
+        }
+        app.world_mut().resource_mut::<crate::session::FrameFx>().sounds = vec![sound_at(&tower.id, hum_pos)];
+        app.update();
+        assert_eq!(warning_entities(&mut app).len(), 1, "the waiting warning takes the free voice");
+        let stolen = &app.world().resource::<super::ArenaAudio>().stolen;
+        assert!(
+            stolen.iter().any(|row| row.id == tower.id && row.pos == hum_pos),
+            "the hum stays waiting"
+        );
+        assert!(
+            prop_rows(&mut app).iter().all(|row| !(row.id == tower.id && row.pos == hum_pos)),
+            "the hum does not resume"
+        );
     }
 
     fn bare_game() -> crate::session::Game {
