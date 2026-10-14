@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use gemini_sim::PlayerInput;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
 /// Welcome seat when the joiner is queued for the next breather.
 pub const PENDING_SEAT: u32 = u32::MAX;
@@ -66,6 +66,8 @@ pub struct CratePullRequest {
 pub struct CratePod {
     pub rarity: String,
     pub fakeout: Option<String>,
+    /// Catalog id from the server roll. The client looks up the icon and the name.
+    pub item: String,
 }
 
 /// Why the host did not return a tier. The client prints copy from content. It does not roll.
@@ -83,6 +85,8 @@ pub enum CratePullFault {
     Key,
     /// The key was saved for a different banner or pull kind.
     Mismatch,
+    /// The rolled rarity has no item in the catalog.
+    Item,
 }
 
 /// The host's answer to [`CratePullRequest`]. A later server sends the same bytes.

@@ -191,6 +191,8 @@ fn file_stem(path: &str) -> String {
 pub struct GridCard {
     pub rarity: String,
     pub fakeout: Option<String>,
+    /// Server catalog id. Empty is not a stand-in for the rarity.
+    pub item: String,
 }
 
 /// Highest rarity in roll order. A tie keeps the earlier pod.
@@ -243,6 +245,14 @@ impl GridRun {
         if cards.len() != pods {
             return Err(format!("ten pull has {} pods, content says {pods}", cards.len()));
         }
+        for card in cards {
+            let Some(item) = content.crate_item(&card.item) else {
+                return Err(format!("unknown crate item {}", card.item));
+            };
+            if item.rarity != card.rarity {
+                return Err(format!("crate item {} is {} and the pod says {}", card.item, item.rarity, card.rarity));
+            }
+        }
         let best = best_index(content, cards)?;
         let fast: Vec<usize> = (0..cards.len()).filter(|index| *index != best).collect();
         let card = &cards[best];
@@ -285,6 +295,12 @@ impl GridRun {
 
     pub fn finished(&self) -> bool {
         self.shown_face(self.plan.best).is_some()
+    }
+
+    /// Catalog id once that card is up. `None` is the shared back.
+    pub fn shown_item(&self, index: usize) -> Option<&str> {
+        self.shown_face(index)?;
+        self.plan.cards.get(index).map(|card| card.item.as_str())
     }
 
     /// Face rarity once that card is up. `None` is the shared back.
@@ -522,9 +538,12 @@ mod tests {
 
     fn grid_cards(content: &Content, legendary_at: Option<usize>) -> Vec<GridCard> {
         let pods = content.banners.cost.pods as usize;
-        let mut cards = vec![GridCard { rarity: "common".into(), fakeout: None }; pods];
+        let common = content.crate_item("visor").expect("visor").id.clone();
+        let legendary = content.crate_item("mark").expect("mark").id.clone();
+        let mut cards = vec![GridCard { rarity: "common".into(), fakeout: None, item: common }; pods];
         if let Some(index) = legendary_at {
             cards[index].rarity = "legendary".into();
+            cards[index].item = legendary;
         }
         cards
     }
@@ -537,8 +556,11 @@ mod tests {
         let cards = grid_cards(&content, Some(legendary_at));
         assert_eq!(best_index(&content, &cards).unwrap(), legendary_at);
         let mut tied = grid_cards(&content, None);
+        let sight = content.crate_item("sight").expect("sight").id.clone();
         tied[0].rarity = "epic".into();
+        tied[0].item = sight.clone();
         tied[legendary_at].rarity = "epic".into();
+        tied[legendary_at].item = sight;
         assert_eq!(best_index(&content, &tied).unwrap(), 0, "a tie stays with the first pod");
         let mut run = GridRun::start(&content, &cards).unwrap();
         assert_eq!(run.plan.best, legendary_at);

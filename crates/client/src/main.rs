@@ -95,7 +95,22 @@ fn install_match(app: &mut App) {
             Update,
             (session::autoplay, audio::menu_levels, audio::sync_gains, audio::attach_duck).run_if(in_state(AppState::Menu)),
         )
-        .add_systems(Update, reveal_ui::tick.run_if(in_state(AppState::Reveal)))
+        .add_systems(OnEnter(AppState::Reveal), reveal_ui::enter)
+        .add_systems(
+            Update,
+            (
+                flow::release_pull,
+                reveal_ui::drive,
+                reveal_ui::input,
+                flow::reveal_act,
+                reveal_ui::mark_fades,
+                reveal_ui::fade_voices,
+                reveal_ui::paint,
+                audio::flush_ui_cues,
+            )
+                .chain()
+                .run_if(in_state(AppState::Reveal)),
+        )
         .add_systems(OnExit(AppState::Reveal), reveal_ui::close);
 }
 
@@ -114,6 +129,7 @@ mod tests {
     use bevy::input::mouse::AccumulatedMouseMotion;
     use bevy::pbr::StandardMaterial;
     use bevy::prelude::*;
+    use bevy::ecs::system::RunSystemOnce;
     use bevy::time::TimeUpdateStrategy;
     use bevy::window::{CursorGrabMode, CursorOptions};
 
@@ -513,7 +529,7 @@ mod tests {
             fakeout: Some("epic".into()),
             rank: 2,
             fault: None,
-            pods: vec![gemini_proto::CratePod { rarity: "rare".into(), fakeout: Some("epic".into()) }],
+            pods: vec![gemini_proto::CratePod { rarity: "rare".into(), fakeout: Some("epic".into()), item: "barrel".into() }],
             fresh: true,
             ten: false,
             credits: content.banners.dev.starting_credits,
@@ -571,7 +587,7 @@ mod tests {
         app.insert_resource(reveal_ui::RevealPlayback(reveal_ui::RevealShow::Single(run)));
         app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Reveal);
         app.update();
-        app.world_mut().spawn((reveal_ui::RevealVoice { id: "crate_tease".into() }, OldVoice));
+        app.world_mut().spawn((reveal_ui::RevealVoice { id: "crate_tease".into(), gen: 0, gain: 1.0 }, OldVoice));
         tap(&mut app, KeyCode::Space);
         let mut old = app.world_mut().query::<&OldVoice>();
         assert_eq!(old.iter(app.world()).count(), 0, "skip stops whatever was already playing");
@@ -586,8 +602,11 @@ mod tests {
         let mut app = menu_app();
         let content = gemini_sim::content::Content::embedded();
         let pods = content.banners.cost.pods as usize;
-        let mut cards = vec![gemini_sim::reveal::GridCard { rarity: "common".into(), fakeout: None }; pods];
+        let visor = content.crate_item("visor").expect("visor").id.clone();
+        let mark = content.crate_item("mark").expect("mark").id.clone();
+        let mut cards = vec![gemini_sim::reveal::GridCard { rarity: "common".into(), fakeout: None, item: visor }; pods];
         cards[pods / 2].rarity = "legendary".into();
+        cards[pods / 2].item = mark;
         let run = gemini_sim::reveal::GridRun::start(&content, &cards).unwrap();
         let sting = format!("crate_{}", cards[run.plan.best].rarity);
         let flip = content.crate_reveal.grid.flip_cue.clone();
@@ -610,6 +629,174 @@ mod tests {
         }
         assert!(played.iter().all(|id| id != &flip), "no flip ticks after the skip: {played:?}");
         assert_eq!(played.iter().filter(|id| *id == &sting).count(), 1, "the best sting still plays: {played:?}");
+    }
+
+    #[test]
+    fn result_buttons_stay_disabled_until_the_best_face() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        open_grid(&mut app, false);
+        assert!(!app.world().resource::<flow::ServerCrate>().buttons_ready);
+        assert!(reveal_buttons(&mut app).is_empty(), "the grid has no result buttons while the best card is down");
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("continue".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        assert!(app.world().resource::<flow::ServerCrate>().sent_keys.is_empty());
+        assert!(ui_cues(&mut app).is_empty(), "disabled result buttons are silent");
+        assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Reveal));
+
+        tap(&mut app, KeyCode::Space);
+        assert!(!app.world().resource::<flow::ServerCrate>().buttons_ready, "skip starts the best card without showing its face");
+        assert!(reveal_buttons(&mut app).is_empty());
+
+        app.world_mut().resource_mut::<Time<bevy::time::Virtual>>().set_max_delta(Duration::from_secs(60));
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(30.0)));
+        app.update();
+        app.insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_secs_f32(1.0 / 60.0)));
+        assert!(app.world().resource::<flow::ServerCrate>().buttons_ready);
+        let ids = reveal_buttons(&mut app);
+        assert!(ids.iter().any(|id| id == "continue") && ids.iter().any(|id| id == "pull_again"), "{ids:?}");
+        let continue_at = button_corner(&mut app, "continue");
+        let again_at = button_corner(&mut app, "pull_again");
+        assert_eq!(continue_at.1, again_at.1, "the live grid keeps the two buttons on one row");
+        assert!(again_at.0 > continue_at.0);
+        tap(&mut app, KeyCode::ArrowRight);
+        tap(&mut app, KeyCode::Enter);
+        assert_eq!(app.world().resource::<flow::ServerCrate>().sent_keys.len(), 1, "enter on the focused pull again sends one pull");
+    }
+
+    #[test]
+    fn two_pull_again_presses_in_one_frame_send_one_fresh_key() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        let content = gemini_sim::content::Content::embedded();
+        open_grid(&mut app, true);
+        assert!(app.world().resource::<flow::ServerCrate>().buttons_ready);
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        assert!(app.world().resource::<flow::ServerCrate>().pull_busy);
+        let after_first = ui_cues(&mut app);
+        assert!(after_first.iter().any(|id| id == &content.ui.sounds.confirm), "pull again uses the menu click: {after_first:?}");
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        let keys = app.world().resource::<flow::ServerCrate>().sent_keys.clone();
+        assert_eq!(keys.len(), 1, "a second press in this frame does not send");
+        assert_eq!(ui_cues(&mut app).len(), after_first.len(), "the disabled second press is silent");
+
+        app.world_mut().run_system_once(flow::release_pull).unwrap();
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        let keys = app.world().resource::<flow::ServerCrate>().sent_keys.clone();
+        assert_eq!(keys.len(), 2);
+        assert_ne!(keys[0], keys[1], "each accepted press gets its own key");
+        assert_eq!(keys[0].len(), 32);
+    }
+
+    #[test]
+    fn pull_again_fades_voices_from_the_previous_pull() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        let content = gemini_sim::content::Content::embedded();
+        open_grid(&mut app, true);
+        let old_gen = app.world().resource::<flow::ServerCrate>().reveal_gen;
+        app.world_mut().spawn(reveal_ui::RevealVoice { id: "crate_legendary".into(), gen: old_gen, gain: 1.0 });
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        let new_gen = app.world().resource::<flow::ServerCrate>().reveal_gen;
+        assert!(new_gen > old_gen);
+        app.world_mut().spawn(reveal_ui::RevealVoice { id: "crate_tease".into(), gen: new_gen, gain: 1.0 });
+        let steps = (content.audio.warning_fade / (1.0 / 60.0)).ceil() as u32 + 3;
+        for _ in 0..steps {
+            app.update();
+        }
+        let mut voices = app.world_mut().query::<&reveal_ui::RevealVoice>();
+        let left: Vec<_> = voices.iter(app.world()).map(|voice| (voice.gen, voice.id.clone())).collect();
+        assert!(left.iter().all(|(gen, _)| *gen != old_gen), "no voice from the previous pull survives the fade: {left:?}");
+        assert!(left.iter().any(|(gen, id)| *gen == new_gen && id == "crate_tease"), "the next pull keeps its own voice: {left:?}");
+    }
+
+    #[test]
+    fn refund_buttons_are_a_column_and_a_short_wallet_cannot_pull() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        let content = gemini_sim::content::Content::embedded();
+        assert_eq!(
+            gemini_sim::content::shortfall_line(&content.ui.copy, content.ui.layout.currency_decimals, 50.0),
+            "NEED 50 MORE CREDITS"
+        );
+        app.insert_resource(reveal_ui::RevealPlayback(reveal_ui::RevealShow::Refund(gemini_sim::reveal::RefundRun::start(&content, true))));
+        app.world_mut().resource_mut::<flow::ServerCrate>().credits = Some(content.banners.dev.starting_credits);
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Reveal);
+        app.update();
+        let ids = reveal_buttons(&mut app);
+        assert!(ids.iter().any(|id| id == "continue") && ids.iter().any(|id| id == "pull_again"), "{ids:?}");
+        let continue_at = button_corner(&mut app, "continue");
+        let again_at = button_corner(&mut app, "pull_again");
+        assert_eq!(continue_at.0, again_at.0, "the refund panel stacks its buttons");
+        assert!(again_at.1 > continue_at.1);
+
+        app.world_mut().resource_mut::<flow::ServerCrate>().credits = Some(0.0);
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        assert!(app.world().resource::<flow::ServerCrate>().sent_keys.is_empty());
+        assert!(ui_cues(&mut app).is_empty(), "a short pull again is silent");
+        app.update();
+        let ids = reveal_buttons(&mut app);
+        assert!(ids.iter().any(|id| id == "continue"), "{ids:?}");
+        assert!(ids.iter().all(|id| id != "pull_again"), "a short wallet draws pull again disabled: {ids:?}");
+
+        press_hit(&mut app, "continue");
+        assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Menu));
+        assert!(matches!(app.world().resource::<flow::Page>(), flow::Page::Crates));
+    }
+
+    #[test]
+    fn the_grid_draws_the_server_item_id() {
+        let content = gemini_sim::content::Content::embedded();
+        let width = content.ui.layout.fit_width.round() as u32;
+        let height = content.ui.layout.fit_height.round() as u32;
+        let pods = content.banners.cost.pods as usize;
+        let mut proto_pods = Vec::new();
+        for index in 0..pods {
+            let item = if index == 3 { "grip" } else { "visor" };
+            proto_pods.push(gemini_proto::CratePod { rarity: "common".into(), fakeout: None, item: item.into() });
+        }
+        let reply = gemini_proto::CratePullReply {
+            version: gemini_proto::PROTOCOL_VERSION,
+            rarity: None,
+            fakeout: None,
+            rank: 1,
+            fault: None,
+            pods: proto_pods,
+            fresh: true,
+            ten: true,
+            credits: 4_000.0,
+        };
+        let (landed, _) = flow::crate_from_reply(&content, &reply);
+        let cards: Vec<_> = landed
+            .pods
+            .iter()
+            .map(|pod| gemini_sim::reveal::GridCard {
+                rarity: pod.rarity.clone(),
+                fakeout: pod.fakeout.clone(),
+                item: pod.item.clone(),
+            })
+            .collect();
+        let mut run = gemini_sim::reveal::GridRun::start(&content, &cards).unwrap();
+        run.skip();
+        run.advance(run.plan.best_plan.card_at);
+        for (index, pod) in landed.pods.iter().enumerate() {
+            assert_eq!(run.shown_item(index), Some(pod.item.as_str()));
+        }
+        let shown: Vec<Option<&str>> = (0..pods).map(|index| run.shown_item(index)).collect();
+        let shot = gemini_meshes::GridStill { items: &shown, ready: true, again: true, focus: 0, shortfall: "" };
+        let (rgb, _) = gemini_meshes::paint_grid(&content, &shot, width, height).unwrap();
+        let mut swapped = shown.clone();
+        swapped[3] = Some("visor");
+        let other_shot = gemini_meshes::GridStill { items: &swapped, ready: true, again: true, focus: 0, shortfall: "" };
+        let (other, _) = gemini_meshes::paint_grid(&content, &other_shot, width, height).unwrap();
+        assert_ne!(rgb, other, "the painted card is the server item, not a stand-in");
     }
 
     #[test]
@@ -898,6 +1085,44 @@ mod tests {
 
     #[derive(Component)]
     struct OldVoice;
+
+    fn open_grid(app: &mut App, finished: bool) {
+        let content = gemini_sim::content::Content::embedded();
+        let pods = content.banners.cost.pods as usize;
+        let visor = content.crate_item("visor").expect("visor").id.clone();
+        let mark = content.crate_item("mark").expect("mark").id.clone();
+        let mut cards = vec![gemini_sim::reveal::GridCard { rarity: "common".into(), fakeout: None, item: visor }; pods];
+        cards[pods / 2].rarity = "legendary".into();
+        cards[pods / 2].item = mark;
+        let mut run = gemini_sim::reveal::GridRun::start(&content, &cards).unwrap();
+        if finished {
+            run.skip();
+            run.advance(run.plan.best_plan.card_at);
+            assert!(run.finished());
+        }
+        app.insert_resource(reveal_ui::RevealPlayback(reveal_ui::RevealShow::Grid(run)));
+        app.world_mut().resource_mut::<flow::ServerCrate>().credits = Some(content.banners.dev.starting_credits);
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Reveal);
+        app.update();
+    }
+
+    fn reveal_buttons(app: &mut App) -> Vec<String> {
+        let mut query = app.world_mut().query::<&flow::HitButton>();
+        query.iter(app.world()).map(|hit| hit.0.clone()).collect()
+    }
+
+    fn button_corner(app: &mut App, id: &str) -> (f32, f32) {
+        let mut query = app.world_mut().query::<(&flow::HitButton, &Node)>();
+        let (_, node) = query.iter(app.world()).find(|(hit, _)| hit.0 == id).unwrap_or_else(|| panic!("missing button {id}"));
+        let Val::Px(x) = node.left else { panic!("button {id} left") };
+        let Val::Px(y) = node.top else { panic!("button {id} top") };
+        (x, y)
+    }
+
+    fn ui_cues(app: &mut App) -> Vec<String> {
+        let mut query = app.world_mut().query::<&audio::UiRequest>();
+        query.iter(app.world()).map(|request| request.0.clone()).collect()
+    }
 
     fn press_hit(app: &mut App, id: &str) {
         let entity = {

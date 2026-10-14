@@ -605,36 +605,50 @@ pub fn grid_slots(content: &Content, width: u32, height: u32) -> Result<Vec<(u32
     Ok(slots)
 }
 
-/// `faces` is roll order. `None` paints the shared back. `actions` adds the banner and the result buttons.
-pub fn paint_grid(content: &Content, faces: &[Option<&str>], width: u32, height: u32, actions: bool) -> Result<Vec<u8>, String> {
+/// One ten-pull frame. `items` is roll order. `None` is the shared back.
+/// `ready` is false until the best card's face is up. `again` is false when the wallet cannot pay.
+pub struct GridStill<'a> {
+    pub items: &'a [Option<&'a str>],
+    pub ready: bool,
+    pub again: bool,
+    pub focus: usize,
+    pub shortfall: &'a str,
+}
+
+/// Refund column. `again` is false when a ten-pull does not fit in the wallet.
+pub struct RefundStill<'a> {
+    pub again: bool,
+    pub focus: usize,
+    pub shortfall: &'a str,
+}
+
+/// The live reveal screen and the stills call this. `None` paints the shared back.
+pub fn paint_grid(content: &Content, shot: &GridStill<'_>, width: u32, height: u32) -> Result<(Vec<u8>, Vec<crate::menu_still::Hit>), String> {
     let cells = (content.crate_reveal.grid.columns * content.crate_reveal.grid.rows) as usize;
-    if faces.len() != cells {
-        return Err(format!("grid has {} faces and content says {cells}", faces.len()));
+    if shot.items.len() != cells {
+        return Err(format!("grid has {} faces and content says {cells}", shot.items.len()));
     }
     let mut rgb = vec![0u8; (width as usize) * (height as usize) * 3];
     paint_stage(&mut rgb, width, height, content, &content.crate_reveal.layout);
     let slots = grid_slots(content, width, height)?;
-    for (slot, face) in slots.iter().zip(faces) {
+    for (slot, face) in slots.iter().zip(shot.items) {
         let (x, y, w, h) = *slot;
         match face {
-            Some(rarity) => {
-                let key = format!("rarity_{rarity}");
-                if content.palette.hex(&key).is_none() {
-                    return Err(format!("unknown rarity {rarity}"));
-                }
-                paint_grid_face(&mut rgb, width, height, content, x, y, w, h, &key, rarity)?;
+            Some(item_id) => {
+                let Some(item) = content.crate_item(item_id) else {
+                    return Err(format!("unknown crate item {item_id}"));
+                };
+                paint_grid_face(&mut rgb, width, height, content, x, y, w, h, item)?;
             }
             None => paint_grid_back(&mut rgb, width, height, content, x, y, w, h),
         }
     }
-    if actions {
-        paint_result_chrome(&mut rgb, width, height, content);
-    }
-    Ok(rgb)
+    let hits = paint_result_chrome(&mut rgb, width, height, content, shot.ready, shot.again, shot.focus, shot.shortfall);
+    Ok((rgb, hits))
 }
 
-/// Refund panel in the bank bevel, face `refund_face`, with the banner and the two buttons.
-pub fn paint_refund(content: &Content, width: u32, height: u32) -> Result<Vec<u8>, String> {
+/// Refund column in the bank bevel, sized to the banner, the message, and the two buttons.
+pub fn paint_refund(content: &Content, shot: &RefundStill<'_>, width: u32, height: u32) -> Result<(Vec<u8>, Vec<crate::menu_still::Hit>), String> {
     let grid = &content.crate_reveal.grid;
     let fit_w = content.ui.layout.fit_width;
     let fit_h = content.ui.layout.fit_height;
@@ -643,34 +657,60 @@ pub fn paint_refund(content: &Content, width: u32, height: u32) -> Result<Vec<u8
     }
     let mut rgb = vec![0u8; (width as usize) * (height as usize) * 3];
     paint_stage(&mut rgb, width, height, content, &content.crate_reveal.layout);
-    let sx = width as f32 / fit_w;
     let sy = height as f32 / fit_h;
-    let panel_w = (grid.refund_w * sx).round().max(1.0) as i32;
-    let panel_h = (grid.refund_h * sy).round().max(1.0) as i32;
-    let x = (width as i32 - panel_w) / 2;
-    let y = (height as i32 - panel_h) / 2;
+    let ui = &content.ui.layout;
+    let layout = &content.crate_reveal.layout;
+    let title_h = ((ui.title_scale * layout.glyph_rows) as f32 * sy).round() as i32;
+    let line_h = ((ui.button_scale * layout.glyph_rows) as f32 * sy).round() as i32;
+    let (x, y, panel_w, panel_h, button_w, button_h, gap, margin_x, margin_y) = refund_column(content, width, height, !shot.shortfall.is_empty());
     let face = palette_bytes(content, &grid.refund_face);
     let ink = palette_bytes(content, &grid.refund_ink);
-    draw_bevel(&mut rgb, width, height, x, y, panel_w, panel_h, &chunk_bevel(content, panel_h, content.ui.layout.bank_panel_height, ink, face));
-    let layout = &content.crate_reveal.layout;
-    let ui = &content.ui.layout;
-    let scale_y = panel_h as f32 / ui.bank_panel_height;
-    let mut ty = y + (ui.margin_y * scale_y).round() as i32;
+    draw_bevel(&mut rgb, width, height, x, y, panel_w, panel_h, &chunk_bevel(content, panel_h, panel_h as f32, ink, face));
+    let mut ty = y + margin_y;
     let banner = content.banners.id.to_uppercase();
-    let title_scale = ((ui.title_scale as f32) * scale_y).round().max(1.0) as u32;
+    let title_scale = ((ui.title_scale as f32) * sy).round().max(1.0) as u32;
     blit_centered(&mut rgb, width, height, x, panel_w, ty, &banner, ink, title_scale, layout);
-    ty += (title_scale * layout.glyph_rows) as i32 + (ui.title_gap * scale_y).round() as i32;
-    let body = ((ui.button_scale as f32) * scale_y).round().max(1.0) as u32;
+    ty += title_h + gap;
+    let body = ((ui.button_scale as f32) * sy).round().max(1.0) as u32;
     blit_centered(&mut rgb, width, height, x, panel_w, ty, &grid.refund_message, ink, body, layout);
-    ty += (body * layout.glyph_rows) as i32 + (ui.title_gap * scale_y).round() as i32;
+    ty += line_h + gap;
+    if !shot.shortfall.is_empty() {
+        blit_centered(&mut rgb, width, height, x, panel_w, ty, shot.shortfall, ink, body, layout);
+        ty += line_h + gap;
+    }
+    let bx = x + margin_x;
+    let mut hits = Vec::new();
+    let continue_hit = paint_text_button(&mut rgb, width, height, content, bx, ty, button_w, button_h, &content.ui.copy.crates_continue, true, shot.focus == 0);
+    hits.push(crate::menu_still::Hit { id: "continue".into(), ..continue_hit });
+    ty += button_h + gap;
+    let again_hit = paint_text_button(&mut rgb, width, height, content, bx, ty, button_w, button_h, &content.ui.copy.crates_pull_again, shot.again, shot.again && shot.focus == 1);
+    if shot.again {
+        hits.push(crate::menu_still::Hit { id: "pull_again".into(), ..again_hit });
+    }
+    Ok((rgb, hits))
+}
+
+/// Column panel, then button width, button height, row gap, and the two margins.
+fn refund_column(content: &Content, width: u32, height: u32, shortfall: bool) -> (i32, i32, i32, i32, i32, i32, i32, i32, i32) {
+    let fit_w = content.ui.layout.fit_width.max(1.0);
+    let fit_h = content.ui.layout.fit_height.max(1.0);
+    let sx = width as f32 / fit_w;
+    let sy = height as f32 / fit_h;
+    let ui = &content.ui.layout;
+    let layout = &content.crate_reveal.layout;
+    let title_h = ((ui.title_scale * layout.glyph_rows) as f32 * sy).round() as i32;
+    let line_h = ((ui.button_scale * layout.glyph_rows) as f32 * sy).round() as i32;
     let button_w = (ui.button_width * sx).round() as i32;
     let button_h = (ui.button_height * sy).round() as i32;
     let gap = (ui.row_gap * sy).round() as i32;
-    let bx = x + (panel_w - button_w) / 2;
-    paint_text_button(&mut rgb, width, height, content, bx, ty, button_w, button_h, &content.ui.copy.crates_continue, ink);
-    ty += button_h + gap;
-    paint_text_button(&mut rgb, width, height, content, bx, ty, button_w, button_h, &content.ui.copy.crates_pull_again, ink);
-    Ok(rgb)
+    let margin_x = (ui.margin_x * sx).round() as i32;
+    let margin_y = (ui.margin_y * sy).round() as i32;
+    let short_h = if shortfall { line_h + gap } else { 0 };
+    let panel_w = button_w + margin_x * 2;
+    let panel_h = margin_y + title_h + gap + line_h + gap + short_h + button_h + gap + button_h + margin_y;
+    let x = (width as i32 - panel_w) / 2;
+    let y = (height as i32 - panel_h) / 2;
+    (x, y, panel_w, panel_h, button_w, button_h, gap, margin_x, margin_y)
 }
 
 fn paint_grid_back(rgb: &mut [u8], width: u32, height: u32, content: &Content, x: u32, y: u32, w: u32, h: u32) {
@@ -689,67 +729,102 @@ fn paint_grid_face(
     y: u32,
     w: u32,
     h: u32,
-    rarity_key: &str,
-    rarity: &str,
+    item: &gemini_sim::content::CrateItem,
 ) -> Result<(), String> {
     let fill = palette_bytes(content, &content.crate_reveal.grid.face);
-    let edge = palette_bytes(content, rarity_key);
+    let edge = palette_bytes(content, &format!("rarity_{}", item.rarity));
     let reference = content.crate_reveal.layout.panel_height;
     draw_bevel(rgb, width, height, x as i32, y as i32, w as i32, h as i32, &chunk_bevel(content, h as i32, reference, edge, fill));
     let face = inner_face(content, x as i32, y as i32, w as i32, h as i32);
     let layout = &content.crate_reveal.layout;
     let ink = face_ink(content, fill);
+    let icon_ink = palette_bytes(content, &item.ink);
     let light = palette_bytes(content, &layout.ink_light);
-    let scale = title_scale(face.2 as u32, face.3 as u32, "LEGENDARY".chars().count() as u32, layout, &content.crate_reveal.card);
+    paint_item_icon(rgb, width, height, item, icon_ink, light, face);
+    let cols = content.banners.items.iter().map(|row| row.name.chars().count()).max().unwrap_or(1) as u32;
+    let scale = title_scale(face.2 as u32, face.3 as u32, cols, layout, &content.crate_reveal.card);
     let text_h = layout.glyph_rows.max(1) * scale;
-    let gem_h = ((face.3 as f32) * layout.gem_height).round().max(1.0) as u32;
-    let label = rarity.to_uppercase();
-    let text_w = label.chars().count() as u32 * layout.title_glyph_px.max(1) * scale;
+    let text_w = item.name.chars().count() as u32 * layout.title_glyph_px.max(1) * scale;
     let text_x = title_origin(face.0 as u32, face.2 as u32, text_w, content.crate_reveal.card.title_pad.round().max(0.0) as u32);
     let text_y = (face.1 + face.3).saturating_sub(text_h as i32 + 2).max(face.1) as u32;
-    let gem_top = face.1.max(0) as u32;
-    paint_gem(
-        rgb,
-        width,
-        height,
-        (face.0 + face.2 / 2).max(0) as u32,
-        gem_top,
-        gem_h.min(face.3.max(1) as u32),
-        edge,
-        light,
-        layout.gem_glow,
-        (face.0.max(0) as u32, face.1.max(0) as u32, face.2.max(1) as u32, face.3.max(1) as u32),
-    );
-    blit_at(rgb, width, height, text_x, text_y, &label, ink, scale);
+    blit_at(rgb, width, height, text_x, text_y, &item.name, ink, scale);
     Ok(())
 }
 
-fn paint_result_chrome(rgb: &mut [u8], width: u32, height: u32, content: &Content) {
+fn paint_item_icon(rgb: &mut [u8], width: u32, height: u32, item: &gemini_sim::content::CrateItem, ink: [u8; 3], light: [u8; 3], face: (i32, i32, i32, i32)) {
+    let rows = item.icon.len() as i32;
+    let cols = item.icon.first().map(|row| row.chars().count()).unwrap_or(0) as i32;
+    if rows <= 0 || cols <= 0 {
+        return;
+    }
+    let avail_w = (face.2 * 3 / 4).max(1);
+    let avail_h = (face.3 * 2 / 5).max(1);
+    let scale = (avail_w / cols).min(avail_h / rows).max(1);
+    let icon_w = cols * scale;
+    let icon_h = rows * scale;
+    let origin_x = face.0 + (face.2 - icon_w) / 2;
+    let origin_y = face.1 + (avail_h - icon_h) / 2;
+    for (row_index, row) in item.icon.iter().enumerate() {
+        for (col_index, ch) in row.chars().enumerate() {
+            if ch != '#' {
+                continue;
+            }
+            let lit = (row_index as i32) + (col_index as i32) < (rows + cols) / 3;
+            let color = if lit { blend(ink, light, 0.45) } else { ink };
+            fill(rgb, width, height, (origin_x + col_index as i32 * scale) as u32, (origin_y + row_index as i32 * scale) as u32, scale as u32, scale as u32, color);
+        }
+    }
+}
+
+fn paint_result_chrome(rgb: &mut [u8], width: u32, height: u32, content: &Content, ready: bool, again: bool, focus: usize, shortfall: &str) -> Vec<crate::menu_still::Hit> {
     let layout = &content.crate_reveal.layout;
-    let ink = palette_bytes(content, &content.crate_reveal.grid.refund_ink);
+    let paper = palette_bytes(content, &content.ui.colors.text);
     let ui = &content.ui;
     let banner = content.banners.id.to_uppercase();
-    blit_centered(rgb, width, height, 0, width as i32, ui.layout.margin_y.round() as i32, &banner, ink, ui.layout.title_scale, layout);
+    blit_centered(rgb, width, height, 0, width as i32, ui.layout.margin_y.round() as i32, &banner, paper, ui.layout.title_scale, layout);
     let button_w = ui.layout.button_width.round() as i32;
     let button_h = ui.layout.button_height.round() as i32;
     let gap = ui.layout.row_gap.round() as i32;
     let total = button_w * 2 + gap;
     let x = (width as i32 - total) / 2;
-    let y = height as i32 - button_h - ui.layout.margin_y.round() as i32;
-    paint_text_button(rgb, width, height, content, x, y, button_w, button_h, &ui.copy.crates_continue, ink);
-    paint_text_button(rgb, width, height, content, x + button_w + gap, y, button_w, button_h, &ui.copy.crates_pull_again, ink);
+    let mut y = height as i32 - button_h - ui.layout.margin_y.round() as i32;
+    if !shortfall.is_empty() {
+        let line_h = (layout.glyph_rows.max(1) * ui.layout.button_scale) as i32;
+        y -= line_h + gap;
+        blit_centered(rgb, width, height, 0, width as i32, y, shortfall, paper, ui.layout.button_scale, layout);
+        y += line_h + gap;
+    }
+    let mut hits = Vec::new();
+    let continue_on = ready;
+    let again_on = ready && again;
+    let continue_hit = paint_text_button(rgb, width, height, content, x, y, button_w, button_h, &ui.copy.crates_continue, continue_on, continue_on && focus == 0);
+    if continue_on {
+        hits.push(crate::menu_still::Hit { id: "continue".into(), ..continue_hit });
+    }
+    let again_hit = paint_text_button(rgb, width, height, content, x + button_w + gap, y, button_w, button_h, &ui.copy.crates_pull_again, again_on, again_on && focus == hits.len());
+    if again_on {
+        hits.push(crate::menu_still::Hit { id: "pull_again".into(), ..again_hit });
+    }
+    hits
 }
 
-fn paint_text_button(rgb: &mut [u8], width: u32, height: u32, content: &Content, x: i32, y: i32, w: i32, h: i32, label: &str, ink: [u8; 3]) {
+fn paint_text_button(rgb: &mut [u8], width: u32, height: u32, content: &Content, x: i32, y: i32, w: i32, h: i32, label: &str, lit: bool, focused: bool) -> crate::menu_still::Hit {
+    let edge = if focused {
+        palette_bytes(content, &content.ui.colors.focus_before_hero)
+    } else {
+        palette_bytes(content, &content.ui.colors.dim)
+    };
+    let text = if lit { palette_bytes(content, &content.ui.colors.text) } else { palette_bytes(content, &content.ui.colors.dim) };
     let face = palette_bytes(content, &content.ui.colors.panel);
-    draw_bevel(rgb, width, height, x, y, w, h, &chunk_bevel(content, h, content.ui.layout.button_height, ink, face));
+    draw_bevel(rgb, width, height, x, y, w, h, &chunk_bevel(content, h, content.ui.layout.button_height, edge, face));
     let layout = &content.crate_reveal.layout;
     let scale = content.ui.layout.button_scale;
     let text_h = layout.glyph_rows.max(1) * scale;
     let text_w = label.chars().count() as u32 * layout.title_glyph_px.max(1) * scale;
     let tx = title_origin(x.max(0) as u32, w.max(0) as u32, text_w, 0);
     let ty = (y + (h - text_h as i32) / 2).max(0) as u32;
-    blit_at(rgb, width, height, tx, ty, label, ink, scale);
+    blit_at(rgb, width, height, tx, ty, label, text, scale);
+    crate::menu_still::Hit { id: String::new(), x, y, w, h }
 }
 
 fn blit_centered(rgb: &mut [u8], width: u32, height: u32, origin_x: i32, span: i32, y: i32, text: &str, ink: [u8; 3], scale: u32, layout: &gemini_sim::content::RevealLayout) {
@@ -975,7 +1050,7 @@ mod tests {
         let gold = palette_bytes(&content, "rarity_legendary");
         let common = palette_bytes(&content, "rarity_common");
         let back = palette_bytes(&content, &content.crate_reveal.grid.back);
-        let backs = paint_grid(&content, &vec![None; pods], width, height, false).unwrap();
+        let backs = paint_grid(&content, &GridStill { items: &vec![None; pods], ready: false, again: true, focus: 0, shortfall: "" }, width, height).unwrap().0;
         let first = rounded_card(&backs, width, slots[0], &content);
         let second = rounded_card(&backs, width, slots[1], &content);
         assert_eq!(first, second, "every back is the same picture");
@@ -983,10 +1058,16 @@ mod tests {
         assert!(!first.chunks_exact(3).any(|px| px == gold), "a back has no legendary gold");
 
         let paper = palette_bytes(&content, &content.crate_reveal.grid.face);
-        let mut faces = vec![Some("common"); pods];
+        let visor = content.crate_item("visor").expect("visor");
+        let grip = content.crate_item("grip").expect("grip");
+        let mark = content.crate_item("mark").expect("mark");
+        let perk = content.crate_item("perk").expect("perk");
+        assert_eq!(visor.rarity, grip.rarity);
+        assert_ne!(visor.id, grip.id);
+        let mut faces = vec![Some(visor.id.as_str()); pods];
         let legendary_at = pods / 2;
-        faces[legendary_at] = Some("legendary");
-        let mixed = paint_grid(&content, &faces, width, height, true).unwrap();
+        faces[legendary_at] = Some(mark.id.as_str());
+        let mixed = paint_grid(&content, &GridStill { items: &faces, ready: true, again: true, focus: 0, shortfall: "" }, width, height).unwrap().0;
         assert_eq!(face_swatch(&mixed, width, slots[legendary_at], &content), paper, "the face is paper, not a rarity flood");
         assert_eq!(face_swatch(&mixed, width, slots[0], &content), paper);
         assert_ne!(paper, gold);
@@ -1002,20 +1083,25 @@ mod tests {
             }
         }
 
-        let mut cards = vec![gemini_sim::reveal::GridCard { rarity: "common".into(), fakeout: None }; pods];
+        let mut cards = vec![gemini_sim::reveal::GridCard { rarity: "common".into(), fakeout: None, item: visor.id.clone() }; pods];
         cards[legendary_at].rarity = "legendary".into();
+        cards[legendary_at].item = mark.id.clone();
         let mut run = gemini_sim::reveal::GridRun::start(&content, &cards).unwrap();
         let flip = content.crate_reveal.grid.fast_flip;
         for _ in 0..pods - 1 {
             run.advance(flip);
         }
         assert!(run.shown_face(legendary_at).is_none());
-        let shown: Vec<Option<&str>> = (0..pods).map(|index| run.shown_face(index)).collect();
-        let held = paint_grid(&content, &shown, width, height, false).unwrap();
+        let shown: Vec<Option<&str>> = (0..pods).map(|index| run.shown_item(index)).collect();
+        assert_eq!(shown[legendary_at], None);
+        assert_eq!(shown[0], Some(visor.id.as_str()));
+        let held = paint_grid(&content, &GridStill { items: &shown, ready: false, again: true, focus: 0, shortfall: "" }, width, height).unwrap().0;
         assert_eq!(card_pixels(&held, width, slots[legendary_at]), card_pixels(&backs, width, slots[legendary_at]));
         assert!(card_pixels(&held, width, slots[legendary_at]).chunks_exact(3).all(|px| px != gold));
 
-        let refund = paint_refund(&content, width, height).unwrap();
+        let (refund, refund_hits) = paint_refund(&content, &RefundStill { again: true, focus: 0, shortfall: "" }, width, height).unwrap();
+        assert!(refund_hits.iter().any(|hit| hit.id == "continue"));
+        assert!(refund_hits.iter().any(|hit| hit.id == "pull_again"));
         assert!(refund.chunks_exact(3).all(|px| px != gold), "the refund panel has no rarity gold");
         let refund_paper = palette_bytes(&content, &content.crate_reveal.grid.refund_face);
         let refund_slot = refund_rect(&content, width, height);
@@ -1043,11 +1129,26 @@ mod tests {
         );
         assert!(broke.1.iter().all(|hit| hit.id != "pull" && hit.id != "ten"), "a short wallet sends no pull");
         assert!(broke.1.iter().any(|hit| hit.id == "back"));
+        let grip_faces = vec![Some(grip.id.as_str()); pods];
+        let grip_paint = paint_grid(&content, &GridStill { items: &grip_faces, ready: true, again: true, focus: 0, shortfall: "" }, width, height).unwrap().0;
+        let visor_ink = palette_bytes(&content, &visor.ink);
+        let grip_ink = palette_bytes(&content, &grip.ink);
+        assert!(card_pixels(&grip_paint, width, slots[0]).chunks_exact(3).any(|px| px == grip_ink), "the card draws the server item");
+        assert!(card_pixels(&grip_paint, width, slots[0]).chunks_exact(3).all(|px| px != visor_ink), "a grip card does not draw visor");
+        assert_ne!(grip_ink, gold);
+        let flipped_items: Vec<Option<&str>> = cards.iter().map(|card| Some(card.item.as_str())).collect();
+        let (flipped, flipped_hits) = paint_grid(&content, &GridStill { items: &flipped_items, ready: true, again: true, focus: 0, shortfall: "" }, width, height).unwrap();
+        assert!(flipped_hits.iter().any(|hit| hit.id == "continue") && flipped_hits.iter().any(|hit| hit.id == "pull_again"));
+        let (held_paint, held_hits) = paint_grid(&content, &GridStill { items: &shown, ready: false, again: true, focus: 0, shortfall: "" }, width, height).unwrap();
+        assert!(held_hits.is_empty(), "buttons stay dead until the best face is up");
+        assert_eq!(held_paint, held);
+        let _ = perk;
         let stills = [
             ("all_backs.png", backs),
-            ("all_common.png", paint_grid(&content, &vec![Some("common"); pods], width, height, true).unwrap()),
+            ("all_common.png", paint_grid(&content, &GridStill { items: &vec![Some(visor.id.as_str()); pods], ready: true, again: true, focus: 0, shortfall: "" }, width, height).unwrap().0),
             ("one_legendary.png", mixed),
             ("best_face_down.png", held),
+            ("best_flipped.png", flipped),
             ("refund.png", refund),
             ("no_credits.png", broke.0),
         ];
@@ -1097,11 +1198,7 @@ mod tests {
     }
 
     fn refund_rect(content: &Content, width: u32, height: u32) -> (u32, u32, u32, u32) {
-        let grid = &content.crate_reveal.grid;
-        let panel_w = (grid.refund_w * width as f32 / content.ui.layout.fit_width).round() as u32;
-        let panel_h = (grid.refund_h * height as f32 / content.ui.layout.fit_height).round() as u32;
-        let x = width.saturating_sub(panel_w) / 2;
-        let y = height.saturating_sub(panel_h) / 2;
-        (x, y, panel_w, panel_h)
+        let (x, y, panel_w, panel_h, _, _, _, _, _) = refund_column(content, width, height, false);
+        (x.max(0) as u32, y.max(0) as u32, panel_w.max(0) as u32, panel_h.max(0) as u32)
     }
 }

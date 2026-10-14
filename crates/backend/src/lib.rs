@@ -32,6 +32,8 @@ pub enum PullError {
     Key,
     /// This key was saved for a different banner or a different pull kind.
     Mismatch,
+    /// The rolled rarity has no item in the catalog. The wallet is unchanged.
+    Item,
 }
 
 impl std::fmt::Display for PullError {
@@ -43,6 +45,7 @@ impl std::fmt::Display for PullError {
             Self::Pod { pod } => write!(f, "pod {pod} failed"),
             Self::Key => write!(f, "pull needs an idempotency key"),
             Self::Mismatch => write!(f, "pull key was saved for a different banner"),
+            Self::Item => write!(f, "rolled rarity has no item"),
         }
     }
 }
@@ -52,6 +55,8 @@ impl std::fmt::Display for PullError {
 pub struct Pull {
     pub banner: String,
     pub rarity: String,
+    /// Catalog id chosen by this roll. Callers draw that row. They do not pick another.
+    pub item: String,
     pub fakeout: Option<String>,
     pub rank: u32,
     pub shards: u32,
@@ -300,7 +305,7 @@ impl Account {
     /// Bytes for the stand-in save. A later host can use the same account fields.
     pub fn to_bytes(&self, content: &Content) -> Result<Vec<u8>, String> {
         let mut out = Vec::new();
-        out.extend(SAVE_V4);
+        out.extend(SAVE_V5);
         write_u32(&mut out, self.rank);
         write_u32(&mut out, self.shards);
         write_f32(&mut out, self.credits)?;
@@ -354,6 +359,7 @@ impl Account {
                 write_u32(&mut out, pull.rank);
                 write_u32(&mut out, pull.shards);
                 out.push(u8::from(pull.powered));
+                write_str(&mut out, &pull.item);
             }
             write_fault(&mut out, &stored.fault)?;
         }
@@ -371,6 +377,7 @@ impl Account {
             SAVE_V2 => 2u32,
             SAVE_V3 => 3u32,
             SAVE_V4 => 4u32,
+            SAVE_V5 => 5u32,
             _ => return Err("dev account save header is wrong".into()),
         };
         let mut at = SAVE_V1.len();
@@ -482,9 +489,11 @@ impl Account {
                     if powered > 1 {
                         return Err("dev account save has a bad pull flag".into());
                     }
+                    let item = if version >= 5 { read_str(bytes, &mut at)? } else { String::new() };
                     pulls.push(Pull {
                         banner,
                         rarity,
+                        item,
                         fakeout,
                         rank,
                         shards,
@@ -684,6 +693,7 @@ impl Account {
         let pity_epic_before = pity.since_epic;
         let rarity = roll_rarity(&mut pity, &mut rng, content);
         let fakeout = roll_fakeout(&mut rng, content, &rarity);
+        let item = pick_item(content, &rarity, &mut rng)?;
         let shards = if powered {
             0
         } else {
@@ -702,6 +712,7 @@ impl Account {
         let pull = Pull {
             banner: banner.to_string(),
             rarity,
+            item,
             fakeout,
             rank: self.rank,
             shards,
@@ -734,6 +745,22 @@ impl Account {
         }
         self.pity.get(banner).cloned().unwrap_or_default()
     }
+}
+
+/// One catalog row of `rarity`. The index comes from this rng, after the tier roll.
+fn pick_item(content: &Content, rarity: &str, rng: &mut ChaCha20Rng) -> Result<String, PullError> {
+    let pool: Vec<&str> = content
+        .banners
+        .items
+        .iter()
+        .filter(|item| item.rarity == rarity)
+        .map(|item| item.id.as_str())
+        .collect();
+    if pool.is_empty() {
+        return Err(PullError::Item);
+    }
+    let index = ((next_f32(rng) * pool.len() as f32) as usize).min(pool.len() - 1);
+    Ok(pool[index].to_string())
 }
 
 fn roll_rarity(pity: &mut Pity, rng: &mut ChaCha20Rng, content: &Content) -> String {
@@ -809,6 +836,7 @@ const SAVE_V1: &[u8] = b"GEMACCT1";
 const SAVE_V2: &[u8] = b"GEMACCT2";
 const SAVE_V3: &[u8] = b"GEMACCT3";
 const SAVE_V4: &[u8] = b"GEMACCT4";
+const SAVE_V5: &[u8] = b"GEMACCT5";
 
 struct AccountSnap {
     rank: u32,
@@ -947,6 +975,12 @@ fn write_fault(out: &mut Vec<u8>, fault: &Option<PullError>) -> Result<(), Strin
             write_f32(out, 0.0)?;
             write_u32(out, 0);
         }
+        Some(PullError::Item) => {
+            out.push(7);
+            write_f32(out, 0.0)?;
+            write_f32(out, 0.0)?;
+            write_u32(out, 0);
+        }
     }
     Ok(())
 }
@@ -964,6 +998,7 @@ fn read_fault(bytes: &[u8], at: &mut usize) -> Result<Option<PullError>, String>
         4 => Ok(Some(PullError::Pod { pod })),
         5 => Ok(Some(PullError::Key)),
         6 => Ok(Some(PullError::Mismatch)),
+        7 => Ok(Some(PullError::Item)),
         other => Err(format!("dev account save has a bad pull fault {other}")),
     }
 }
@@ -1405,7 +1440,7 @@ mod tests {
 
         let empty = Account::from_seed(8);
         let v4 = empty.to_bytes(&content).unwrap();
-        assert!(v4.starts_with(SAVE_V4));
+        assert!(v4.starts_with(SAVE_V5));
         let mut v2 = v4[..v4.len() - 4].to_vec();
         v2[..SAVE_V2.len()].copy_from_slice(SAVE_V2);
         let loaded_v2 = Account::from_bytes(&v2, &content).unwrap();
@@ -1528,6 +1563,7 @@ mod tests {
         for (left, right) in first.pulls.iter().zip(&again.pulls) {
             assert_eq!(left.rarity, right.rarity);
             assert_eq!(left.fakeout, right.fakeout);
+            assert_eq!(left.item, right.item);
         }
         assert!((account.credits - (start - price)).abs() < 1e-3);
         let second = account.pull_ten(&content, "standard", "b").unwrap();
@@ -1549,7 +1585,8 @@ mod tests {
         assert!(mid >= 2 && mid < pods, "the threshold has to land inside the ten-pull");
         let price = content.banners.cost.ten_pull_cost as f32;
         let mut found = None;
-        for seed in 1..400 {
+        // Item choice draws the rng after the tier, so the seed that avoids an early legendary moves.
+        for seed in 1..20_000 {
             let mut account = Account::from_seed(seed);
             account.credits = price;
             account.pity.insert(

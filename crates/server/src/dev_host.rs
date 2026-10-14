@@ -151,7 +151,7 @@ fn answer_pull(account: &mut Account, content: &Content, request: &gemini_proto:
                 request.ten,
                 rarity,
                 fakeout,
-                batch.pulls.iter().map(|pull| CratePod { rarity: pull.rarity.clone(), fakeout: pull.fakeout.clone() }).collect(),
+                batch.pulls.iter().map(|pull| CratePod { rarity: pull.rarity.clone(), fakeout: pull.fakeout.clone(), item: pull.item.clone() }).collect(),
                 batch.fresh,
                 None,
             )
@@ -162,6 +162,7 @@ fn answer_pull(account: &mut Account, content: &Content, request: &gemini_proto:
         Err(PullError::Pod { pod }) => pull_reply(account, request.ten, None, None, Vec::new(), false, Some(CratePullFault::Pod { pod })),
         Err(PullError::Key) => pull_reply(account, request.ten, None, None, Vec::new(), false, Some(CratePullFault::Key)),
         Err(PullError::Mismatch) => pull_reply(account, request.ten, None, None, Vec::new(), false, Some(CratePullFault::Mismatch)),
+        Err(PullError::Item) => pull_reply(account, request.ten, None, None, Vec::new(), false, Some(CratePullFault::Item)),
     };
     Ok(Packet::CratePullReply(reply))
 }

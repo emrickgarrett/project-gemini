@@ -292,6 +292,11 @@ impl Content {
         })
     }
 
+    /// The award named by a server pull. `None` when the id is not in the catalog.
+    pub fn crate_item(&self, id: &str) -> Option<&CrateItem> {
+        self.banners.items.iter().find(|item| item.id == id)
+    }
+
     /// Playtest selection. `unlock_all` does not grant ownership, currency, or crates.
     pub fn hero_selectable(&self, id: &str) -> bool {
         let Some(card) = self.heroes.iter().find(|hero| hero.id == id) else {
@@ -896,6 +901,19 @@ pub struct Banners {
     pub cost: BannerCost,
     pub saved: BannerSaved,
     pub dev: BannerDev,
+    /// `[[item]]` rows. The server picks one of the rolled rarity.
+    #[serde(default, rename = "item")]
+    pub items: Vec<CrateItem>,
+}
+
+/// One crate award. `icon` is rows of `#` (ink) and `.` (paper). `ink` is not a rarity color.
+#[derive(Clone, Debug, Deserialize)]
+pub struct CrateItem {
+    pub id: String,
+    pub name: String,
+    pub rarity: String,
+    pub ink: String,
+    pub icon: Vec<String>,
 }
 
 /// Dev-build test wallet. The backend reads this. A release account does not.
@@ -5150,6 +5168,17 @@ fn require_font(text: &str, what: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// `NEED <n> MORE CREDITS`. `missing` is the shortfall, not the sticker price.
+pub fn shortfall_line(copy: &UiCopy, places: u32, missing: f32) -> String {
+    format!(
+        "{} {} {} {}",
+        copy.pull_need,
+        format_fixed(missing.max(0.0), places),
+        copy.pull_more,
+        copy.pull_credits
+    )
+}
+
 /// Fixed-decimal display. Does not change the stored value.
 pub fn format_fixed(value: f32, decimals: u32) -> String {
     let decimals = decimals.min(6) as usize;
@@ -5261,6 +5290,7 @@ pub struct UiCopy {
     pub crates_pull_again: String,
     pub pull_failed: String,
     pub pull_need: String,
+    pub pull_more: String,
     pub pull_have: String,
     pub pull_credits: String,
     pub pull_needs_server: String,
@@ -5462,9 +5492,81 @@ fn load_banners(text: &str) -> Result<Banners, String> {
     if saved.get("max_keys").is_none() {
         return Err("banners.toml is missing saved.max_keys".into());
     }
+    if value.get("item").and_then(|row| row.as_array()).is_none() {
+        return Err("banners.toml is missing item".into());
+    }
     let banners: Banners = value.try_into().map_err(|err| format!("banners.toml: {err}"))?;
     validate_banners(&banners)?;
     Ok(banners)
+}
+
+fn validate_items(banners: &Banners) -> Result<(), String> {
+    if banners.items.is_empty() {
+        return Err("banners.toml is missing item".into());
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for item in &banners.items {
+        if item.id.is_empty() || !seen.insert(item.id.clone()) {
+            return Err(format!("banners.toml item id \"{}\" is missing or repeated", item.id));
+        }
+        if item.name.is_empty() {
+            return Err(format!("banners.toml item \"{}\" is missing name", item.id));
+        }
+        require_font(&item.name, &format!("banners.toml item \"{}\"", item.id))?;
+        if !matches!(item.rarity.as_str(), "common" | "rare" | "epic" | "legendary") {
+            return Err(format!("banners.toml item \"{}\" has unknown rarity {}", item.id, item.rarity));
+        }
+        if item.ink.is_empty() || item.ink.starts_with("rarity_") {
+            return Err(format!("banners.toml item \"{}\" ink must be set and must not be a rarity color", item.id));
+        }
+        if item.icon.is_empty() {
+            return Err(format!("banners.toml item \"{}\" is missing icon", item.id));
+        }
+        let width = item.icon[0].chars().count();
+        if width == 0 {
+            return Err(format!("banners.toml item \"{}\" icon is empty", item.id));
+        }
+        let mut inked = false;
+        for row in &item.icon {
+            if row.chars().count() != width {
+                return Err(format!("banners.toml item \"{}\" icon rows differ in width", item.id));
+            }
+            for ch in row.chars() {
+                match ch {
+                    '#' => inked = true,
+                    '.' => {}
+                    other => return Err(format!("banners.toml item \"{}\" icon has '{other}'", item.id)),
+                }
+            }
+        }
+        if !inked {
+            return Err(format!("banners.toml item \"{}\" icon has no ink", item.id));
+        }
+    }
+    for rarity in ["common", "rare", "epic", "legendary"] {
+        if !banners.items.iter().any(|item| item.rarity == rarity) {
+            return Err(format!("banners.toml has no item of rarity {rarity}"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_item_inks(banners: &Banners, palette: &Palette, reveal: &CrateReveal) -> Result<(), String> {
+    for item in &banners.items {
+        if palette.hex(&item.ink).is_none() {
+            return Err(format!("banners.toml item \"{}\" ink \"{}\" is not a palette key", item.id, item.ink));
+        }
+    }
+    let glyph = reveal.layout.title_glyph_px.max(1) as f32;
+    let longest = banners.items.iter().map(|item| item.name.chars().count()).max().unwrap_or(1) as f32;
+    let scale = reveal.layout.title_scale_min.max(1) as f32;
+    let grid = &reveal.grid;
+    let band = (reveal.layout.border_px as f32) * 2.0;
+    let face = grid.card_w - band;
+    if longest * glyph * scale > face {
+        return Err(format!("banners.toml item names do not fit a {}px card", grid.card_w));
+    }
+    Ok(())
 }
 
 fn validate_banners(banners: &Banners) -> Result<(), String> {
@@ -5477,6 +5579,7 @@ fn validate_banners(banners: &Banners) -> Result<(), String> {
     if banners.saved.max_keys == 0 {
         return Err("banners.toml saved.max_keys must be > 0".into());
     }
+    validate_items(banners)?;
     let grant = banners.dev.starting_credits;
     if !(grant.is_finite() && grant + 1e-3 >= banners.cost.ten_pull_cost as f32) {
         return Err("banners.toml dev.starting_credits must cover cost.ten_pull_cost".into());
@@ -5537,6 +5640,7 @@ fn validate_ten_grid(reveal: &CrateReveal, banners: &Banners, ui: &Ui, audio: &A
     if grid.refund_message.is_empty() {
         return Err("crate_reveal.toml grid.refund_message must be set".into());
     }
+    validate_item_inks(banners, palette, reveal)?;
     if grid.display != "roll" {
         return Err(format!("crate_reveal.toml grid.display {} is not roll", grid.display));
     }
@@ -6081,6 +6185,19 @@ mod ten_pull_keys {
         sources.crate_reveal = &missing_rank;
         let err = Content::parse(&sources).expect_err("rank is required");
         assert!(err.contains("rank"), "{err}");
+
+        sources.crate_reveal = src.crate_reveal;
+        sources.banners = src.banners;
+        let content = Content::parse(&sources).expect("items load");
+        let visor = content.crate_item("visor").expect("visor");
+        let grip = content.crate_item("grip").expect("grip");
+        assert_eq!(visor.rarity, "common");
+        assert_eq!(grip.rarity, "common");
+        assert_ne!(visor.ink, grip.ink);
+        let stripped = src.banners.split("[[item]]").next().unwrap();
+        sources.banners = stripped;
+        let err = Content::parse(&sources).expect_err("items are required");
+        assert!(err.contains("item"), "{err}");
     }
 }
 

@@ -465,7 +465,7 @@ fn paint_crates(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, r
     let short = |cost: u32| credits.filter(|have| *have + 1e-3 < cost as f32).map(|have| (cost as f32 - have).max(0.0));
     for (label, missing) in [(&ui.copy.crates_pull, short(content.banners.cost.single)), (&ui.copy.crates_ten, short(content.banners.cost.ten_pull_cost))] {
         let Some(missing) = missing else { continue };
-        let text = format!("{} {} {} {}", label, ui.copy.pull_need, gemini_sim::content::format_fixed(missing, places), ui.copy.pull_credits);
+        let text = gemini_sim::content::shortfall_line(&ui.copy, places, missing);
         let tw = measure(&text, scale, glyph) as i32;
         blit(rgb, frame.width, frame.height, (frame.width as i32 - tw) / 2, y, &text, paper, scale, glyph);
         y += (scale * rows) as i32 + frame.px(ui.layout.spacing_block);

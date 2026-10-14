@@ -27,3 +27,62 @@ max_keys = 32
 # It does not change pity, rates, or which tier a pull can land on.
 [dev]
 starting_credits = 5000
+
+# Pod awards. The server picks one item of the rolled rarity and sends its id.
+# The client looks that id up here for the icon and the name. It does not choose.
+# icon rows use '#' for `ink` and '.' for the paper face. `ink` is not a rarity color.
+[[item]]
+id = "visor"
+name = "VISOR"
+rarity = "common"
+ink = "hero_plate"
+icon = ["..####..", ".#....#.", ".######.", ".#....#.", "..#..#..", "...##..."]
+
+[[item]]
+id = "grip"
+name = "GRIP"
+rarity = "common"
+ink = "hero_vex"
+icon = ["...##...", "..####..", "...##...", "...##...", "..####..", "...##..."]
+
+[[item]]
+id = "core"
+name = "CORE"
+rarity = "rare"
+ink = "trim_cyan"
+icon = ["..####..", ".######.", "########", ".######.", "..####..", "...##..."]
+
+[[item]]
+id = "barrel"
+name = "BARREL"
+rarity = "rare"
+ink = "hero_nyra"
+icon = ["........", ".######.", ".#....#.", ".#....#.", ".######.", "........"]
+
+[[item]]
+id = "sight"
+name = "SIGHT"
+rarity = "epic"
+ink = "hero_kip"
+icon = ["##....##", ".#....#.", "..#..#..", "...##...", "..#..#..", ".#....#."]
+
+[[item]]
+id = "link"
+name = "LINK"
+rarity = "epic"
+ink = "nest_brass"
+icon = [".##..##.", "#..##..#", ".##..##.", ".##..##.", "#..##..#", ".##..##."]
+
+[[item]]
+id = "mark"
+name = "MARK"
+rarity = "legendary"
+ink = "key_warm"
+icon = ["...##...", "...##...", ".######.", "...##...", "..#..#..", ".#....#."]
+
+[[item]]
+id = "perk"
+name = "PERK"
+rarity = "legendary"
+ink = "beacon_cyan"
+icon = [".######.", "#......#", "#.#..#.#", "#......#", "#.####.#", ".######."]
