@@ -1058,8 +1058,9 @@ pub fn sync_vent_tells(
             &box_at([0.0, height * 0.5, 0.0], [span[0], height, span[1]]),
         );
         let rgb = game.content.palette.key("vent_tell");
+        let scale = scene.vent_tell_emissive;
         let material = materials.add(StandardMaterial {
-            base_color: Color::srgb(rgb[0], rgb[1], rgb[2]),
+            base_color: Color::srgb(rgb[0] * scale, rgb[1] * scale, rgb[2] * scale),
             unlit: true,
             ..default()
         });

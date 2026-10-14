@@ -796,6 +796,11 @@ fn vent_tell_size_and_height_are_required() {
     assert!(content.palette.hex("vent_tell").is_some());
     assert!(content.arena_scene.vent_tell_height > 0.0);
     assert!(content.arena_scene.vent_tell_height <= 0.05);
+    let rgb = content.palette.key("vent_tell");
+    let scale = content.arena_scene.vent_tell_emissive;
+    let shown = [rgb[0] * scale, rgb[1] * scale, rgb[2] * scale];
+    let bytes = shown.map(|channel| (channel * 255.0).round() as u8);
+    assert_eq!(bytes, [255, 138, 30]);
     let base = gemini_sim::content::embedded_sources();
     let visual = |text: &str| {
         Content::parse(&gemini_sim::content::Sources {
@@ -827,6 +832,15 @@ fn vent_tell_size_and_height_are_required() {
     assert_ne!(missing_key, base.palette);
     let err = palette(&missing_key).expect_err("missing vent_tell");
     assert!(err.contains("vent_tell"), "{err}");
+    let missing_scale = base.arena_visual.replacen("vent_tell_emissive = 1.0\n", "", 1);
+    assert_ne!(missing_scale, base.arena_visual);
+    let err = visual(&missing_scale).expect_err("missing emissive");
+    assert!(err.contains("vent_tell_emissive"), "{err}");
+    let clipped = base.arena_visual.replacen("vent_tell_emissive = 1.0", "vent_tell_emissive = 3.35", 1);
+    assert_ne!(clipped, base.arena_visual);
+    let err = visual(&clipped).expect_err("clipped tell");
+    assert!(err.contains("vent_tell_emissive"), "{err}");
+    assert!(err.contains("clips"), "{err}");
 }
 
 #[test]

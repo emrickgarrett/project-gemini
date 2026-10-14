@@ -1085,7 +1085,11 @@ fn paint_scenery(
         let ib = tri[1] as usize;
         let ic = tri[2] as usize;
         let normal = mesh.normals[ia];
-        let shade = scenery_shade(content, normal, piece.glow);
+        let shade = if piece.role == "vent_tell" {
+            content.arena_scene.vent_tell_emissive
+        } else {
+            scenery_shade(content, normal, piece.glow)
+        };
         let rgb = [albedo[0] * shade, albedo[1] * shade, albedo[2] * shade];
         let Some(a) = project(mesh.positions[ia], cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
             continue;

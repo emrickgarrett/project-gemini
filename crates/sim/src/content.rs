@@ -2511,6 +2511,7 @@ fn load_arena_dressing(text: &str) -> Result<(ArenaDressing, crate::scenery::Are
             "vent_center_y",
             "vent_tell_size",
             "vent_tell_height",
+            "vent_tell_emissive",
             "ledge_size",
             "ledge_thickness",
             "ledge_skirt_scale",
