@@ -59,6 +59,7 @@ All sounds except brood_pod_hatch.ogg and tyrant_roar.ogg are procedurally synth
 | crate_tease.ogg | 1.500 |  | Rarity tease build; start at crate_reveal crack (2.0 s) so it peaks at burst (3.5 s) |
 | crate_tease_legendary.ogg | 2.500 |  | Legendary tease; start at crack (2.0 s): same rise to 3.5 s, then tense shimmer through the freeze (3.5-4.5 s), dropping to a near-silent suspended tone in the last ~0.3 s so the 4.5 s burst hits from quiet |
 | crate_fakeout.ogg | 0.370 |  | Fake-out flicker (rare/epic/legendary only, where crate_reveal fakeout_allowed = true): bright rising shimmer like a next-tier reveal start, hard-cut at ~0.28 s with a tiny 'denied' down-blip; play at flicker start. crate_reveal.toml gives no flicker time or length |
+| ../crate_flip.ogg |  |  | Ten-pull fast-flip tick. Taylor's file at assets/audio/crate_flip.ogg (sha256 50177d7e89c48e7df8438c67dc01aa8f2672d0f02e1df17ec020c837a4b907aa). One tick per fast flip on the UI bus. Replace that file in place for a new take. |
 | dupe_upgrade.ogg | 1.000 |  | Duplicate converted to stat upgrade (power-up chord) |
 | vex_fire.ogg | 0.150 |  | Vex pulse_rifle shot (9 rps auto; punchy mid pulse) |
 | vex_reload.ogg | 1.226 |  | Vex pulse_rifle reload (1.6 s: mag out, charge whine, mag in, bolt) |

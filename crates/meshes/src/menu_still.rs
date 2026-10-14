@@ -468,6 +468,10 @@ fn paint_crates(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, r
         y = hit.y + hit.h + frame.px(ui.layout.row_gap);
         hits.push(Hit { id: "pull".into(), ..hit });
         index += 1;
+        let hit = crate_button(rgb, content, frame, y, &ui.copy.crates_ten, focus == index);
+        y = hit.y + hit.h + frame.px(ui.layout.row_gap);
+        hits.push(Hit { id: "ten".into(), ..hit });
+        index += 1;
     }
     if rarity.is_some() {
         let hit = crate_button(rgb, content, frame, y, &ui.copy.crates_open, focus == index);

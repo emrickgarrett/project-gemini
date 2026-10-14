@@ -574,10 +574,147 @@ fn glyph(ch: char) -> [u8; 7] {
     crate::glyph::bits(ch)
 }
 
+/// Card slots in roll order, centered in the fit frame.
+pub fn grid_slots(content: &Content, width: u32, height: u32) -> Result<Vec<(u32, u32, u32, u32)>, String> {
+    let grid = &content.crate_reveal.grid;
+    let fit_w = content.ui.layout.fit_width;
+    let fit_h = content.ui.layout.fit_height;
+    if !(fit_w > 0.0) || !(fit_h > 0.0) || width == 0 || height == 0 {
+        return Err("grid still needs a positive frame".into());
+    }
+    let sx = width as f32 / fit_w;
+    let sy = height as f32 / fit_h;
+    let card_w = (grid.card_w * sx).round().max(1.0) as u32;
+    let card_h = (grid.card_h * sy).round().max(1.0) as u32;
+    let gap_x = (grid.gap * sx).round() as u32;
+    let gap_y = (grid.gap * sy).round() as u32;
+    let cols = grid.columns;
+    let rows = grid.rows;
+    let grid_w = card_w * cols + gap_x * cols.saturating_sub(1);
+    let grid_h = card_h * rows + gap_y * rows.saturating_sub(1);
+    let origin_x = width.saturating_sub(grid_w) / 2;
+    let origin_y = height.saturating_sub(grid_h) / 2;
+    let mut slots = Vec::new();
+    for index in 0..cols * rows {
+        let col = index % cols;
+        let row = index / cols;
+        let x = origin_x + col * (card_w + gap_x);
+        let y = origin_y + row * (card_h + gap_y);
+        slots.push((x, y, card_w, card_h));
+    }
+    Ok(slots)
+}
+
+/// `faces` is roll order. `None` paints the shared back. A face color comes from `rarity_*` only.
+pub fn paint_grid(content: &Content, faces: &[Option<&str>], width: u32, height: u32) -> Result<Vec<u8>, String> {
+    let cells = (content.crate_reveal.grid.columns * content.crate_reveal.grid.rows) as usize;
+    if faces.len() != cells {
+        return Err(format!("grid has {} faces and content says {cells}", faces.len()));
+    }
+    let mut rgb = vec![0u8; (width as usize) * (height as usize) * 3];
+    paint_stage(&mut rgb, width, height, content, &content.crate_reveal.layout);
+    let slots = grid_slots(content, width, height)?;
+    let paper = palette_bytes(content, &content.crate_reveal.grid.frame);
+    let back = palette_bytes(content, &content.crate_reveal.grid.back);
+    for (slot, face) in slots.iter().zip(faces) {
+        let (x, y, w, h) = *slot;
+        let (fill, label) = match face {
+            Some(rarity) => {
+                let key = format!("rarity_{rarity}");
+                if content.palette.hex(&key).is_none() {
+                    return Err(format!("unknown rarity {rarity}"));
+                }
+                let color = palette_bytes(content, &key);
+                let ink = face_ink(content, color);
+                (color, Some((rarity.to_uppercase(), ink)))
+            }
+            None => (back, None),
+        };
+        let frame = blend(fill, paper, content.crate_reveal.layout.border_mix);
+        paint_beveled(&mut rgb, width, height, x, y, w, h, fill, frame, label.as_ref().map(|(text, ink)| (text.as_str(), *ink)), content);
+    }
+    Ok(rgb)
+}
+
+/// Plain refund panel. The face is `refund_face`. No rarity color.
+pub fn paint_refund(content: &Content, width: u32, height: u32) -> Result<Vec<u8>, String> {
+    let grid = &content.crate_reveal.grid;
+    let fit_w = content.ui.layout.fit_width;
+    let fit_h = content.ui.layout.fit_height;
+    if !(fit_w > 0.0) || !(fit_h > 0.0) || width == 0 || height == 0 {
+        return Err("refund still needs a positive frame".into());
+    }
+    let mut rgb = vec![0u8; (width as usize) * (height as usize) * 3];
+    paint_stage(&mut rgb, width, height, content, &content.crate_reveal.layout);
+    let sx = width as f32 / fit_w;
+    let sy = height as f32 / fit_h;
+    let panel_w = (grid.refund_w * sx).round().max(1.0) as u32;
+    let panel_h = (grid.refund_h * sy).round().max(1.0) as u32;
+    let x = width.saturating_sub(panel_w) / 2;
+    let y = height.saturating_sub(panel_h) / 2;
+    let face = palette_bytes(content, &grid.refund_face);
+    let ink = palette_bytes(content, &grid.refund_ink);
+    let frame = blend(face, ink, content.crate_reveal.layout.border_mix);
+    paint_beveled(
+        &mut rgb,
+        width,
+        height,
+        x,
+        y,
+        panel_w,
+        panel_h,
+        face,
+        frame,
+        Some((grid.refund_message.as_str(), ink)),
+        content,
+    );
+    Ok(rgb)
+}
+
+fn face_ink(content: &Content, color: [u8; 3]) -> [u8; 3] {
+    let layout = &content.crate_reveal.layout;
+    let luma = (color[0] as f32 * 0.3 + color[1] as f32 * 0.59 + color[2] as f32 * 0.11) / 255.0;
+    let name = if luma > layout.ink_luma { &layout.ink_dark } else { &layout.ink_light };
+    palette_bytes(content, name)
+}
+
+fn paint_beveled(
+    rgb: &mut [u8],
+    width: u32,
+    height: u32,
+    x: u32,
+    y: u32,
+    panel_w: u32,
+    panel_h: u32,
+    face: [u8; 3],
+    frame: [u8; 3],
+    label: Option<(&str, [u8; 3])>,
+    content: &Content,
+) {
+    let layout = &content.crate_reveal.layout;
+    fill(rgb, width, height, x, y, panel_w, panel_h, frame);
+    let border = (layout.border_px as f32 * panel_h as f32 / layout.panel_height).round().max(1.0) as u32;
+    let border = border.min(panel_w / 2).min(panel_h / 2);
+    let face_x = x + border;
+    let face_y = y + border;
+    let face_w = panel_w.saturating_sub(border * 2);
+    let face_h = panel_h.saturating_sub(border * 2);
+    fill(rgb, width, height, face_x, face_y, face_w, face_h, face);
+    let Some((label, ink)) = label else { return };
+    let scale = title_scale(face_w, face_h, label.chars().count() as u32, layout, &content.crate_reveal.card);
+    let glyph = layout.title_glyph_px.max(1);
+    let text_w = label.chars().count() as u32 * glyph * scale;
+    let text_h = layout.glyph_rows.max(1) * scale;
+    let text_x = title_origin(face_x, face_w, text_w, content.crate_reveal.card.title_pad.round().max(0.0) as u32);
+    let text_y = face_y + face_h.saturating_sub(text_h) / 2;
+    blit_at(rgb, width, height, text_x, text_y, label, ink, scale);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use gemini_sim::reveal::plan;
+    use sha2::Digest;
 
     #[test]
     fn a_card_still_is_not_a_flat_color() {
@@ -694,5 +831,108 @@ mod tests {
         let (_, _, wider, taller) = card_panel(960, 540, &layout);
         assert_eq!(wider, width + 80);
         assert_eq!(taller, height + 40);
+    }
+
+    #[test]
+    fn ten_pull_backs_match_and_gold_stays_on_legendary_faces() {
+        let content = Content::embedded();
+        let width = content.ui.layout.fit_width.round() as u32;
+        let height = content.ui.layout.fit_height.round() as u32;
+        let pods = (content.crate_reveal.grid.columns * content.crate_reveal.grid.rows) as usize;
+        let slots = grid_slots(&content, width, height).unwrap();
+        let gold = palette_bytes(&content, "rarity_legendary");
+        let common = palette_bytes(&content, "rarity_common");
+        let back = palette_bytes(&content, &content.crate_reveal.grid.back);
+        let backs = paint_grid(&content, &vec![None; pods], width, height).unwrap();
+        let first = card_pixels(&backs, width, slots[0]);
+        let second = card_pixels(&backs, width, slots[1]);
+        assert_eq!(first, second, "every back is the same picture");
+        assert_eq!(face_swatch(&backs, width, slots[0], &content), back);
+        assert!(!first.chunks_exact(3).any(|px| px == gold), "a back has no legendary gold");
+
+        let mut faces = vec![Some("common"); pods];
+        let legendary_at = pods / 2;
+        faces[legendary_at] = Some("legendary");
+        let mixed = paint_grid(&content, &faces, width, height).unwrap();
+        assert_eq!(face_swatch(&mixed, width, slots[legendary_at], &content), gold);
+        assert_eq!(face_swatch(&mixed, width, slots[0], &content), common);
+        for (index, slot) in slots.iter().enumerate() {
+            if index == legendary_at {
+                assert!(card_pixels(&mixed, width, *slot).chunks_exact(3).any(|px| px == gold));
+            } else {
+                assert!(
+                    card_pixels(&mixed, width, *slot).chunks_exact(3).all(|px| px != gold),
+                    "card {index} picked up legendary gold"
+                );
+            }
+        }
+
+        let mut cards = vec![gemini_sim::reveal::GridCard { rarity: "common".into(), fakeout: None }; pods];
+        cards[legendary_at].rarity = "legendary".into();
+        let mut run = gemini_sim::reveal::GridRun::start(&content, &cards).unwrap();
+        let flip = content.crate_reveal.grid.fast_flip;
+        for _ in 0..pods - 1 {
+            run.advance(flip);
+        }
+        assert!(run.shown_face(legendary_at).is_none());
+        let shown: Vec<Option<&str>> = (0..pods).map(|index| run.shown_face(index)).collect();
+        let held = paint_grid(&content, &shown, width, height).unwrap();
+        assert_eq!(card_pixels(&held, width, slots[legendary_at]), card_pixels(&backs, width, slots[legendary_at]));
+        assert!(card_pixels(&held, width, slots[legendary_at]).chunks_exact(3).all(|px| px != gold));
+
+        let refund = paint_refund(&content, width, height).unwrap();
+        assert!(refund.chunks_exact(3).all(|px| px != gold), "the refund panel has no rarity gold");
+        let paper = palette_bytes(&content, &content.crate_reveal.grid.refund_face);
+        let refund_slot = refund_rect(&content, width, height);
+        assert_eq!(face_swatch(&refund, width, refund_slot, &content), paper);
+
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../");
+        let flip = std::fs::read(root.join("assets/audio/crate_flip.ogg")).unwrap();
+        assert_eq!(flip.len(), 4957);
+        let digest = sha2::Sha256::digest(&flip);
+        assert_eq!(
+            format!("{digest:x}"),
+            "50177d7e89c48e7df8438c67dc01aa8f2672d0f02e1df17ec020c837a4b907aa"
+        );
+        let stills = [
+            ("all_common.png", paint_grid(&content, &vec![Some("common"); pods], width, height).unwrap()),
+            ("one_legendary.png", mixed),
+            ("best_face_down.png", held),
+            ("refund.png", refund),
+        ];
+        for (name, rgb) in stills {
+            let bytes = std::fs::read(root.join("art/ten_pull").join(name)).unwrap();
+            let image = image::load_from_memory(&bytes).unwrap().to_rgb8();
+            assert_eq!(image.dimensions(), (width, height), "{name}");
+            assert_eq!(image.as_raw(), &rgb, "{name} does not match the painter");
+        }
+    }
+
+    fn card_pixels(rgb: &[u8], width: u32, slot: (u32, u32, u32, u32)) -> Vec<u8> {
+        let (x, y, w, h) = slot;
+        let mut out = Vec::with_capacity((w * h * 3) as usize);
+        for row in y..y + h {
+            let start = ((row * width + x) * 3) as usize;
+            out.extend_from_slice(&rgb[start..start + (w * 3) as usize]);
+        }
+        out
+    }
+
+    fn face_swatch(rgb: &[u8], width: u32, slot: (u32, u32, u32, u32), content: &Content) -> [u8; 3] {
+        let (x, y, _w, h) = slot;
+        let border = (content.crate_reveal.layout.border_px as f32 * h as f32 / content.crate_reveal.layout.panel_height).round().max(1.0) as u32;
+        let px = x + border + 1;
+        let py = y + border + 1;
+        let i = ((py * width + px) * 3) as usize;
+        [rgb[i], rgb[i + 1], rgb[i + 2]]
+    }
+
+    fn refund_rect(content: &Content, width: u32, height: u32) -> (u32, u32, u32, u32) {
+        let grid = &content.crate_reveal.grid;
+        let panel_w = (grid.refund_w * width as f32 / content.ui.layout.fit_width).round() as u32;
+        let panel_h = (grid.refund_h * height as f32 / content.ui.layout.fit_height).round() as u32;
+        let x = width.saturating_sub(panel_w) / 2;
+        let y = height.saturating_sub(panel_h) / 2;
+        (x, y, panel_w, panel_h)
     }
 }

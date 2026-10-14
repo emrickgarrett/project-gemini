@@ -15,7 +15,9 @@ carries_between_banners = true
 legendary_overall_rate = 0.0255  # exact: expected 39.2 pulls per legendary under pity (computed, epic guarantee excluded)
 [cost]
 single = 100
-ten_pull = 1000   # ten-pull shows ten pods
+pods = 10
+# Explicit ten-pull price. Omit this key and the price is pods * single.
+ten_pull = 1000
 
 # Dev builds only. The backend grants this when its server-side dev flag is on.
 # It does not change pity, rates, or which tier a pull can land on.

@@ -20,7 +20,7 @@ warning_fade = 0.030
 loop_resume_fade = 0.3
 critical = ["spitter_charge", "player_downed", "wave_start", "brood_roar", "tyrant_roar"]
 # UI bus cues. They do not take a voice_cap slot.
-outside_voice_cap = ["ui_count_tick", "ui_bank_chime"]
+outside_voice_cap = ["ui_count_tick", "ui_bank_chime", "crate_flip"]
 
 # Sim event ids that name a file. An id the game can emit must be a row or an alias.
 [alias]
@@ -1517,6 +1517,21 @@ outside_voice_cap = true
 
 # Short bank chime after the count-up. Quit and disconnect do not play it.
 [ui_bank_chime]
+volume_db = -16.0
+pitch_rand_semitones = 0
+max_instances = 1
+loop = false
+category = "ui"
+priority = 10
+stealable = true
+flat = true
+outside_voice_cap = true
+
+# Ten-pull fast flip. One tick per card, on the UI bus, outside voice_cap.
+# Taylor's file: assets/audio/crate_flip.ogg
+# sha256 50177d7e89c48e7df8438c67dc01aa8f2672d0f02e1df17ec020c837a4b907aa
+[crate_flip]
+path = "audio/crate_flip.ogg"
 volume_db = -16.0
 pitch_rand_semitones = 0
 max_instances = 1

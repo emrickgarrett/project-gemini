@@ -13,7 +13,7 @@ use rand_core::{Rng, SeedableRng};
 
 const TIERS: [&str; 4] = ["common", "rare", "epic", "legendary"];
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 struct Pity {
     since_legendary: u32,
     since_epic: u32,
@@ -26,6 +26,10 @@ pub enum PullError {
     Banner,
     /// The rolled tier has no shard row. The wallet is unchanged.
     Shards,
+    /// A pod inside a ten-pull failed. The whole ten-pull is unchanged.
+    Pod { pod: u32 },
+    /// The client sent a pull with no idempotency key.
+    Key,
 }
 
 impl std::fmt::Display for PullError {
@@ -34,12 +38,14 @@ impl std::fmt::Display for PullError {
             Self::Short { cost, have } => write!(f, "need {cost} credits to pull, have {have}"),
             Self::Banner => write!(f, "pull needs a banner"),
             Self::Shards => write!(f, "rolled rarity has no shard cost"),
+            Self::Pod { pod } => write!(f, "pod {pod} failed"),
+            Self::Key => write!(f, "pull needs an idempotency key"),
         }
     }
 }
 
 /// One server pull. `fakeout` is the teased tier, exactly one step above `rarity`, or none.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Pull {
     pub banner: String,
     pub rarity: String,
@@ -85,6 +91,31 @@ pub struct Account {
     pub audit: Vec<AuditEntry>,
     /// Deposits already written. A repeat key does not pay again.
     banks: BTreeMap<(u64, u64), Banked>,
+    /// Pull results already committed. A repeat key does not charge again.
+    pulls_by_key: BTreeMap<String, StoredPull>,
+}
+
+/// One committed pull request. A fault stores no pods and leaves the wallet untouched.
+#[derive(Clone, Debug)]
+struct StoredPull {
+    pulls: Vec<Pull>,
+    fault: Option<PullError>,
+}
+
+/// The pods the client renders. `fresh` is false when this key was already stored.
+#[derive(Clone, Debug)]
+pub struct PullBatch {
+    pub pulls: Vec<Pull>,
+    pub fresh: bool,
+}
+
+impl StoredPull {
+    fn replay(&self) -> Result<PullBatch, PullError> {
+        match &self.fault {
+            Some(err) => Err(err.clone()),
+            None => Ok(PullBatch { pulls: self.pulls.clone(), fresh: false }),
+        }
+    }
 }
 
 /// Why a deposit did not run.
@@ -219,6 +250,7 @@ impl Account {
             rng,
             audit: Vec::new(),
             banks: BTreeMap::new(),
+            pulls_by_key: BTreeMap::new(),
         }
     }
 
@@ -257,7 +289,7 @@ impl Account {
     /// Bytes for the stand-in save. A later host can use the same account fields.
     pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
         let mut out = Vec::new();
-        out.extend(SAVE_V2);
+        out.extend(SAVE_V3);
         write_u32(&mut out, self.rank);
         write_u32(&mut out, self.shards);
         write_f32(&mut out, self.credits)?;
@@ -293,6 +325,20 @@ impl Account {
             write_f32(&mut out, row.earned)?;
             write_f32(&mut out, row.bonus)?;
         }
+        write_u32(&mut out, self.pulls_by_key.len() as u32);
+        for (key, stored) in &self.pulls_by_key {
+            write_str(&mut out, key);
+            write_u32(&mut out, stored.pulls.len() as u32);
+            for pull in &stored.pulls {
+                write_str(&mut out, &pull.banner);
+                write_str(&mut out, &pull.rarity);
+                write_opt_str(&mut out, pull.fakeout.as_deref());
+                write_u32(&mut out, pull.rank);
+                write_u32(&mut out, pull.shards);
+                out.push(u8::from(pull.powered));
+            }
+            write_fault(&mut out, &stored.fault)?;
+        }
         Ok(out)
     }
 
@@ -305,6 +351,7 @@ impl Account {
         let version = match magic {
             SAVE_V1 => 1u32,
             SAVE_V2 => 2u32,
+            SAVE_V3 => 3u32,
             _ => return Err("dev account save header is wrong".into()),
         };
         let mut at = SAVE_V1.len();
@@ -359,7 +406,7 @@ impl Account {
         let pos_lo = read_u64(bytes, &mut at)?;
         let pos_hi = read_u64(bytes, &mut at)?;
         let mut banks = BTreeMap::new();
-        if version == 2 {
+        if version >= 2 {
             let bank_len = read_u32(bytes, &mut at)? as usize;
             if bank_len > 1024 {
                 return Err("dev account save has too many bank rows".into());
@@ -377,6 +424,44 @@ impl Account {
                 }
             }
         }
+        let mut pulls_by_key = BTreeMap::new();
+        if version >= 3 {
+            let pull_keys = read_u32(bytes, &mut at)? as usize;
+            if pull_keys > 1024 {
+                return Err("dev account save has too many pull keys".into());
+            }
+            for _ in 0..pull_keys {
+                let key = read_str(bytes, &mut at)?;
+                let pull_len = read_u32(bytes, &mut at)? as usize;
+                if pull_len > 1024 {
+                    return Err("dev account save has too many pods".into());
+                }
+                let mut pulls = Vec::with_capacity(pull_len);
+                for _ in 0..pull_len {
+                    let banner = read_str(bytes, &mut at)?;
+                    let rarity = read_str(bytes, &mut at)?;
+                    let fakeout = read_opt_str(bytes, &mut at)?;
+                    let rank = read_u32(bytes, &mut at)?;
+                    let shards = read_u32(bytes, &mut at)?;
+                    let powered = read_u8(bytes, &mut at)?;
+                    if powered > 1 {
+                        return Err("dev account save has a bad pull flag".into());
+                    }
+                    pulls.push(Pull {
+                        banner,
+                        rarity,
+                        fakeout,
+                        rank,
+                        shards,
+                        powered: powered == 1,
+                    });
+                }
+                let fault = read_fault(bytes, &mut at)?;
+                if pulls_by_key.insert(key, StoredPull { pulls, fault }).is_some() {
+                    return Err("dev account save repeats a pull key".into());
+                }
+            }
+        }
         if at != bytes.len() {
             return Err("dev account save has trailing bytes".into());
         }
@@ -391,6 +476,7 @@ impl Account {
             rng,
             audit,
             banks,
+            pulls_by_key,
         })
     }
 
@@ -409,25 +495,99 @@ impl Account {
         }
     }
 
-    /// Ten pods for `cost.ten_pull`. Pity and the epic guarantee still apply per pod.
-    pub fn pull_ten(&mut self, content: &Content, banner: &str) -> Result<Vec<Pull>, PullError> {
+    /// One server pull under an idempotency key. A replay returns the stored pods.
+    pub fn pull_with_key(&mut self, content: &Content, banner: &str, key: &str) -> Result<PullBatch, PullError> {
+        self.commit(content, banner, key, false, None)
+    }
+
+    /// Ten pods for the resolved ten-pull price. Pity advances once per pod.
+    /// The charge, pity, and inventory land in one step, or none of them do.
+    pub fn pull_ten(&mut self, content: &Content, banner: &str, key: &str) -> Result<PullBatch, PullError> {
+        self.commit(content, banner, key, true, None)
+    }
+
+    /// Fail the numbered pod (1-based) after the earlier pods have rolled.
+    /// The caller sees the account exactly as it was before the request.
+    #[cfg(test)]
+    fn pull_ten_failing_pod(&mut self, content: &Content, banner: &str, key: &str, pod: u32) -> Result<PullBatch, PullError> {
+        self.commit(content, banner, key, true, Some(pod))
+    }
+
+    fn commit(
+        &mut self,
+        content: &Content,
+        banner: &str,
+        key: &str,
+        ten: bool,
+        fail_at: Option<u32>,
+    ) -> Result<PullBatch, PullError> {
+        if key.is_empty() {
+            return Err(PullError::Key);
+        }
         if banner.is_empty() {
             return Err(PullError::Banner);
         }
-        let cost = content.banners.cost.ten_pull as f32;
-        self.charge(cost)?;
-        let mut pulls = Vec::with_capacity(10);
-        for i in 0..10 {
-            let spent = if i == 0 { cost } else { 0.0 };
-            match self.roll(content, banner, spent) {
-                Ok(pull) => pulls.push(pull),
-                Err(err) => {
-                    self.credits += spent;
-                    return Err(err);
-                }
+        if let Some(stored) = self.pulls_by_key.get(key) {
+            return stored.replay();
+        }
+        let snap = self.snap();
+        let result = if ten { self.run_ten(content, banner, fail_at) } else { self.pull(content, banner).map(|pull| vec![pull]) };
+        match result {
+            Ok(pulls) => {
+                self.pulls_by_key.insert(key.to_string(), StoredPull { pulls: pulls.clone(), fault: None });
+                Ok(PullBatch { pulls, fresh: true })
+            }
+            Err(err) => {
+                self.restore(snap);
+                self.pulls_by_key.insert(key.to_string(), StoredPull { pulls: Vec::new(), fault: Some(err.clone()) });
+                Err(err)
             }
         }
+    }
+
+    fn run_ten(&mut self, content: &Content, banner: &str, fail_at: Option<u32>) -> Result<Vec<Pull>, PullError> {
+        let pods = content.banners.cost.pods;
+        let cost = content.banners.cost.ten_pull as f32;
+        self.charge(cost)?;
+        let mut pulls = Vec::with_capacity(pods as usize);
+        for index in 0..pods {
+            let pod = index + 1;
+            if fail_at == Some(pod) {
+                return Err(PullError::Pod { pod });
+            }
+            let spent = if index == 0 { cost } else { 0.0 };
+            pulls.push(self.roll(content, banner, spent)?);
+        }
         Ok(pulls)
+    }
+
+    fn snap(&self) -> AccountSnap {
+        AccountSnap {
+            rank: self.rank,
+            shards: self.shards,
+            credits: self.credits,
+            pity: self.pity.clone(),
+            active_banner: self.active_banner.clone(),
+            seed: self.rng.get_seed(),
+            word_pos: self.rng.get_word_pos(),
+            audit: self.audit.clone(),
+            banks: self.banks.clone(),
+            pulls_by_key: self.pulls_by_key.clone(),
+        }
+    }
+
+    fn restore(&mut self, snap: AccountSnap) {
+        self.rank = snap.rank;
+        self.shards = snap.shards;
+        self.credits = snap.credits;
+        self.pity = snap.pity;
+        self.active_banner = snap.active_banner;
+        let mut rng = ChaCha20Rng::from_seed(snap.seed);
+        rng.set_word_pos(snap.word_pos);
+        self.rng = rng;
+        self.audit = snap.audit;
+        self.banks = snap.banks;
+        self.pulls_by_key = snap.pulls_by_key;
     }
 
     fn charge(&mut self, cost: f32) -> Result<(), PullError> {
@@ -577,6 +737,20 @@ fn dev_currency_enabled() -> bool {
 
 const SAVE_V1: &[u8] = b"GEMACCT1";
 const SAVE_V2: &[u8] = b"GEMACCT2";
+const SAVE_V3: &[u8] = b"GEMACCT3";
+
+struct AccountSnap {
+    rank: u32,
+    shards: u32,
+    credits: f32,
+    pity: BTreeMap<String, Pity>,
+    active_banner: Option<String>,
+    seed: [u8; 32],
+    word_pos: u128,
+    audit: Vec<AuditEntry>,
+    banks: BTreeMap<(u64, u64), Banked>,
+    pulls_by_key: BTreeMap<String, StoredPull>,
+}
 
 fn write_u32(out: &mut Vec<u8>, value: u32) {
     out.extend(value.to_le_bytes());
@@ -655,6 +829,64 @@ fn read_opt_str(bytes: &[u8], at: &mut usize) -> Result<Option<String>, String> 
     }
 }
 
+fn write_fault(out: &mut Vec<u8>, fault: &Option<PullError>) -> Result<(), String> {
+    match fault {
+        None => {
+            out.push(0);
+            write_f32(out, 0.0)?;
+            write_f32(out, 0.0)?;
+            write_u32(out, 0);
+        }
+        Some(PullError::Short { cost, have }) => {
+            out.push(1);
+            write_f32(out, *cost)?;
+            write_f32(out, *have)?;
+            write_u32(out, 0);
+        }
+        Some(PullError::Banner) => {
+            out.push(2);
+            write_f32(out, 0.0)?;
+            write_f32(out, 0.0)?;
+            write_u32(out, 0);
+        }
+        Some(PullError::Shards) => {
+            out.push(3);
+            write_f32(out, 0.0)?;
+            write_f32(out, 0.0)?;
+            write_u32(out, 0);
+        }
+        Some(PullError::Pod { pod }) => {
+            out.push(4);
+            write_f32(out, 0.0)?;
+            write_f32(out, 0.0)?;
+            write_u32(out, *pod);
+        }
+        Some(PullError::Key) => {
+            out.push(5);
+            write_f32(out, 0.0)?;
+            write_f32(out, 0.0)?;
+            write_u32(out, 0);
+        }
+    }
+    Ok(())
+}
+
+fn read_fault(bytes: &[u8], at: &mut usize) -> Result<Option<PullError>, String> {
+    let tag = read_u8(bytes, at)?;
+    let cost = read_f32(bytes, at)?;
+    let have = read_f32(bytes, at)?;
+    let pod = read_u32(bytes, at)?;
+    match tag {
+        0 => Ok(None),
+        1 => Ok(Some(PullError::Short { cost, have })),
+        2 => Ok(Some(PullError::Banner)),
+        3 => Ok(Some(PullError::Shards)),
+        4 => Ok(Some(PullError::Pod { pod })),
+        5 => Ok(Some(PullError::Key)),
+        other => Err(format!("dev account save has a bad pull fault {other}")),
+    }
+}
+
 fn tier_above(rarity: &str) -> Option<&'static str> {
     let idx = TIERS.iter().position(|tier| *tier == rarity)?;
     TIERS.get(idx + 1).copied()
@@ -684,10 +916,10 @@ mod tests {
         assert!(err.to_string().contains("credits"), "{err}");
 
         account.credits = content.banners.cost.ten_pull as f32;
-        let ten = account.pull_ten(&content, "standard").unwrap();
-        assert_eq!(ten.len(), 10);
+        let ten = account.pull_ten(&content, "standard", "rank-ten").unwrap();
+        assert_eq!(ten.pulls.len(), content.banners.cost.pods as usize);
         assert!(
-            ten.iter().any(|pull| pull.rarity == "epic" || pull.rarity == "legendary"),
+            ten.pulls.iter().any(|pull| pull.rarity == "epic" || pull.rarity == "legendary"),
             "a ten-pull includes epic or better"
         );
 
@@ -1091,12 +1323,18 @@ mod tests {
         assert_eq!(account.bank(book.record(id).unwrap(), player.wrapping_add(1)).unwrap_err(), BankError::Player);
 
         let empty = Account::from_seed(8);
-        let v2 = empty.to_bytes().unwrap();
-        assert!(v2.starts_with(SAVE_V2));
+        let v3 = empty.to_bytes().unwrap();
+        assert!(v3.starts_with(SAVE_V3));
+        let mut v2 = v3[..v3.len() - 4].to_vec();
+        v2[..SAVE_V2.len()].copy_from_slice(SAVE_V2);
+        let loaded_v2 = Account::from_bytes(&v2).unwrap();
+        assert!(loaded_v2.banks.is_empty());
+        assert!(loaded_v2.pulls_by_key.is_empty());
         let mut v1 = v2[..v2.len() - 4].to_vec();
         v1[..SAVE_V1.len()].copy_from_slice(SAVE_V1);
         let loaded = Account::from_bytes(&v1).unwrap();
         assert!(loaded.banks.is_empty());
+        assert!(loaded.pulls_by_key.is_empty());
         assert_eq!(loaded.credits(), empty.credits());
         let round = Account::from_bytes(&account.to_bytes().unwrap()).unwrap();
         assert_eq!(round.credits(), account.credits());
@@ -1154,5 +1392,123 @@ mod tests {
         assert!(!second.fresh);
         assert_eq!(second.earned, earned);
         assert_eq!(again.credits(), start + earned);
+    }
+
+    #[test]
+    fn a_failed_pod_rolls_the_ten_pull_back() {
+        let content = Content::embedded();
+        let mut account = funded(4, &content);
+        let banner = "standard";
+        account.credits = content.banners.cost.ten_pull as f32 * 2.0;
+        let credits = account.credits;
+        let rank = account.rank;
+        let shards = account.shards;
+        let pity = account.pity.clone();
+        let audit = account.audit.len();
+        let seed = account.rng.get_seed();
+        let pos = account.rng.get_word_pos();
+        let active = account.active_banner.clone();
+        assert!(content.banners.cost.pods > 7, "pod 7 has to sit inside the ten-pull");
+        let err = account.pull_ten_failing_pod(&content, banner, "pod-7", 7).unwrap_err();
+        assert_eq!(err, PullError::Pod { pod: 7 });
+        assert_eq!(account.credits, credits);
+        assert_eq!(account.rank, rank);
+        assert_eq!(account.shards, shards);
+        assert_eq!(account.pity, pity);
+        assert_eq!(account.audit.len(), audit);
+        assert_eq!(account.rng.get_seed(), seed);
+        assert_eq!(account.rng.get_word_pos(), pos);
+        assert_eq!(account.active_banner, active);
+        let again = account.pull_ten(&content, banner, "pod-7").unwrap_err();
+        assert_eq!(again, PullError::Pod { pod: 7 });
+        assert_eq!(account.credits, credits);
+        let mut loaded = Account::from_bytes(&account.to_bytes().unwrap()).unwrap();
+        assert_eq!(loaded.pull_ten(&content, banner, "pod-7").unwrap_err(), PullError::Pod { pod: 7 });
+        assert_eq!(loaded.credits, credits);
+        assert_eq!(loaded.rng.get_seed(), seed);
+        assert_eq!(loaded.rng.get_word_pos(), pos);
+    }
+
+    #[test]
+    fn a_replayed_ten_pull_charges_once() {
+        let content = Content::embedded();
+        let mut account = funded(5, &content);
+        let price = content.banners.cost.ten_pull as f32;
+        account.credits = price * 2.0;
+        let start = account.credits;
+        assert_eq!(account.pull_ten(&content, "standard", "").unwrap_err(), PullError::Key);
+        assert_eq!(account.credits, start);
+        let first = account.pull_ten(&content, "standard", "a").unwrap();
+        assert!(first.fresh);
+        assert_eq!(first.pulls.len(), content.banners.cost.pods as usize);
+        assert!((account.credits - (start - price)).abs() < 1e-3);
+        let again = account.pull_ten(&content, "standard", "a").unwrap();
+        assert!(!again.fresh);
+        for (left, right) in first.pulls.iter().zip(&again.pulls) {
+            assert_eq!(left.rarity, right.rarity);
+            assert_eq!(left.fakeout, right.fakeout);
+        }
+        assert!((account.credits - (start - price)).abs() < 1e-3);
+        let second = account.pull_ten(&content, "standard", "b").unwrap();
+        assert!(second.fresh);
+        assert!((account.credits - (start - price * 2.0)).abs() < 1e-3);
+        let mut loaded = Account::from_bytes(&account.to_bytes().unwrap()).unwrap();
+        let replay = loaded.pull_ten(&content, "standard", "a").unwrap();
+        assert!(!replay.fresh);
+        assert!((loaded.credits - account.credits).abs() < 1e-3);
+        assert_eq!(replay.pulls.len(), first.pulls.len());
+    }
+
+    #[test]
+    fn pity_resets_mid_ten_pull_and_keeps_counting() {
+        let content = Content::embedded();
+        let hard = content.banners.pity.legendary_hard;
+        let pods = content.banners.cost.pods;
+        let mid = pods / 2;
+        assert!(mid >= 2 && mid < pods, "the threshold has to land inside the ten-pull");
+        let price = content.banners.cost.ten_pull as f32;
+        let mut found = None;
+        for seed in 1..400 {
+            let mut account = Account::from_seed(seed);
+            account.credits = price;
+            account.pity.insert(
+                "standard".into(),
+                Pity {
+                    since_legendary: hard - mid,
+                    since_epic: 0,
+                },
+            );
+            let batch = account.pull_ten(&content, "standard", "pity").unwrap();
+            let early = batch.pulls.iter().take(mid as usize - 1).any(|pull| pull.rarity == "legendary");
+            if !early {
+                found = Some(account);
+                break;
+            }
+        }
+        let account = found.expect("a seed where hard pity lands mid ten-pull");
+        let rows = &account.audit;
+        assert_eq!(rows.len(), pods as usize);
+        let hit = &rows[mid as usize - 1];
+        assert_eq!(hit.rarity, "legendary");
+        assert_eq!(hit.pity_legendary_before, hard - 1);
+        assert_eq!(hit.since_legendary, 0);
+        let next = &rows[mid as usize];
+        assert_eq!(next.pity_legendary_before, 0);
+        if next.rarity == "legendary" {
+            assert_eq!(next.since_legendary, 0);
+        } else {
+            assert_eq!(next.since_legendary, 1);
+        }
+        let mut counter = hard - mid;
+        for row in rows {
+            assert_eq!(row.pity_legendary_before, counter);
+            counter += 1;
+            if counter >= hard || row.rarity == "legendary" {
+                assert_eq!(row.since_legendary, 0);
+                counter = 0;
+            } else {
+                assert_eq!(row.since_legendary, counter);
+            }
+        }
     }
 }

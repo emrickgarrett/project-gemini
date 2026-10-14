@@ -25,18 +25,20 @@ impl fmt::Display for PullHostError {
     }
 }
 
-pub(crate) fn request_bytes(banner: &str) -> Result<Vec<u8>, PullHostError> {
+pub(crate) fn request_bytes(banner: &str, key: &str, ten: bool) -> Result<Vec<u8>, PullHostError> {
     Packet::CratePull(CratePullRequest {
         version: PROTOCOL_VERSION,
         banner: banner.to_string(),
+        idempotency_key: key.to_string(),
+        ten,
     })
     .encode()
     .map_err(|err| PullHostError::Unavailable(err.to_string()))
 }
 
 /// Encode a pull, hand the bytes to the host, and decode the reply packet.
-pub(crate) fn round_trip(banner: &str) -> Result<CratePullReply, PullHostError> {
-    let bytes = request_bytes(banner)?;
+pub(crate) fn round_trip(banner: &str, key: &str, ten: bool) -> Result<CratePullReply, PullHostError> {
+    let bytes = request_bytes(banner, key, ten)?;
     let reply = transport(&bytes)?;
     match Packet::decode(&reply).map_err(|err| PullHostError::Unavailable(err.to_string()))? {
         Packet::CratePullReply(reply) => Ok(reply),

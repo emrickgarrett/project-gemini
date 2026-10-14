@@ -448,12 +448,14 @@ mod tests {
     fn a_pull_is_a_proto_request_and_only_a_reply_fills_the_crate() {
         let _guard = settings_lock();
         let content = gemini_sim::content::Content::embedded();
-        let bytes = pull_host::request_bytes(&content.banners.id).unwrap();
+        let bytes = pull_host::request_bytes(&content.banners.id, "pull-1", false).unwrap();
         let packet = gemini_proto::Packet::decode(&bytes).unwrap();
         let gemini_proto::Packet::CratePull(request) = packet else {
             panic!("a pull is a crate-pull packet");
         };
         assert_eq!(request.banner, content.banners.id);
+        assert_eq!(request.idempotency_key, "pull-1");
+        assert!(!request.ten);
 
         let mut app = menu_app();
         app.update();
@@ -472,6 +474,9 @@ mod tests {
             fakeout: None,
             rank: 0,
             fault: Some(gemini_proto::CratePullFault::Short { cost: content.banners.cost.single as f32, have: 0.0 }),
+            pods: Vec::new(),
+            fresh: false,
+            ten: false,
         };
         let (failed, _) = flow::crate_from_reply(&content, &short);
         assert!(failed.failed);
@@ -489,6 +494,9 @@ mod tests {
             fakeout: None,
             rank: 0,
             fault: Some(gemini_proto::CratePullFault::Shards),
+            pods: Vec::new(),
+            fresh: false,
+            ten: false,
         };
         let (missing, _) = flow::crate_from_reply(&content, &shards);
         assert!(missing.failed);
@@ -501,6 +509,9 @@ mod tests {
             fakeout: Some("epic".into()),
             rank: 2,
             fault: None,
+            pods: vec![gemini_proto::CratePod { rarity: "rare".into(), fakeout: Some("epic".into()) }],
+            fresh: true,
+            ten: false,
         };
         let (filled, rank) = flow::crate_from_reply(&content, &reply);
         assert!(!filled.failed);
@@ -509,7 +520,10 @@ mod tests {
         app.world_mut().resource_mut::<session::Account>().rank = rank.unwrap();
         choose(&mut app, "open");
         let playback = app.world().get_resource::<reveal_ui::RevealPlayback>().expect("reveal starts after the server result");
-        assert_eq!(playback.0.plan.rarity, "rare");
+        let reveal_ui::RevealShow::Single(run) = &playback.0 else {
+            panic!("a single pull opens a single reveal");
+        };
+        assert_eq!(run.plan.rarity, "rare");
     }
 
     #[test]
@@ -518,7 +532,7 @@ mod tests {
         let mut app = menu_app();
         let content = gemini_sim::content::Content::embedded();
         let run = gemini_sim::reveal::RevealRun::start(&content, "rare", Some("epic")).unwrap();
-        app.insert_resource(reveal_ui::RevealPlayback(run));
+        app.insert_resource(reveal_ui::RevealPlayback(reveal_ui::RevealShow::Single(run)));
         app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Reveal);
         app.update();
         app.world_mut().spawn((reveal_ui::RevealVoice { id: "crate_tease".into() }, OldVoice));
@@ -528,6 +542,38 @@ mod tests {
         let mut voices = app.world_mut().query::<&reveal_ui::RevealVoice>();
         let left: Vec<_> = voices.iter(app.world()).map(|voice| voice.id.clone()).collect();
         assert_eq!(left, vec!["crate_rare_hit".to_string()], "skip plays only the rolled tier hit");
+    }
+
+    #[test]
+    fn skip_stops_ten_pull_flip_ticks_and_keeps_the_best_sting() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        let content = gemini_sim::content::Content::embedded();
+        let pods = content.banners.cost.pods as usize;
+        let mut cards = vec![gemini_sim::reveal::GridCard { rarity: "common".into(), fakeout: None }; pods];
+        cards[pods / 2].rarity = "legendary".into();
+        let run = gemini_sim::reveal::GridRun::start(&content, &cards).unwrap();
+        let sting = format!("crate_{}", cards[run.plan.best].rarity);
+        let flip = content.crate_reveal.grid.flip_cue.clone();
+        app.insert_resource(reveal_ui::RevealPlayback(reveal_ui::RevealShow::Grid(run)));
+        app.world_mut().resource_mut::<NextState<AppState>>().set(AppState::Reveal);
+        app.update();
+        tap(&mut app, KeyCode::Space);
+        let mut played = Vec::new();
+        let mut voices = app.world_mut().query::<&reveal_ui::RevealVoice>();
+        played.extend(voices.iter(app.world()).map(|voice| voice.id.clone()));
+        assert!(played.iter().all(|id| id != &flip), "skip emits no flip ticks: {played:?}");
+        for _ in 0..500 {
+            app.update();
+            let mut voices = app.world_mut().query::<&reveal_ui::RevealVoice>();
+            for id in voices.iter(app.world()).map(|voice| voice.id.clone()) {
+                if !played.contains(&id) {
+                    played.push(id);
+                }
+            }
+        }
+        assert!(played.iter().all(|id| id != &flip), "no flip ticks after the skip: {played:?}");
+        assert_eq!(played.iter().filter(|id| *id == &sting).count(), 1, "the best sting still plays: {played:?}");
     }
 
     #[test]

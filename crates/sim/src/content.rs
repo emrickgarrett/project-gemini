@@ -254,8 +254,8 @@ impl Content {
                 currency
             },
             banners: {
-                let banners: Banners = parse("banners.toml", src.banners)?;
-                validate_banners(&banners)?;
+                let banners = load_banners(src.banners)?;
+                validate_ten_grid(&crate_reveal, &banners, &ui, &audio, &palette)?;
                 banners
             },
             duplicate: load_duplicate(src.duplicate_ranks)?,
@@ -928,6 +928,7 @@ pub struct BannerPublished {
 #[derive(Clone, Debug, Deserialize)]
 pub struct BannerCost {
     pub single: u32,
+    pub pods: u32,
     pub ten_pull: u32,
 }
 
@@ -4542,6 +4543,7 @@ pub struct CrateReveal {
     pub epic: CrateTier,
     pub legendary: CrateTier,
     pub multi_pull: CrateMulti,
+    pub grid: CrateGrid,
     pub hint: RevealHint,
     pub card: CardTitle,
     pub layout: RevealLayout,
@@ -4697,6 +4699,7 @@ fn require_arena_colors(palette: &Palette, arena: &Arena) -> Result<(), String> 
 pub struct CrateTier {
     pub tease: String,
     pub sting: String,
+    pub rank: u32,
     pub drop: [f32; 2],
     pub crack: [f32; 2],
     pub burst: f32,
@@ -4714,6 +4717,26 @@ pub struct CrateMulti {
     pub pod_interval: f32,
     pub full_sequence_for: String,
     pub summary_grid: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct CrateGrid {
+    pub fast_flip: f32,
+    pub columns: u32,
+    pub rows: u32,
+    pub gap: f32,
+    pub card_w: f32,
+    pub card_h: f32,
+    pub back: String,
+    pub frame: String,
+    pub refund_message: String,
+    pub refund_w: f32,
+    pub refund_h: f32,
+    pub refund_face: String,
+    pub refund_ink: String,
+    pub refund_tick: String,
+    pub flip_cue: String,
+    pub display: String,
 }
 
 impl CrateReveal {
@@ -5224,6 +5247,7 @@ pub struct UiCopy {
     pub crates_title: String,
     pub crates_empty: String,
     pub crates_pull: String,
+    pub crates_ten: String,
     pub crates_open: String,
     pub pull_failed: String,
     pub pull_need: String,
@@ -5406,16 +5430,179 @@ fn load_ui(text: &str) -> Result<Ui, String> {
     parse("ui.toml", text)
 }
 
+fn load_banners(text: &str) -> Result<Banners, String> {
+    let mut value: toml::Value = toml::from_str(text).map_err(|err| format!("banners.toml: {err}"))?;
+    let cost = value
+        .get_mut("cost")
+        .and_then(|item| item.as_table_mut())
+        .ok_or("banners.toml is missing cost")?;
+    if cost.get("single").is_none() {
+        return Err("banners.toml is missing cost.single".into());
+    }
+    if cost.get("pods").is_none() {
+        return Err("banners.toml is missing cost.pods".into());
+    }
+    if cost.get("ten_pull").is_none() {
+        let single = toml_u32(cost.get("single").unwrap(), "cost.single")?;
+        let pods = toml_u32(cost.get("pods").unwrap(), "cost.pods")?;
+        let product = single
+            .checked_mul(pods)
+            .ok_or("banners.toml cost.pods * cost.single overflows")?;
+        cost.insert("ten_pull".into(), toml::Value::Integer(i64::from(product)));
+    }
+    let banners: Banners = value.try_into().map_err(|err| format!("banners.toml: {err}"))?;
+    validate_banners(&banners)?;
+    Ok(banners)
+}
+
+fn toml_u32(value: &toml::Value, key: &str) -> Result<u32, String> {
+    let Some(number) = value.as_integer() else {
+        return Err(format!("banners.toml {key} is not an integer"));
+    };
+    if number <= 0 || number > i64::from(u32::MAX) {
+        return Err(format!("banners.toml {key} must be > 0"));
+    }
+    Ok(number as u32)
+}
+
 fn validate_banners(banners: &Banners) -> Result<(), String> {
     if banners.id.is_empty() {
         return Err("banners.toml id must be set".into());
     }
-    if banners.cost.single == 0 || banners.cost.ten_pull == 0 {
+    if banners.cost.single == 0 || banners.cost.pods == 0 || banners.cost.ten_pull == 0 {
         return Err("banners.toml costs must be > 0".into());
     }
     let grant = banners.dev.starting_credits;
     if !(grant.is_finite() && grant + 1e-3 >= banners.cost.ten_pull as f32) {
         return Err("banners.toml dev.starting_credits must cover cost.ten_pull".into());
+    }
+    Ok(())
+}
+
+fn validate_ten_grid(reveal: &CrateReveal, banners: &Banners, ui: &Ui, audio: &AudioTable, palette: &Palette) -> Result<(), String> {
+    let multi = &reveal.multi_pull;
+    if !(multi.pod_interval > 0.0) {
+        return Err("crate_reveal.toml multi_pull.pod_interval must be > 0".into());
+    }
+    if multi.full_sequence_for != "highest_rarity" {
+        return Err("crate_reveal.toml multi_pull.full_sequence_for must be highest_rarity".into());
+    }
+    if !multi.summary_grid {
+        return Err("crate_reveal.toml multi_pull.summary_grid must be true".into());
+    }
+    let ranks = [
+        ("common", reveal.common.rank),
+        ("rare", reveal.rare.rank),
+        ("epic", reveal.epic.rank),
+        ("legendary", reveal.legendary.rank),
+    ];
+    let mut previous = 0u32;
+    for (index, (name, rank)) in ranks.iter().enumerate() {
+        if *rank == 0 {
+            return Err(format!("crate_reveal.toml {name}.rank must be > 0"));
+        }
+        if index > 0 && *rank <= previous {
+            return Err(format!("crate_reveal.toml {name}.rank must be above the previous tier"));
+        }
+        previous = *rank;
+    }
+    let grid = &reveal.grid;
+    if !(grid.fast_flip > 0.0) {
+        return Err("crate_reveal.toml grid.fast_flip must be > 0".into());
+    }
+    if grid.columns == 0 || grid.rows == 0 {
+        return Err("crate_reveal.toml grid columns and rows must be > 0".into());
+    }
+    let cells = grid
+        .columns
+        .checked_mul(grid.rows)
+        .ok_or("crate_reveal.toml grid columns * rows overflows")?;
+    if cells != banners.cost.pods {
+        return Err(format!(
+            "crate_reveal.toml grid is {cells} cards and banners.toml cost.pods is {}",
+            banners.cost.pods
+        ));
+    }
+    if !(grid.gap >= 0.0) || !(grid.card_w > 0.0) || !(grid.card_h > 0.0) {
+        return Err("crate_reveal.toml grid card size must be positive and gap must be >= 0".into());
+    }
+    if !(grid.refund_w > 0.0) || !(grid.refund_h > 0.0) {
+        return Err("crate_reveal.toml grid refund panel must be positive".into());
+    }
+    if grid.refund_message.is_empty() {
+        return Err("crate_reveal.toml grid.refund_message must be set".into());
+    }
+    if grid.display != "roll" {
+        return Err(format!("crate_reveal.toml grid.display {} is not roll", grid.display));
+    }
+    let grid_w = grid.columns as f32 * grid.card_w + (grid.columns - 1) as f32 * grid.gap;
+    let grid_h = grid.rows as f32 * grid.card_h + (grid.rows - 1) as f32 * grid.gap;
+    if grid_w > ui.layout.fit_width || grid_h > ui.layout.fit_height {
+        return Err("crate_reveal.toml grid does not fit the ui fit frame".into());
+    }
+    let border = (reveal.layout.border_px as f32 * grid.card_h / reveal.layout.panel_height).round();
+    if border < 1.0 || border * 2.0 >= grid.card_w || border * 2.0 >= grid.card_h {
+        return Err("crate_reveal.toml grid card border does not leave a face".into());
+    }
+    let face_w = grid.card_w - border * 2.0;
+    let legend = "LEGENDARY".chars().count() as f32 * reveal.layout.title_glyph_px as f32 * reveal.layout.title_scale_min as f32;
+    if face_w <= legend {
+        return Err("crate_reveal.toml grid card is too narrow for LEGENDARY".into());
+    }
+    let refund_border = (reveal.layout.border_px as f32 * grid.refund_h / reveal.layout.panel_height).round();
+    if refund_border < 1.0 || refund_border * 2.0 >= grid.refund_w || refund_border * 2.0 >= grid.refund_h {
+        return Err("crate_reveal.toml grid refund border does not leave a face".into());
+    }
+    let refund_face_w = grid.refund_w - refund_border * 2.0;
+    let message_w = grid.refund_message.chars().count() as f32 * reveal.layout.title_glyph_px as f32 * reveal.layout.title_scale_min as f32;
+    if refund_face_w <= message_w {
+        return Err("crate_reveal.toml grid.refund_message does not fit the refund panel".into());
+    }
+    for (name, key) in [
+        ("back", grid.back.as_str()),
+        ("frame", grid.frame.as_str()),
+        ("refund_face", grid.refund_face.as_str()),
+        ("refund_ink", grid.refund_ink.as_str()),
+    ] {
+        if key.starts_with("rarity_") {
+            return Err(format!("crate_reveal.toml grid.{name} must not be a rarity color"));
+        }
+        if palette.hex(key).is_none() {
+            return Err(format!("crate_reveal.toml grid.{name} color \"{key}\" does not resolve"));
+        }
+    }
+    let flip = audio
+        .sfx
+        .iter()
+        .find(|row| row.id == grid.flip_cue)
+        .ok_or_else(|| format!("crate_reveal.toml grid.flip_cue {} is missing from the mix", grid.flip_cue))?;
+    if !flip.category_ui || !flip.outside_voice_cap || flip.max_instances != 1 {
+        return Err(format!(
+            "audio_mix.toml {} must be a UI bus row, outside_voice_cap, max_instances 1",
+            grid.flip_cue
+        ));
+    }
+    let tick = audio
+        .sfx
+        .iter()
+        .find(|row| row.id == grid.refund_tick)
+        .ok_or_else(|| format!("crate_reveal.toml grid.refund_tick {} is missing from the mix", grid.refund_tick))?;
+    if !tick.category_ui {
+        return Err(format!("audio_mix.toml {} must be a UI sound", grid.refund_tick));
+    }
+    if grid.refund_tick == ui.sounds.bank_chime || grid.refund_tick == grid.flip_cue {
+        return Err("crate_reveal.toml grid.refund_tick must be a neutral UI tick".into());
+    }
+    if audio.sting.iter().any(|row| row.id == grid.refund_tick || row.id == grid.flip_cue) {
+        return Err("crate_reveal.toml grid cues must not be crate stings".into());
+    }
+    let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+    if assets.is_dir() {
+        for row in [flip, tick] {
+            if !assets.join(&row.path).is_file() {
+                return Err(format!("{} file {} is missing", row.id, row.path));
+            }
+        }
     }
     Ok(())
 }
@@ -5660,6 +5847,7 @@ fn validate_ui(
         &ui.copy.host,
         &ui.copy.join,
         &ui.copy.crates_pull,
+        &ui.copy.crates_ten,
         &ui.copy.crates_open,
         &ui.copy.on,
         &ui.copy.off,
@@ -5838,6 +6026,47 @@ mod cast_look_tests {
         let wide = text.replacen("hit_surface_gap = 0.05", "hit_surface_gap = 1.0", 1);
         let err = load_cast_look(&wide, &palette).expect_err("a meter-wide gap must fail");
         assert!(err.contains("hit_surface_gap"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod ten_pull_keys {
+    use super::{embedded_sources, Content};
+
+    #[test]
+    fn ten_pull_price_follows_the_key_and_missing_keys_fail() {
+        let src = embedded_sources();
+        let stripped = src.banners.replace("ten_pull = 1000\n", "");
+        assert_ne!(stripped, src.banners);
+        let mut sources = embedded_sources();
+        sources.banners = &stripped;
+        let content = Content::parse(&sources).expect("omitting ten_pull uses pods * single");
+        assert_eq!(content.banners.cost.ten_pull, content.banners.cost.single * content.banners.cost.pods);
+
+        let bumped = src.banners.replace("ten_pull = 1000", "ten_pull = 1100");
+        sources.banners = &bumped;
+        let content = Content::parse(&sources).expect("an explicit ten_pull is the price");
+        let product = content.banners.cost.single * content.banners.cost.pods;
+        assert_eq!(content.banners.cost.ten_pull, product + content.banners.cost.single);
+        assert_ne!(content.banners.cost.ten_pull, product);
+
+        let missing_pods = src.banners.replace("pods = 10\n", "");
+        sources.banners = &missing_pods;
+        let err = Content::parse(&sources).expect_err("pods is required");
+        assert!(err.contains("pods"), "{err}");
+
+        sources.banners = src.banners;
+        let missing_flip = src.crate_reveal.replace("fast_flip = 0.125\n", "");
+        assert_ne!(missing_flip, src.crate_reveal);
+        sources.crate_reveal = &missing_flip;
+        let err = Content::parse(&sources).expect_err("fast_flip is required");
+        assert!(err.contains("fast_flip"), "{err}");
+
+        let missing_rank = src.crate_reveal.replacen("rank = 1\n", "", 1);
+        assert_ne!(missing_rank, src.crate_reveal);
+        sources.crate_reveal = &missing_rank;
+        let err = Content::parse(&sources).expect_err("rank is required");
+        assert!(err.contains("rank"), "{err}");
     }
 }
 

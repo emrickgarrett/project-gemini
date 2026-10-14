@@ -39,6 +39,7 @@ stage_lift_pow = 1.35
 stage_vignette_pow = 1.6
 
 [common]
+rank = 1
 tease = "sfx/crate_tease.ogg"
 sting = "stings/crate_common.ogg"
 drop = [0.0, 2.0]
@@ -51,6 +52,7 @@ fakeout_chance = 0.0
 fakeout_window = [2.6, 3.0]
 
 [rare]
+rank = 2
 tease = "sfx/crate_tease.ogg"
 sting = "stings/crate_rare.ogg"
 drop = [0.0, 2.0]
@@ -63,6 +65,7 @@ fakeout_chance = 0.15
 fakeout_window = [2.6, 3.0]
 
 [epic]
+rank = 3
 tease = "sfx/crate_tease.ogg"
 sting = "stings/crate_epic.ogg"
 drop = [0.0, 2.0]
@@ -75,6 +78,7 @@ fakeout_chance = 0.2
 fakeout_window = [2.6, 3.0]
 
 [legendary]
+rank = 4
 tease = "sfx/crate_tease_legendary.ogg"
 sting = "stings/crate_legendary.ogg"
 drop = [0.0, 2.0]
@@ -91,6 +95,26 @@ fakeout_window = [2.6, 3.0]
 pod_interval = 0.35
 full_sequence_for = "highest_rarity"
 summary_grid = true
+
+# Ten-pull grid. columns * rows must equal banners.toml cost.pods.
+# fast_flip is the gap between card ticks. The best card keeps its tier time.
+[grid]
+fast_flip = 0.125
+columns = 5
+rows = 2
+gap = 18.0
+card_w = 180.0
+card_h = 112.0
+back = "reveal_ink"
+frame = "reveal_paper"
+refund_message = "REFUNDED"
+refund_w = 520.0
+refund_h = 160.0
+refund_face = "reveal_paper"
+refund_ink = "reveal_ink"
+refund_tick = "ui_count_tick"
+flip_cue = "crate_flip"
+display = "roll"
 
 # SKIP / ENTER sit small in the bottom-right. Opacity is the prompt's alpha.
 [hint]

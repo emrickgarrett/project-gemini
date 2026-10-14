@@ -55,6 +55,17 @@ pub struct Welcome {
 pub struct CratePullRequest {
     pub version: u32,
     pub banner: String,
+    /// Opaque idempotency key. A replay of the same key does not charge again.
+    pub idempotency_key: String,
+    /// Ten pods in one transaction. False is one pod.
+    pub ten: bool,
+}
+
+/// One pod the client renders. Roll order is the order of [`CratePullReply::pods`].
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CratePod {
+    pub rarity: String,
+    pub fakeout: Option<String>,
 }
 
 /// Why the host did not return a tier. The client prints copy from content. It does not roll.
@@ -66,16 +77,24 @@ pub enum CratePullFault {
     Unavailable,
     /// The rolled rarity has no shard cost in content.
     Shards,
+    /// A pod inside a ten-pull failed. The wallet is unchanged.
+    Pod { pod: u32 },
+    /// The pull had no idempotency key.
+    Key,
 }
 
 /// The host's answer to [`CratePullRequest`]. A later server sends the same bytes.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CratePullReply {
     pub version: u32,
+    /// Set for a single pull. A ten-pull leaves this empty and fills [`Self::pods`].
     pub rarity: Option<String>,
     pub fakeout: Option<String>,
     pub rank: u32,
     pub fault: Option<CratePullFault>,
+    pub pods: Vec<CratePod>,
+    pub fresh: bool,
+    pub ten: bool,
 }
 
 /// Ask the host to deposit the gain it already recorded for this match and player.
