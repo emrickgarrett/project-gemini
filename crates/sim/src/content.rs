@@ -5675,7 +5675,7 @@ fn validate_banners(banners: &Banners) -> Result<(), String> {
     }
     validate_items(banners)?;
     let grant = banners.dev.starting_credits;
-    if !(grant.is_finite() && grant + 1e-3 >= banners.cost.ten_pull_cost as f32) {
+    if !(grant.is_finite() && grant + banners.cost.credit_slack >= banners.cost.ten_pull_cost as f32) {
         return Err("banners.toml dev.starting_credits must cover cost.ten_pull_cost".into());
     }
     Ok(())

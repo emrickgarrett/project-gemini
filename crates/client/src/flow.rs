@@ -762,7 +762,7 @@ pub(crate) fn apply(
             // Resending a saved key does not check the wallet. SHOW LAST PULL sends that key.
             if !saved {
                 let cost = if ten { content.banners.cost.ten_pull_cost } else { content.banners.cost.single } as f32;
-                if crate_box.credits.is_some_and(|have| have + 1e-3 < cost) {
+                if crate_box.credits.is_some_and(|have| have + content.banners.cost.credit_slack < cost) {
                     dirty.0 = true;
                     return;
                 }
@@ -1068,7 +1068,7 @@ pub(crate) fn reveal_act(
     if !crate_box.buttons_ready || crate_box.pull_busy {
         return;
     }
-    if !saved && crate_box.credits.is_some_and(|have| have + 1e-3 < cost) {
+    if !saved && crate_box.credits.is_some_and(|have| have + content.banners.cost.credit_slack < cost) {
         return;
     }
     let (key, ten) = match claim_key(&mut prefs, ten) {
@@ -1111,7 +1111,7 @@ pub(crate) fn reveal_act(
                     crate_box.pull_busy = true;
                     crate_box.sent_keys = kept_keys;
                     crate_box.reveal_gen = kept_gen;
-                    crate_box.credits = kept_credits;
+                    crate_box.credits = Some(reply.credits);
                     crate_box.reason.clear();
                     return;
                 }
@@ -1122,7 +1122,7 @@ pub(crate) fn reveal_act(
                     crate_box.pull_busy = true;
                     crate_box.sent_keys = kept_keys;
                     crate_box.reveal_gen = kept_gen;
-                    crate_box.credits = kept_credits;
+                    crate_box.credits = Some(reply.credits);
                     audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
                     return;
                 }

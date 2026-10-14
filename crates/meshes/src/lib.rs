@@ -22,7 +22,7 @@ pub use menu_still::{bank_lines, paint_coop_pause, paint_menu, paint_menu_masked
 
 pub use arena::{cover_visual, pieces as arena_pieces, scenery_fingerprint, ArenaPiece};
 pub use away_still::{paint_away, AwayShot};
-pub use reveal_still::{grid_slots, paint_grid, paint_refund, paint_reveal, reveal_still_is_flat, still_color_stats, GridStill, RefundStill};
+pub use reveal_still::{grid_slots, paint_grid, paint_last_pull_confirmed, paint_refund, paint_reveal, reveal_still_is_flat, still_color_stats, GridStill, RefundStill};
 
 pub use pose::{pose, root_motion, AnimInput, Pose, Xform};
 pub use preview::{

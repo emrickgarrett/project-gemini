@@ -659,6 +659,37 @@ pub fn paint_grid(content: &Content, shot: &GridStill<'_>, width: u32, height: u
     Ok((rgb, hits))
 }
 
+/// LAST PULL CONFIRMED for one settle reply. The NEED line is the gap between `reply_credits` and a ten pull.
+pub fn paint_last_pull_confirmed<'a>(
+    content: &Content,
+    reply_credits: f32,
+    items: &'a [Option<&'a str>],
+    width: u32,
+    height: u32,
+) -> Result<(Vec<u8>, Vec<crate::menu_still::Hit>), String> {
+    let cost = content.banners.cost.ten_pull_cost as f32;
+    let short = reply_credits + content.banners.cost.credit_slack < cost;
+    let shortfall = if short {
+        gemini_sim::content::shortfall_line(&content.ui.copy, content.ui.layout.currency_decimals, (cost - reply_credits).max(0.0))
+    } else {
+        String::new()
+    };
+    paint_grid(
+        content,
+        &GridStill {
+            items,
+            ready: true,
+            again: !short,
+            focus: 0,
+            shortfall: &shortfall,
+            failure: content.ui.copy.last_pull_confirmed.as_str(),
+            retry: false,
+        },
+        width,
+        height,
+    )
+}
+
 /// Refund column in the bank bevel, sized to the banner, the message, and the two buttons.
 pub fn paint_refund(content: &Content, shot: &RefundStill<'_>, width: u32, height: u32) -> Result<(Vec<u8>, Vec<crate::menu_still::Hit>), String> {
     let grid = &content.crate_reveal.grid;
@@ -1364,22 +1395,7 @@ mod tests {
             ("connection_lost.png", lost_paint),
             (
                 "last_pull_confirmed.png",
-                paint_grid(
-                    &content,
-                    &GridStill {
-                        items: &faces,
-                        ready: true,
-                        again: false,
-                        focus: 0,
-                        shortfall: &gemini_sim::content::shortfall_line(&content.ui.copy, content.ui.layout.currency_decimals, content.banners.cost.ten_pull_cost as f32),
-                        failure: content.ui.copy.last_pull_confirmed.as_str(),
-                        retry: false,
-                    },
-                    width,
-                    height,
-                )
-                .unwrap()
-                .0,
+                paint_last_pull_confirmed(&content, content.banners.cost.single as f32, &faces, width, height).unwrap().0,
             ),
         ];
         for (name, rgb) in stills {

@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use gemini_meshes::{paint_grid, paint_menu, paint_refund, GridStill, MenuShot, RefundStill};
+use gemini_meshes::{paint_grid, paint_last_pull_confirmed, paint_menu, paint_refund, GridStill, MenuShot, RefundStill};
 use gemini_sim::content::Content;
 use gemini_sim::reveal::{GridCard, GridRun};
 use image::{ImageBuffer, RgbImage};
@@ -93,25 +93,10 @@ fn main() {
         height,
     );
     write(out.join("show_last_pull.png"), &last, width, height);
-    let confirmed = gemini_sim::content::shortfall_line(&content.ui.copy, content.ui.layout.currency_decimals, content.banners.cost.ten_pull_cost as f32);
+    let reply_credits = content.banners.cost.single as f32;
     write(
         out.join("last_pull_confirmed.png"),
-        &paint_grid(
-            &content,
-            &GridStill {
-                items: &one,
-                ready: true,
-                again: false,
-                focus: 0,
-                shortfall: &confirmed,
-                failure: &content.ui.copy.last_pull_confirmed,
-                retry: false,
-            },
-            width,
-            height,
-        )
-        .expect("last pull confirmed")
-        .0,
+        &paint_last_pull_confirmed(&content, reply_credits, &one, width, height).expect("last pull confirmed").0,
         width,
         height,
     );

@@ -775,7 +775,6 @@ mod tests {
         pull_host::clear_scripted_pull();
         open_grid(&mut app, true);
         let old_gen = app.world().resource::<flow::ServerCrate>().reveal_gen;
-        let credits = app.world().resource::<flow::ServerCrate>().credits;
         let rank = app.world().resource::<session::Account>().rank;
         let before = grid_faces(&mut app);
         app.world_mut().spawn(reveal_ui::RevealVoice { id: "crate_legendary".into(), gen: old_gen, gain: 1.0 });
@@ -809,7 +808,7 @@ mod tests {
         assert!(cues.iter().any(|id| id == &content.ui.sounds.confirm), "the accepted press still clicks: {cues:?}");
         let crate_box = app.world().resource::<flow::ServerCrate>();
         assert_eq!(crate_box.reveal_gen, old_gen);
-        assert_eq!(crate_box.credits, credits);
+        assert_eq!(crate_box.credits, Some(1.0));
         assert!(crate_box.reason.is_empty(), "a seen replay draws no failure line");
         assert_eq!(crate_box.sent_keys.last().map(String::as_str), Some("0123456789abcdef0123456789abcdef"));
         assert_eq!(app.world().resource::<session::Account>().rank, rank);
@@ -1039,6 +1038,7 @@ mod tests {
         assert_eq!(sent[0], old);
         assert_ne!(sent[1], old);
         assert_eq!(app.world().resource::<settings::Prefs>().pull_key, sent[1]);
+        assert_eq!(app.world().resource::<flow::ServerCrate>().credits, Some(enough));
         assert_ne!(app.world().resource::<flow::ServerCrate>().reason, content.ui.copy.last_pull_confirmed);
 
         let mut app = menu_app();
@@ -1055,7 +1055,14 @@ mod tests {
         app.world_mut().run_system_once(flow::reveal_act).unwrap();
         assert_eq!(app.world().resource::<flow::ServerCrate>().sent_keys, vec![old.to_string()]);
         assert_eq!(app.world().resource::<flow::ServerCrate>().reason, content.ui.copy.last_pull_confirmed);
+        assert_eq!(app.world().resource::<flow::ServerCrate>().credits, Some(short));
         assert!(app.world().resource::<settings::Prefs>().pull_key.is_empty(), "the old key stays settled");
+        app.world_mut().run_system_once(reveal_ui::paint).unwrap();
+        let painted = app.world().resource::<reveal_ui::PaintKey>();
+        assert!(painted.shortfall().contains(&content.ui.copy.pull_need), "{}", painted.shortfall());
+        assert!(painted.shortfall().contains(&content.ui.copy.pull_credits), "{}", painted.shortfall());
+        assert!(!painted.again(), "PULL AGAIN dims on the reply balance");
+        assert!(app.world().resource::<flow::Hits>().0.iter().all(|hit| hit.id != "pull_again"));
         let waiting = pull_host::round_trip("banner", "check", false);
         assert!(waiting.is_err(), "a short reply sends nothing new");
     }
