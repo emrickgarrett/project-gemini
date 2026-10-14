@@ -12,7 +12,7 @@ use bevy::audio::{
 };
 use bevy::prelude::*;
 
-use gemini_sim::audio_mix::{select_voices, SoundEvent, Voice};
+use gemini_sim::audio_mix::{select_voices, LiveVoice, SoundEvent, Voice};
 use gemini_sim::content::Content;
 use gemini_sim::math::Vec3 as SimVec;
 use gemini_sim::music::{
@@ -166,6 +166,10 @@ pub(crate) struct OneShot {
     order: u32,
     /// Linear volume before a co-op pause duck. Solo pause pauses the sink instead.
     gain: f32,
+    pos: SimVec,
+    /// Seconds left on a warning replacement fade. Zero means this voice is not fading.
+    fade_left: f32,
+    fade_dur: f32,
 }
 
 #[derive(Component)]
@@ -244,7 +248,7 @@ pub fn play(
     fx: Res<FrameFx>,
     mut music: ResMut<Music>,
     mut crowd: ResMut<Crowd>,
-    shots: Query<(Entity, &OneShot), (Without<MusicStem>, Without<PropLoop>)>,
+    mut shots: Query<(Entity, &mut OneShot, Option<&mut AudioSink>), (Without<MusicStem>, Without<PropLoop>)>,
     time: Res<Time>,
     prefs: Res<Prefs>,
     hold: Res<PauseMenu>,
@@ -270,9 +274,57 @@ pub fn play(
         }
     }
 
+    let dt = time.delta_secs();
+    let mut finished = Vec::new();
+    for (entity, mut shot, mut sink) in &mut shots {
+        if !(shot.fade_dur > 0.0) {
+            continue;
+        }
+        shot.fade_left -= dt;
+        if !(shot.fade_left > 0.0) {
+            finished.push(entity);
+            continue;
+        }
+        let volume = warning_fade_gain(shot.gain, shot.fade_left, shot.fade_dur);
+        if let Some(sink) = sink.as_mut() {
+            sink.set_volume(Volume::Linear(volume));
+        }
+    }
+    for entity in finished {
+        commands.entity(entity).despawn();
+    }
+    let playing: Vec<LiveVoice> = shots
+        .iter()
+        .filter_map(|(_, shot, _)| {
+            if shot.fade_dur > 0.0 {
+                return None;
+            }
+            let def = game.content.sfx(&shot.id)?;
+            if !def.is_warning {
+                return None;
+            }
+            Some(LiveVoice {
+                id: shot.id.clone(),
+                pos: shot.pos,
+            })
+        })
+        .collect();
     let mut events = fx.sounds.clone();
     events.extend(arena_cues(&mut arena_audio, &game));
-    let selected = select_voices(&game.content.audio, &events, listener);
+    let pick = select_voices(&game.content.audio, &events, listener, &playing);
+    for faded in &pick.fade {
+        for (_, mut shot, mut sink) in &mut shots {
+            if shot.fade_dur > 0.0 || shot.id != faded.id || shot.pos != faded.pos {
+                continue;
+            }
+            begin_warning_fade(&mut shot, game.content.audio.warning_fade);
+            if let Some(sink) = sink.as_mut() {
+                sink.set_volume(Volume::Linear(shot.gain));
+            }
+            break;
+        }
+    }
+    let selected = pick.voices;
     let mut crowd_vol = 0.0;
     let mut shot_i = 0u32;
     for voice in &selected {
@@ -317,6 +369,9 @@ pub fn play(
                     started: time.elapsed_secs(),
                     order: next_voice_order(),
                     gain: full,
+                    pos: voice.pos,
+                    fade_left: 0.0,
+                    fade_dur: 0.0,
                 },
             ))
             .id();
@@ -325,7 +380,7 @@ pub fn play(
             commands.entity(entity).despawn();
         }
     }
-    for (entity, shot) in &shots {
+    for (entity, shot, _) in &shots {
         if fx.stops.iter().any(|s| s.id == shot.id && s.owner == shot.owner) {
             commands.entity(entity).despawn();
         }
@@ -445,6 +500,9 @@ pub fn flush_ui_cues(
                 started: time.elapsed_secs(),
                 order: next_voice_order(),
                 gain: def.volume * bus_gain(&prefs, false),
+                pos: SimVec::ZERO,
+                fade_left: 0.0,
+                fade_dur: 0.0,
             },
         ));
     }
@@ -1048,6 +1106,24 @@ pub fn sync_bed(
     }
 }
 
+fn begin_warning_fade(shot: &mut OneShot, dur: f32) {
+    if !(dur > 0.0) {
+        panic!("warning fade must be > 0");
+    }
+    shot.fade_dur = dur;
+    shot.fade_left = dur;
+}
+
+fn warning_fade_gain(gain: f32, left: f32, dur: f32) -> f32 {
+    if !(dur > 0.0) {
+        panic!("warning fade must be > 0");
+    }
+    if !(left > 0.0) {
+        return 0.0;
+    }
+    gain * left / dur
+}
+
 fn arena_cues(state: &mut ArenaAudio, game: &Game) -> Vec<SoundEvent> {
     let mut events = footstep_cues(state, game);
     events.extend(beacon_cues(state, game));
@@ -1063,7 +1139,16 @@ fn footstep_cues(state: &mut ArenaAudio, game: &Game) -> Vec<SoundEvent> {
         return Vec::new();
     }
     if dt < 0.0 {
-        panic!("sim time went backwards");
+        // A co-op rejoin can apply a snapshot from earlier in the match.
+        // Catching up would burst steps and beacon pulses, so the clocks restart.
+        state.travel.clear();
+        state.variant.clear();
+        let period = game.content.arena_scene.beacon_glow_period;
+        if !(period > 0.0) {
+            panic!("beacon_glow_period must be > 0");
+        }
+        state.beacon_cycle = (now / period).floor() as i64;
+        return Vec::new();
     }
     let steps = &game.content.audio.footstep;
     if !(steps.stride > 0.0) {
@@ -1232,6 +1317,9 @@ fn sync_prop_loops(
                 started: time,
                 order: next_voice_order(),
                 gain: full,
+                pos: voice.pos,
+                fade_left: 0.0,
+                fade_dur: 0.0,
             },
             PropLoop {
                 id: voice.id,
@@ -1440,6 +1528,67 @@ mod tests {
         assert_eq!(super::paused_bus(true, false, false, true, duck), 1.0, "warnings stay full in co-op");
         assert_eq!(super::paused_bus(true, true, false, true, duck), 1.0, "warnings stay full in solo");
         assert_eq!(super::paused_bus(false, true, false, false, duck), 1.0);
+    }
+
+    #[test]
+    fn sim_time_going_backwards_resyncs_instead_of_panicking() {
+        let content = gemini_sim::content::Content::embedded();
+        let mut sim = gemini_sim::sim::Sim::new(&content, "normal", 1);
+        let period = content.arena_scene.beacon_glow_period;
+        let stride = content.audio.footstep.stride;
+        let fov = content.hero.viewmodel_fov;
+        sim.time = period * 0.5;
+        let player = sim.players[0].id;
+        let game = crate::session::Game {
+            content,
+            sim,
+            yaw: 0.0,
+            pitch: 0.0,
+            fov,
+            bob: false,
+            dip: 0.0,
+            difficulty: "normal".into(),
+            token: 0,
+            seat: 0,
+            pending_pick: None,
+        };
+        let cycle = (game.sim.time / period).floor() as i64;
+        let mut state = super::ArenaAudio {
+            last_time: game.sim.time + period,
+            travel: std::collections::BTreeMap::from([(player, stride)]),
+            variant: std::collections::BTreeMap::from([(player, 1)]),
+            beacon_cycle: cycle + 1,
+        };
+        let events = super::arena_cues(&mut state, &game);
+        assert_eq!(state.last_time, game.sim.time);
+        assert!(state.travel.is_empty());
+        assert!(state.variant.is_empty());
+        assert_eq!(state.beacon_cycle, cycle);
+        assert!(events.iter().all(|event| !event.id.starts_with("step_")));
+        assert!(events.iter().all(|event| event.id != "beacon_pulse"));
+        assert!(events.iter().any(|event| event.id == "hive_nest_idle" || event.id == "relay_tower_hum"));
+    }
+
+    #[test]
+    fn a_replaced_warning_uses_the_content_fade() {
+        let content = gemini_sim::content::Content::embedded();
+        let mut shot = super::OneShot {
+            id: "vent_warn".into(),
+            owner: 0,
+            started: 0.0,
+            order: 0,
+            gain: content.audio.warning_fade,
+            pos: gemini_sim::math::Vec3::ZERO,
+            fade_left: 0.0,
+            fade_dur: 0.0,
+        };
+        super::begin_warning_fade(&mut shot, content.audio.warning_fade);
+        assert_eq!(shot.fade_dur, content.audio.warning_fade);
+        assert_eq!(shot.fade_left, content.audio.warning_fade);
+        let half = shot.fade_left * 0.5;
+        let gain = super::warning_fade_gain(shot.gain, half, shot.fade_dur);
+        assert!((gain - shot.gain * 0.5).abs() < 1e-4);
+        assert_eq!(super::warning_fade_gain(shot.gain, 0.0, shot.fade_dur), 0.0);
     }
 
     #[test]

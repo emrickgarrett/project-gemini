@@ -25,11 +25,26 @@ pub struct Voice {
     pub is_warning: bool,
 }
 
+/// A warning voice that is already sounding. Nearest-wins compares newcomers to these.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiveVoice {
+    pub id: String,
+    pub pos: Vec3,
+}
+
+/// New voices to start, and warning voices already playing that should fade out.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VoicePick {
+    pub voices: Vec<Voice>,
+    pub fade: Vec<LiveVoice>,
+}
+
 pub fn select_voices(
     audio: &AudioTable,
     events: &[SoundEvent],
     listener: Vec3,
-) -> Vec<Voice> {
+    playing: &[LiveVoice],
+) -> VoicePick {
     let mut crowd_counts: Vec<(String, u32, f32, Vec3)> = Vec::new();
     let mut shots: Vec<Voice> = Vec::new();
 
@@ -95,12 +110,12 @@ pub fn select_voices(
             .then_with(|| a.id.cmp(&b.id))
     });
     let sorted = shots;
-    let capped = cap_instances(audio, sorted.clone());
-    let warnings: Vec<Voice> = capped.iter().filter(|voice| voice.is_warning).cloned().collect();
+    let (warnings, fade, warning_slots) = admit_warnings(audio, &sorted, playing, listener);
+    let others: Vec<Voice> = sorted.iter().filter(|voice| !voice.is_warning).cloned().collect();
+    let capped = cap_instances(audio, others);
     let mut step_count = 0u32;
     let rest: Vec<Voice> = capped
         .into_iter()
-        .filter(|voice| !voice.is_warning)
         .filter(|voice| {
             if !is_player_step(audio, &voice.id) {
                 return true;
@@ -113,11 +128,14 @@ pub fn select_voices(
         })
         .collect();
     voices.extend(warnings);
-    let room = audio.voice_cap.saturating_sub(voices.len());
+    let crowd_slots = voices.iter().filter(|voice| voice.crowd).count();
+    let used = crowd_slots + warning_slots;
+    let room = audio.voice_cap.saturating_sub(used);
     voices.extend(rest.into_iter().take(room));
-    // Critical cues that the cap dropped still play. Ones already kept are not doubled.
+    // Critical cues that the cap dropped still play. Warning rows stay on their own cap,
+    // so a farther warning is not put back. Ones already kept are not doubled.
     let mut claimed: Vec<(String, Vec3)> = voices.iter().map(|voice| (voice.id.clone(), voice.pos)).collect();
-    for crit in sorted.into_iter().filter(|voice| voice.critical) {
+    for crit in sorted.into_iter().filter(|voice| voice.critical && !voice.is_warning) {
         if let Some(index) = claimed.iter().position(|(id, pos)| {
             id == &crit.id && pos.x == crit.pos.x && pos.y == crit.pos.y && pos.z == crit.pos.z
         }) {
@@ -126,7 +144,121 @@ pub fn select_voices(
             voices.push(crit);
         }
     }
-    voices
+    VoicePick { voices, fade }
+}
+
+/// Nearest-wins inside one warning row. A row never reads another row's slots.
+fn admit_warnings(
+    audio: &AudioTable,
+    shots: &[Voice],
+    playing: &[LiveVoice],
+    listener: Vec3,
+) -> (Vec<Voice>, Vec<LiveVoice>, usize) {
+    let mut fresh: std::collections::BTreeMap<String, Vec<Voice>> = std::collections::BTreeMap::new();
+    for voice in shots.iter().filter(|voice| voice.is_warning) {
+        let row = row_id(audio, &voice.id);
+        fresh.entry(row).or_default().push(voice.clone());
+    }
+    let mut live: std::collections::BTreeMap<String, Vec<(LiveVoice, f32)>> = std::collections::BTreeMap::new();
+    for voice in playing {
+        let def = audio
+            .sfx
+            .iter()
+            .find(|row| row.id == voice.id)
+            .unwrap_or_else(|| panic!("playing voice {} is not in the mix", voice.id));
+        if !def.is_warning {
+            continue;
+        }
+        let score = score_of(audio, def, voice.pos, listener);
+        live.entry(def.row_id.clone())
+            .or_default()
+            .push((voice.clone(), score));
+    }
+    let mut rows: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    rows.extend(fresh.keys().cloned());
+    rows.extend(live.keys().cloned());
+    let mut play = Vec::new();
+    let mut fade = Vec::new();
+    let mut slots = 0usize;
+    for row in rows {
+        let def = audio
+            .sfx
+            .iter()
+            .find(|item| item.id == row)
+            .unwrap_or_else(|| panic!("warning row {row} is missing"));
+        let cap = def.max_instances;
+        if cap == 0 {
+            panic!("warning row {row} max_instances must be > 0");
+        }
+        let mut occupied = live.remove(&row).unwrap_or_default();
+        let mut events = fresh.remove(&row).unwrap_or_default();
+        events.sort_by(|a, b| {
+            b.score
+                .total_cmp(&a.score)
+                .then_with(|| a.id.cmp(&b.id))
+                .then_with(|| a.pos.x.total_cmp(&b.pos.x))
+                .then_with(|| a.pos.y.total_cmp(&b.pos.y))
+                .then_with(|| a.pos.z.total_cmp(&b.pos.z))
+        });
+        for voice in events {
+            if (occupied.len() as u32) < cap {
+                occupied.push((
+                    LiveVoice {
+                        id: voice.id.clone(),
+                        pos: voice.pos,
+                    },
+                    voice.score,
+                ));
+                play.push(voice);
+                continue;
+            }
+            let far = occupied
+                .iter()
+                .enumerate()
+                .min_by(|(_, a), (_, b)| a.1.total_cmp(&b.1).then_with(|| a.0.pos.x.total_cmp(&b.0.pos.x)))
+                .expect("a full warning row has a farthest voice");
+            let far_at = far.0;
+            if voice.score.total_cmp(&occupied[far_at].1) == std::cmp::Ordering::Greater {
+                fade.push(occupied[far_at].0.clone());
+                occupied.remove(far_at);
+                occupied.push((
+                    LiveVoice {
+                        id: voice.id.clone(),
+                        pos: voice.pos,
+                    },
+                    voice.score,
+                ));
+                play.push(voice);
+            }
+        }
+        slots += occupied.len();
+    }
+    (play, fade, slots)
+}
+
+fn row_id(audio: &AudioTable, id: &str) -> String {
+    audio
+        .sfx
+        .iter()
+        .find(|row| row.id == id)
+        .unwrap_or_else(|| panic!("mix row {id} is missing"))
+        .row_id
+        .clone()
+}
+
+fn budget_voices(sfx: &[SfxDef], keep: impl Fn(&SfxDef) -> bool) -> Result<u32, String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut sum = 0u32;
+    for row in sfx {
+        if !keep(row) || !seen.insert(row.row_id.clone()) {
+            continue;
+        }
+        let canonical = sfx.iter().find(|item| item.id == row.row_id).ok_or_else(|| {
+            format!("alias {} names missing source row {}", row.id, row.row_id)
+        })?;
+        sum += canonical.max_instances;
+    }
+    Ok(sum)
 }
 
 fn is_player_step(audio: &AudioTable, id: &str) -> bool {
@@ -189,7 +321,16 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
     for (key, value) in table {
         if matches!(
             key.as_str(),
-            "voice_cap" | "crowd_radius" | "crowd_full_count" | "min_distance" | "critical" | "alias" | "sting" | "footstep"
+            "voice_cap"
+                | "hit_reserve"
+                | "warning_fade"
+                | "crowd_radius"
+                | "crowd_full_count"
+                | "min_distance"
+                | "critical"
+                | "alias"
+                | "sting"
+                | "footstep"
         ) {
             continue;
         }
@@ -230,6 +371,9 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
         if is_warning && stealable {
             return Err(format!("{key} is a warning and must set stealable = false"));
         }
+        if is_warning && max_instances == 0 {
+            return Err(format!("{key} is a warning and max_instances must be > 0"));
+        }
         let volume = db_to_linear(db);
         let sync_at = if row.contains_key("sync_at") {
             Some(row_number(row, key, "sync_at")?)
@@ -256,6 +400,7 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
             key.clone(),
             SfxDef {
                 id: key.clone(),
+                row_id: key.clone(),
                 path,
                 loudness: volume,
                 volume,
@@ -307,8 +452,32 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
         None => crate::content::Footsteps::default(),
         Some(value) => parse_footsteps(value)?,
     };
+    let hit_reserve = match table.get("hit_reserve") {
+        None => return Err("audio mix is missing hit_reserve".into()),
+        Some(value) => value
+            .as_integer()
+            .ok_or_else(|| "hit_reserve is not an integer".to_string())?,
+    };
+    if hit_reserve < 0 {
+        return Err("hit_reserve must be >= 0".into());
+    }
+    let hit_reserve = hit_reserve as usize;
+    let warning_fade = number("warning_fade")? as f32;
+    if !(warning_fade > 0.0) {
+        return Err("warning_fade must be > 0".into());
+    }
+    let warning_voices = budget_voices(&sfx, |row| row.is_warning)?;
+    let crowd_loops = budget_voices(&sfx, |row| row.crowd && row.looped)?;
+    let used = warning_voices as usize + crowd_loops as usize + hit_reserve;
+    if used > voice_cap {
+        return Err(format!(
+            "warning voices {warning_voices} + crowd loops {crowd_loops} + hit_reserve {hit_reserve} exceed voice_cap {voice_cap}"
+        ));
+    }
     Ok(AudioTable {
         voice_cap,
+        hit_reserve,
+        warning_fade,
         crowd_radius: number("crowd_radius")? as f32,
         crowd_full_count: table
             .get("crowd_full_count")
@@ -587,7 +756,7 @@ flat = true
             let row = audio.sfx.iter().find(|row| row.id == id).unwrap();
             push(&mut events, id, row.max_instances.max(1), None, &mut n);
         }
-        let voices = super::select_voices(&audio, &events, crate::math::Vec3::ZERO);
+        let voices = super::select_voices(&audio, &events, crate::math::Vec3::ZERO, &[]).voices;
         assert!(voices.len() <= audio.voice_cap, "voices {}", voices.len());
         for row in audio.sfx.iter().filter(|row| row.is_warning) {
             assert!(voices.iter().any(|voice| voice.id == row.id), "stolen {}", row.id);
@@ -600,7 +769,7 @@ flat = true
             .filter(|event| !step_ids.contains(&event.id.as_str()))
             .cloned()
             .collect();
-        let without = super::select_voices(&audio, &quiet, crate::math::Vec3::ZERO);
+        let without = super::select_voices(&audio, &quiet, crate::math::Vec3::ZERO, &[]).voices;
         for voice in without.iter().filter(|voice| voice.priority == 70) {
             assert!(
                 voices.iter().any(|kept| kept.id == voice.id && kept.pos == voice.pos),
@@ -615,6 +784,142 @@ flat = true
         let text = include_str!("../../../content/audio_mix.toml").replace("max_voices = 6\n", "");
         let err = load_mix(&text).expect_err("missing max_voices");
         assert!(err.contains("max_voices"), "{err}");
+    }
+
+    #[test]
+    fn every_warning_at_its_cap_leaves_hit_reserve() {
+        let audio = load_mix(include_str!("../../../content/audio_mix.toml")).expect("audio mix");
+        let rows: Vec<_> = audio
+            .sfx
+            .iter()
+            .filter(|row| row.is_warning && row.id == row.row_id)
+            .collect();
+        let mut events = Vec::new();
+        let mut n = 0u32;
+        for row in &rows {
+            for instance in 0..row.max_instances {
+                events.push(super::SoundEvent {
+                    id: row.id.clone(),
+                    pos: crate::math::Vec3::new(audio.min_distance * (n as f32 + 2.0), instance as f32, 0.0),
+                    owner: n,
+                    priority: None,
+                });
+                n += 1;
+            }
+        }
+        let pick = super::select_voices(&audio, &events, crate::math::Vec3::ZERO, &[]);
+        assert!(pick.fade.is_empty());
+        let warning_sum: u32 = rows.iter().map(|row| row.max_instances).sum();
+        let heard = pick.voices.iter().filter(|voice| voice.is_warning).count();
+        assert_eq!(heard, warning_sum as usize);
+        for row in &rows {
+            let count = pick.voices.iter().filter(|voice| voice.id == row.id).count();
+            assert_eq!(count, row.max_instances as usize, "{}", row.id);
+        }
+        let free = audio.voice_cap - pick.voices.len();
+        assert!(free >= audio.hit_reserve, "free {free}");
+        let crowd = super::budget_voices(&audio.sfx, |row| row.crowd && row.looped).expect("crowd loops");
+        assert_eq!(
+            warning_sum as usize + crowd as usize + audio.hit_reserve,
+            audio.voice_cap
+        );
+    }
+
+    #[test]
+    fn a_farther_critical_warning_stays_inside_its_row() {
+        let audio = load_mix(include_str!("../../../content/audio_mix.toml")).expect("audio mix");
+        let row = audio.sfx.iter().find(|row| row.id == "spitter_charge").expect("spitter_charge");
+        assert!(row.critical && row.is_warning, "spitter_charge");
+        let playing: Vec<super::LiveVoice> = (0..row.max_instances)
+            .map(|i| super::LiveVoice {
+                id: row.id.clone(),
+                pos: crate::math::Vec3::new(audio.min_distance * (i as f32 + 2.0), 0.0, 0.0),
+            })
+            .collect();
+        let farther = super::SoundEvent {
+            id: row.id.clone(),
+            pos: crate::math::Vec3::new(audio.min_distance * (row.max_instances as f32 + 3.0), 0.0, 0.0),
+            owner: 0,
+            priority: None,
+        };
+        let pick = super::select_voices(&audio, &[farther], crate::math::Vec3::ZERO, &playing);
+        assert!(pick.voices.iter().all(|voice| voice.id != row.id));
+        assert!(pick.fade.is_empty());
+    }
+
+    #[test]
+    fn warning_budget_over_the_voice_cap_fails_to_load() {
+        let audio = load_mix(include_str!("../../../content/audio_mix.toml")).expect("audio mix");
+        let vent = audio.sfx.iter().find(|row| row.id == "vent_warn").expect("vent_warn");
+        let from = format!(
+            "[vent_warn]\nvolume_db = -3.2\npitch_rand_semitones = 0\nmax_instances = {}\n",
+            vent.max_instances
+        );
+        let to = format!(
+            "[vent_warn]\nvolume_db = -3.2\npitch_rand_semitones = 0\nmax_instances = {}\n",
+            vent.max_instances + 1
+        );
+        let text = include_str!("../../../content/audio_mix.toml").replacen(&from, &to, 1);
+        assert_ne!(text, include_str!("../../../content/audio_mix.toml"));
+        let err = load_mix(&text).expect_err("over budget");
+        assert!(err.contains("exceed voice_cap"), "{err}");
+        assert!(err.contains("hit_reserve"), "{err}");
+    }
+
+    #[test]
+    fn hit_reserve_and_warning_fade_are_required() {
+        let source = include_str!("../../../content/audio_mix.toml");
+        let missing_reserve = source
+            .lines()
+            .filter(|line| !line.starts_with("hit_reserve"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let err = load_mix(&missing_reserve).expect_err("missing hit_reserve");
+        assert!(err.contains("hit_reserve"), "{err}");
+        let missing_fade = source
+            .lines()
+            .filter(|line| !line.starts_with("warning_fade"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let err = load_mix(&missing_fade).expect_err("missing warning_fade");
+        assert!(err.contains("warning_fade"), "{err}");
+        let zero_fade = source
+            .lines()
+            .map(|line| if line.starts_with("warning_fade") { "warning_fade = 0" } else { line })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let err = load_mix(&zero_fade).expect_err("zero warning_fade");
+        assert!(err.contains("warning_fade"), "{err}");
+    }
+
+    fn stub_row(id: &str, row_id: &str, max_instances: u32) -> crate::content::SfxDef {
+        crate::content::SfxDef {
+            id: id.into(),
+            row_id: row_id.into(),
+            path: String::new(),
+            loudness: 1.0,
+            volume: 1.0,
+            crowd: false,
+            critical: false,
+            max_instances,
+            looped: false,
+            pitch_semitones: 0.0,
+            sync_at: None,
+            category_ui: false,
+            stealable: false,
+            is_warning: true,
+            flat: false,
+            priority: 100,
+            category: "enemy".into(),
+        }
+    }
+
+    #[test]
+    fn a_missing_alias_source_row_fails_the_budget() {
+        let alias = stub_row("downed", "player_downed", 2);
+        let err = super::budget_voices(&[alias], |row| row.is_warning).expect_err("missing source");
+        assert!(err.contains("alias downed"), "{err}");
+        assert!(err.contains("player_downed"), "{err}");
     }
 }
 

@@ -4742,6 +4742,10 @@ pub struct MusicFile {
 #[derive(Clone, Debug, Deserialize)]
 pub struct AudioTable {
     pub voice_cap: usize,
+    /// Slots that stay available for hits after every warning instance and every crowd loop.
+    pub hit_reserve: usize,
+    /// Seconds a replaced warning voice spends fading out.
+    pub warning_fade: f32,
     pub crowd_radius: f32,
     pub crowd_full_count: u32,
     pub min_distance: f32,
@@ -4768,6 +4772,8 @@ pub struct Footsteps {
 #[derive(Clone, Debug, Deserialize)]
 pub struct SfxDef {
     pub id: String,
+    /// Mix-table key that owns `max_instances`. Aliases share the source row.
+    pub row_id: String,
     pub path: String,
     pub loudness: f32,
     /// Playback mix. Distinct from `loudness`, which is only voice priority.
