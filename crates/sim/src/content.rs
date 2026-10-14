@@ -5373,9 +5373,11 @@ pub struct UiCopy {
     pub crates_open: String,
     pub crates_continue: String,
     pub crates_pull_again: String,
+    pub crates_retry: String,
     pub crates_show_last: String,
     pub pull_failed: String,
     pub connection_lost: String,
+    pub last_pull_confirmed: String,
     pub pull_need: String,
     pub pull_more: String,
     pub pull_have: String,
@@ -6082,6 +6084,7 @@ fn validate_ui(
         &ui.copy.crates_open,
         &ui.copy.crates_continue,
         &ui.copy.crates_pull_again,
+        &ui.copy.crates_retry,
         &ui.copy.crates_show_last,
         &ui.copy.on,
         &ui.copy.off,
@@ -6374,6 +6377,20 @@ mod ten_pull_keys {
         sources.ui = &missing_show;
         let err = Content::parse(&sources).expect_err("crates_show_last is required");
         assert!(err.contains("crates_show_last"), "{err}");
+        sources.ui = src.ui;
+
+        let missing_retry = src.ui.replace("crates_retry = \"RETRY\"\n", "");
+        assert_ne!(missing_retry, src.ui);
+        sources.ui = &missing_retry;
+        let err = Content::parse(&sources).expect_err("crates_retry is required");
+        assert!(err.contains("crates_retry"), "{err}");
+        sources.ui = src.ui;
+
+        let missing_confirmed = src.ui.replace("last_pull_confirmed = \"LAST PULL CONFIRMED\"\n", "");
+        assert_ne!(missing_confirmed, src.ui);
+        sources.ui = &missing_confirmed;
+        let err = Content::parse(&sources).expect_err("last_pull_confirmed is required");
+        assert!(err.contains("last_pull_confirmed"), "{err}");
         sources.ui = src.ui;
 
         let missing_duck = src.presentation.replace("reveal_duck_db = -12.0\n", "");

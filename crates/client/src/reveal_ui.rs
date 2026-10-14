@@ -74,6 +74,7 @@ pub(crate) struct PaintKey {
     again: bool,
     shortfall: String,
     failure: String,
+    retry: bool,
     items: Vec<String>,
 }
 
@@ -128,7 +129,7 @@ pub fn drive(
                 play_cue(&mut commands, &assets, &content, &id, bus, gen);
             }
             if run.time >= run.plan.card_at {
-                flow::mark_pull_seen(&mut prefs, &showing, in_flight);
+                note_seen_save(&mut prefs, &showing, in_flight, &mut crate_box, &mut commands, &assets);
                 if keys.just_pressed(KeyCode::Enter) {
                     next.set(AppState::Menu);
                     return;
@@ -153,7 +154,7 @@ pub fn drive(
             }
             crate_box.buttons_ready = run.finished();
             if run.finished() {
-                flow::mark_pull_seen(&mut prefs, &showing, in_flight);
+                note_seen_save(&mut prefs, &showing, in_flight, &mut crate_box, &mut commands, &assets);
             }
         }
         RevealShow::Refund(run) => {
@@ -270,8 +271,8 @@ pub fn paint(
         .ok()
         .map(|window| (window.width().max(8.0) as u32, window.height().max(8.0) as u32))
         .unwrap_or((content.ui.layout.fit_width.round() as u32, content.ui.layout.fit_height.round() as u32));
-    let owed = !prefs.pull_key.is_empty() && prefs.pull_seen_keys.iter().all(|row| row != &prefs.pull_key);
-    let afford = owed || ten_affordable(&content, crate_box.credits);
+    let retry = prefs.pull_awaiting && !prefs.pull_key.is_empty();
+    let afford = !prefs.pull_key.is_empty() || ten_affordable(&content, crate_box.credits);
     let shortfall = if afford { String::new() } else { ten_shortfall(&content, crate_box.credits) };
     let again = afford && !crate_box.pull_busy;
     let failure = crate_box.reason.clone();
@@ -292,6 +293,7 @@ pub fn paint(
         again,
         shortfall: shortfall.clone(),
         failure: failure.clone(),
+        retry,
         items: items.clone(),
     };
     if cached.as_deref() == Some(&key) {
@@ -302,9 +304,9 @@ pub fn paint(
         RevealShow::Single(_) => return,
         RevealShow::Grid(_) => {
             let faces: Vec<Option<&str>> = items.iter().map(|item| if item.is_empty() { None } else { Some(item.as_str()) }).collect();
-            paint_grid(&content, &GridStill { items: &faces, ready, again, focus: focus.0, shortfall: &shortfall, failure: &failure }, width, height)
+            paint_grid(&content, &GridStill { items: &faces, ready, again, focus: focus.0, shortfall: &shortfall, failure: &failure, retry }, width, height)
         }
-        RevealShow::Refund(_) => paint_refund(&content, &RefundStill { again, focus: focus.0, shortfall: &shortfall, failure: &failure }, width, height),
+        RevealShow::Refund(_) => paint_refund(&content, &RefundStill { again, focus: focus.0, shortfall: &shortfall, failure: &failure, retry }, width, height),
     };
     let Ok((rgb, painted_hits)) = painted else {
         hits.0.clear();
@@ -368,6 +370,14 @@ pub fn paint(
         **cached = key;
     } else {
         commands.insert_resource(key);
+    }
+}
+
+fn note_seen_save(prefs: &mut Prefs, showing: &str, in_flight: bool, crate_box: &mut flow::ServerCrate, commands: &mut Commands, assets: &AssetServer) {
+    if flow::mark_pull_seen(prefs, showing, in_flight).is_err() && crate_box.reason.is_empty() {
+        let content = Content::embedded();
+        crate_box.reason = content.ui.copy.pull_failed.clone();
+        crate::audio::ui_cue(commands, assets, &content, prefs, &content.crate_reveal.grid.pull_failed);
     }
 }
 

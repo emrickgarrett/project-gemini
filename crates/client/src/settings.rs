@@ -252,8 +252,40 @@ pub fn store(content: &Content, prefs: &Prefs) -> Result<(), String> {
         .map_err(|err| format!("settings save failed: {err:?}"))
 }
 
+#[cfg(test)]
+thread_local! {
+    static STORES_BEFORE_FAIL: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
+/// The next `successes` saves work. The one after that fails and sends nothing.
+#[cfg(test)]
+pub fn fail_stores_after(successes: u32) {
+    STORES_BEFORE_FAIL.with(|slot| slot.set(Some(successes)));
+}
+
+#[cfg(test)]
+pub fn clear_store_limit() {
+    STORES_BEFORE_FAIL.with(|slot| slot.set(None));
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn store(content: &Content, prefs: &Prefs) -> Result<(), String> {
+    #[cfg(test)]
+    {
+        let blocked = STORES_BEFORE_FAIL.with(|slot| {
+            let Some(left) = slot.get() else {
+                return false;
+            };
+            if left == 0 {
+                return true;
+            }
+            slot.set(Some(left - 1));
+            false
+        });
+        if blocked {
+            return Err("settings save blocked".into());
+        }
+    }
     save_path(&default_path(content), prefs)
 }
 

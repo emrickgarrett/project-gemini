@@ -41,21 +41,31 @@ pub(crate) fn request_bytes(banner: &str, key: &str, ten: bool) -> Result<Vec<u8
 
 #[cfg(test)]
 thread_local! {
-    static NEXT_PULL: std::cell::RefCell<Option<Result<CratePullReply, PullHostError>>> = const { std::cell::RefCell::new(None) };
+    static NEXT_PULL: std::cell::RefCell<Vec<Result<CratePullReply, PullHostError>>> = const { std::cell::RefCell::new(Vec::new()) };
     static NEXT_RAW: std::cell::RefCell<Option<Vec<u8>>> = const { std::cell::RefCell::new(None) };
-    static ON_SEND: std::cell::RefCell<Option<Box<dyn Fn()>>> = std::cell::RefCell::new(None);
+    static ON_SEND: std::cell::RefCell<Vec<Box<dyn Fn()>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// One scripted reply for the next `round_trip`. Tests use this. The host is not called.
 #[cfg(test)]
 pub(crate) fn script_next_pull(reply: Result<CratePullReply, PullHostError>) {
-    NEXT_PULL.with(|slot| *slot.borrow_mut() = Some(reply));
+    NEXT_PULL.with(|slot| {
+        slot.borrow_mut().clear();
+        slot.borrow_mut().push(reply);
+    });
+}
+
+/// Replies in order. One press that settles and then pulls consumes two.
+#[cfg(test)]
+pub(crate) fn script_pulls(replies: Vec<Result<CratePullReply, PullHostError>>) {
+    NEXT_PULL.with(|slot| *slot.borrow_mut() = replies);
 }
 
 #[cfg(test)]
 pub(crate) fn clear_scripted_pull() {
-    NEXT_PULL.with(|slot| *slot.borrow_mut() = None);
+    NEXT_PULL.with(|slot| slot.borrow_mut().clear());
     NEXT_RAW.with(|slot| *slot.borrow_mut() = None);
+    ON_SEND.with(|slot| slot.borrow_mut().clear());
 }
 
 /// Host bytes for the next `round_trip`. Decode still runs, so a bad packet is `Lost`.
@@ -67,17 +77,23 @@ pub(crate) fn script_raw_reply(bytes: Vec<u8>) {
 /// Runs at the start of the next `round_trip`, before the host is asked.
 #[cfg(test)]
 pub(crate) fn on_next_round_trip(hook: impl Fn() + 'static) {
-    ON_SEND.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    ON_SEND.with(|slot| slot.borrow_mut().push(Box::new(hook)));
 }
 
 /// Encode a pull, hand the bytes to the host, and decode the reply packet.
 pub(crate) fn round_trip(banner: &str, key: &str, ten: bool) -> Result<CratePullReply, PullHostError> {
     #[cfg(test)]
-    if let Some(hook) = ON_SEND.with(|slot| slot.borrow_mut().take()) {
+    if let Some(hook) = ON_SEND.with(|slot| {
+        let mut hooks = slot.borrow_mut();
+        if hooks.is_empty() { None } else { Some(hooks.remove(0)) }
+    }) {
         hook();
     }
     #[cfg(test)]
-    if let Some(scripted) = NEXT_PULL.with(|slot| slot.borrow_mut().take()) {
+    if let Some(scripted) = NEXT_PULL.with(|slot| {
+        let mut queue = slot.borrow_mut();
+        if queue.is_empty() { None } else { Some(queue.remove(0)) }
+    }) {
         return scripted;
     }
     let bytes = request_bytes(banner, key, ten)?;
