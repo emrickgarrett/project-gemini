@@ -610,7 +610,7 @@ pub(crate) fn apply(
                             *crate_box = landed;
                             commands.insert_resource(RevealPlayback(RevealShow::Refund(RefundRun::start(&content, ten))));
                             commands.insert_resource(reveal_ui::RevealFrom::Crates);
-                            next.set(AppState::Reveal);
+                            next.set_if_different(AppState::Reveal);
                             return;
                         }
                         if !landed.failed && !is_short(&reply.fault) {
@@ -760,7 +760,7 @@ pub(crate) fn apply(
                         *crate_box = landed;
                         commands.insert_resource(RevealPlayback(RevealShow::Refund(RefundRun::start(&content, ten))));
                         commands.insert_resource(reveal_ui::RevealFrom::Crates);
-                        next.set(AppState::Reveal);
+                        next.set_if_different(AppState::Reveal);
                     } else if short {
                         clear_pull_memory(&mut prefs);
                         *crate_box = landed;
@@ -836,7 +836,7 @@ pub(crate) fn apply(
                     Ok(run) => {
                         commands.insert_resource(RevealPlayback(RevealShow::Grid(run)));
                         commands.insert_resource(reveal_ui::RevealFrom::Crates);
-                        next.set(AppState::Reveal);
+                        next.set_if_different(AppState::Reveal);
                         audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
                     }
                     Err(message) => {
@@ -849,7 +849,7 @@ pub(crate) fn apply(
                     Ok(run) => {
                         commands.insert_resource(RevealPlayback(RevealShow::Single(run)));
                         commands.insert_resource(reveal_ui::RevealFrom::Crates);
-                        next.set(AppState::Reveal);
+                        next.set_if_different(AppState::Reveal);
                         audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
                     }
                     Err(message) => {
@@ -1029,7 +1029,7 @@ pub(crate) fn reveal_act(
                             commands.insert_resource(RevealPlayback(show));
                         }
                         commands.insert_resource(reveal_ui::RevealFrom::Crates);
-                        next.set(AppState::Reveal);
+                        next.set_if_different(AppState::Reveal);
                         if let Some(pulled_rank) = pulled_rank {
                             rank.rank = pulled_rank;
                         }
@@ -1438,7 +1438,7 @@ fn is_short(fault: &Option<CratePullFault>) -> bool {
 fn show_result(content: &Content, landed: &ServerCrate, commands: &mut Commands, next: &mut NextState<AppState>) -> Result<(), String> {
     commands.insert_resource(RevealPlayback(reveal_show(content, landed)?));
     commands.insert_resource(reveal_ui::RevealFrom::Crates);
-    next.set(AppState::Reveal);
+    next.set_if_different(AppState::Reveal);
     Ok(())
 }
 

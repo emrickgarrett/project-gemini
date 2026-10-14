@@ -993,7 +993,9 @@ mod tests {
             assert!(!text.contains("pull_key = \"\""), "the key is on disk before the host is asked: {text}");
         });
         pull_host::script_next_pull(Err(pull_host::PullHostError::Lost("timed out".into())));
-        choose(&mut app, "ten");
+        press(&mut app, "ten");
+        let leftover = pull_host::round_trip("banner", "leftover", true).unwrap_err();
+        assert_eq!(leftover.to_string(), "no crate host", "the send used the lost script");
         let key = app.world().resource::<settings::Prefs>().pull_key.clone();
         assert_eq!(key.len(), 32);
         assert!(app.world().resource::<settings::Prefs>().pull_ten);
@@ -1035,9 +1037,10 @@ mod tests {
         app.update();
         pull_host::clear_scripted_pull();
         pull_host::script_next_pull(Ok(legendary_reply(&content, false, true, 2, content.banners.dev.starting_credits)));
-        choose(&mut app, "ten");
+        press(&mut app, "ten");
         let key = app.world().resource::<settings::Prefs>().pull_key.clone();
         assert_eq!(key.len(), 32, "the key stays until the best card flips");
+        app.update();
         assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Reveal));
         play_out(&mut app);
         assert!(app.world().resource::<settings::Prefs>().pull_key.is_empty(), "the flip clears the unseen key");
@@ -1066,7 +1069,7 @@ mod tests {
         app.update();
         pull_host::clear_scripted_pull();
         pull_host::script_next_pull(Err(pull_host::PullHostError::Lost("timed out".into())));
-        choose(&mut app, "ten");
+        press(&mut app, "ten");
         assert_eq!(app.world().resource::<settings::Prefs>().pull_key.len(), 32);
         drop(app);
 
@@ -1076,7 +1079,8 @@ mod tests {
         assert!((gain - ducked).abs() < 1e-4, "the lobby theme starts under the sting duck, gain {gain}");
         pull_host::clear_scripted_pull();
         pull_host::script_next_pull(Ok(legendary_reply(&content, false, true, 2, content.banners.dev.starting_credits)));
-        choose(&mut app, "crates");
+        press(&mut app, "crates");
+        app.update();
         assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Reveal));
         let gain = app.world().resource::<audio::Music>().duck_gain;
         assert!((gain - ducked).abs() < 1e-4, "the reveal keeps the music bus, gain {gain}");
@@ -1107,7 +1111,9 @@ mod tests {
         ];
         for fault in faults {
             pull_host::script_next_pull(Err(fault));
-            choose(&mut app, "pull");
+            press(&mut app, "pull");
+            let leftover = pull_host::round_trip("banner", "check", false).unwrap_err();
+            assert_eq!(leftover.to_string(), "no crate host", "the press used the scripted fault");
         }
         let first = app.world().resource::<flow::ServerCrate>().sent_keys[0].clone();
         let sent = app.world().resource::<flow::ServerCrate>().sent_keys.clone();
@@ -1116,9 +1122,9 @@ mod tests {
         assert!(!app.world().resource::<settings::Prefs>().pull_ten, "the saved kind stays the single");
         assert!(app.world().resource::<settings::Prefs>().pull_awaiting);
         pull_host::script_next_pull(Err(pull_host::PullHostError::Lost("ten".into())));
-        choose(&mut app, "ten");
+        press(&mut app, "ten");
         pull_host::script_next_pull(Err(pull_host::PullHostError::Lost("again".into())));
-        choose(&mut app, "pull");
+        press(&mut app, "pull");
         let sent = app.world().resource::<flow::ServerCrate>().sent_keys.clone();
         assert_eq!(sent.len(), 6);
         assert!(sent.iter().all(|key| key == &first), "{sent:?}");
@@ -1771,6 +1777,13 @@ mod tests {
         // The click lands in this update. A state change is applied on the next one.
         app.update();
         app.update();
+    }
+
+    /// Runs `apply` on this thread. A scripted pull lives in a thread local, and `app.update`
+    /// runs systems on the task pool, which would miss it.
+    fn press(app: &mut App, id: &str) {
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some(id.to_string());
+        app.world_mut().run_system_once(flow::apply).unwrap();
     }
 
     fn settings_lock() -> std::sync::MutexGuard<'static, ()> {
