@@ -38,6 +38,11 @@ panel_lift = 0.03
 panel_count = 8
 vent_size = [1.4, 0.4, 1.4]
 vent_center_y = 0.2
+# Flat decal on a pending vent. Height is meters and must stay in (0, 0.05].
+vent_tell_size = [4.0, 4.0]
+vent_tell_height = 0.05
+# Scale for the vent_tell color. 1 keeps #FF8A1E under the channel clip point.
+vent_tell_emissive = 1.0
 ledge_size = [2.4, 0.62, 2.4]
 ledge_thickness = 0.12
 ledge_skirt_scale = 0.82

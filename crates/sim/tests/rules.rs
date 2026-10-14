@@ -507,7 +507,7 @@ fn mixer_caps_voices_and_keeps_the_charge_cue() {
             priority: None,
         });
     }
-    let voices = select_voices(audio, &events, Vec3::ZERO, &[]).voices;
+    let voices = select_voices(audio, &events, Vec3::ZERO, &[], &mut Vec::new()).voices;
     let crowds = voices.iter().filter(|v| v.crowd).count();
     assert_eq!(crowds, 1);
     assert!(voices.iter().any(|v| v.id == "spitter_charge" && v.critical));
@@ -519,40 +519,148 @@ fn warning_spot(min_distance: f32, index: u32) -> Vec3 {
     Vec3::new(min_distance * (index as f32 + 2.0), 0.0, 0.0)
 }
 
+fn vent_pending(content: &Content, count: u32) -> Vec<gemini_sim::sim::PendingVent> {
+    (0..count)
+        .map(|index| {
+            let vent = &content.arena.vents[index as usize];
+            gemini_sim::sim::PendingVent {
+                kind: gemini_sim::content::EnemyKind::Swarmer,
+                vent: index as u8,
+                left: vent.telegraph,
+            }
+        })
+        .collect()
+}
+
+fn assert_every_vent_tell(content: &Content, pending: &[gemini_sim::sim::PendingVent]) {
+    let tells = gemini_sim::sim::vent_tells(content, pending).expect("vent tells");
+    assert_eq!(tells.len(), pending.len());
+    for item in pending {
+        assert!(
+            tells.iter().any(|tell| tell.vent == item.vent && tell.left == item.left),
+            "vent {} tell did not run",
+            item.vent
+        );
+    }
+}
+
+#[test]
+fn four_vents_play_the_nearest_and_every_tell_runs() {
+    let content = Content::embedded();
+    let audio = &content.audio;
+    let cap = audio.sfx.iter().find(|row| row.id == "vent_warn").expect("vent_warn").max_instances;
+    let count = cap + 1;
+    assert!(content.arena.vents.len() >= count as usize, "arena vents");
+    let events: Vec<SoundEvent> = (0..count)
+        .map(|index| SoundEvent {
+            id: "vent_warn".into(),
+            pos: warning_spot(audio.min_distance, index),
+            owner: index,
+            priority: None,
+        })
+        .collect();
+    let pending = vent_pending(&content, count);
+    let pick = select_voices(audio, &events, Vec3::ZERO, &[], &mut Vec::new());
+    let played: Vec<_> = pick.voices.iter().filter(|voice| voice.id == "vent_warn").collect();
+    assert_eq!(played.len(), cap as usize);
+    assert!(pick.fade.is_empty());
+    for index in 0..cap {
+        let pos = warning_spot(audio.min_distance, index);
+        assert!(played.iter().any(|voice| voice.pos == pos), "nearest vent {index}");
+    }
+    let silent = warning_spot(audio.min_distance, cap);
+    assert!(played.iter().all(|voice| voice.pos != silent));
+    assert_every_vent_tell(&content, &pending);
+}
+
+#[test]
+fn a_farther_vent_after_a_full_row_stays_silent_and_every_tell_runs() {
+    let content = Content::embedded();
+    let audio = &content.audio;
+    let cap = audio.sfx.iter().find(|row| row.id == "vent_warn").expect("vent_warn").max_instances;
+    let count = cap + 1;
+    let playing: Vec<LiveVoice> = (0..cap)
+        .map(|index| LiveVoice {
+            id: "vent_warn".into(),
+            pos: warning_spot(audio.min_distance, index),
+            priority: audio.sfx.iter().find(|row| row.id == "vent_warn").expect("vent_warn").priority,
+            fading: false,
+        })
+        .collect();
+    let perch = audio.sfx.iter().find(|row| row.id == "perch_climb_warn").expect("perch_climb_warn");
+    let events = [
+        SoundEvent {
+            id: "vent_warn".into(),
+            pos: warning_spot(audio.min_distance, cap),
+            owner: cap,
+            priority: None,
+        },
+        SoundEvent {
+            id: perch.id.clone(),
+            pos: warning_spot(audio.min_distance, count + 1),
+            owner: count + 2,
+            priority: None,
+        },
+    ];
+    let pick = select_voices(audio, &events, Vec3::ZERO, &playing, &mut Vec::new());
+    assert!(pick.voices.iter().all(|voice| voice.id != "vent_warn"));
+    assert!(pick.voices.iter().any(|voice| voice.id == perch.id));
+    assert!(pick.fade.is_empty());
+    assert_every_vent_tell(&content, &vent_pending(&content, count));
+}
+
+#[test]
+fn a_nearer_vent_replaces_the_farthest_and_every_tell_runs() {
+    let content = Content::embedded();
+    let audio = &content.audio;
+    let cap = audio.sfx.iter().find(|row| row.id == "vent_warn").expect("vent_warn").max_instances;
+    let count = cap + 1;
+    let mut playing: Vec<LiveVoice> = (1..=cap)
+        .map(|index| LiveVoice {
+            id: "vent_warn".into(),
+            pos: warning_spot(audio.min_distance, index),
+            priority: audio.sfx.iter().find(|row| row.id == "vent_warn").expect("vent_warn").priority,
+            fading: false,
+        })
+        .collect();
+    let perch_pos = warning_spot(audio.min_distance, count + 2);
+    playing.push(LiveVoice {
+        id: "perch_climb_warn".into(),
+        pos: perch_pos,
+        priority: audio.sfx.iter().find(|row| row.id == "perch_climb_warn").expect("perch_climb_warn").priority,
+        fading: false,
+    });
+    let nearest = warning_spot(audio.min_distance, 0);
+    let farthest = warning_spot(audio.min_distance, cap);
+    let events = [SoundEvent {
+        id: "vent_warn".into(),
+        pos: nearest,
+        owner: 0,
+        priority: None,
+    }];
+    let mut waiting = Vec::new();
+    let pick = select_voices(audio, &events, Vec3::ZERO, &playing, &mut waiting);
+    assert_eq!(pick.fade.len(), 1);
+    assert_eq!(pick.fade[0].id, "vent_warn");
+    assert_eq!(pick.fade[0].pos, farthest);
+    assert!(pick.voices.iter().all(|voice| voice.id != "vent_warn"));
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].id, "vent_warn");
+    assert_eq!(waiting[0].pos, nearest);
+    assert!(pick.fade.iter().all(|voice| voice.pos != perch_pos));
+    assert_eq!(pick.warning_slots, cap as usize + 1);
+    assert_every_vent_tell(&content, &vent_pending(&content, count));
+}
+
 #[test]
 fn four_vents_are_all_heard() {
     let content = Content::embedded();
     let audio = &content.audio;
     let row = audio.sfx.iter().find(|row| row.id == "vent_warn").expect("vent_warn");
     let vents = &content.arena.vents;
-    assert!(vents.len() >= 4, "arena vents");
-    let heard_from = 4u32;
-    assert!(row.max_instances >= heard_from, "vent_warn cap {}", row.max_instances);
-    let events: Vec<SoundEvent> = (0..heard_from)
-        .map(|index| SoundEvent {
-            id: row.id.clone(),
-            pos: vents[index as usize].pos,
-            owner: index,
-            priority: None,
-        })
-        .collect();
-    let pick = select_voices(audio, &events, Vec3::ZERO, &[]);
-    let played: Vec<_> = pick.voices.iter().filter(|voice| voice.id == row.id).collect();
-    assert_eq!(played.len(), events.len());
-    for event in &events {
-        assert!(played.iter().any(|voice| voice.pos == event.pos), "silent vent");
-    }
-}
-
-#[test]
-fn nearest_wins_keeps_the_closest_instances_in_one_row() {
-    let content = Content::embedded();
-    let audio = &content.audio;
-    let row = audio.sfx.iter().find(|row| row.id == "perch_climb_warn").expect("perch_climb_warn");
+    let heard_from = vents.len() as u32;
     let cap = row.max_instances;
-    let sources = content.arena.ledges.len() as u32;
-    assert!(cap < sources, "perch cap {cap} sources {sources}");
-    let events: Vec<SoundEvent> = (0..sources)
+    let events: Vec<SoundEvent> = (0..heard_from)
         .map(|index| SoundEvent {
             id: row.id.clone(),
             pos: warning_spot(audio.min_distance, index),
@@ -560,36 +668,123 @@ fn nearest_wins_keeps_the_closest_instances_in_one_row() {
             priority: None,
         })
         .collect();
-    let pick = select_voices(audio, &events, Vec3::ZERO, &[]);
+    let pick = select_voices(audio, &events, Vec3::ZERO, &[], &mut Vec::new());
     let played: Vec<_> = pick.voices.iter().filter(|voice| voice.id == row.id).collect();
-    assert_eq!(played.len(), cap as usize);
-    assert!(pick.fade.is_empty());
-    for index in 0..cap {
+    let expect = heard_from.min(cap);
+    assert_eq!(played.len(), expect as usize);
+    for index in 0..expect {
         let pos = warning_spot(audio.min_distance, index);
-        assert!(played.iter().any(|voice| voice.pos == pos), "nearest {index}");
+        assert!(played.iter().any(|voice| voice.pos == pos), "silent vent {index}");
     }
-    let silent = warning_spot(audio.min_distance, cap);
-    assert!(played.iter().all(|voice| voice.pos != silent));
 }
 
 #[test]
-fn a_farther_warning_after_a_full_row_stays_silent() {
+fn a_fading_warning_keeps_its_row_at_its_cap() {
     let content = Content::embedded();
     let audio = &content.audio;
-    let row = audio.sfx.iter().find(|row| row.id == "perch_climb_warn").expect("perch_climb_warn");
+    let row = audio.sfx.iter().find(|row| row.id == "vent_warn").expect("vent_warn");
     let cap = row.max_instances;
+    assert!(cap >= 1);
+    let mut playing: Vec<LiveVoice> = (0..cap - 1)
+        .map(|index| LiveVoice {
+            id: row.id.clone(),
+            pos: warning_spot(audio.min_distance, index + 1),
+            priority: row.priority,
+            fading: false,
+        })
+        .collect();
+    playing.push(LiveVoice {
+        id: row.id.clone(),
+        pos: warning_spot(audio.min_distance, cap),
+        priority: row.priority,
+        fading: true,
+    });
+    let other = audio.sfx.iter().find(|row| row.id == "perch_climb_warn").expect("perch_climb_warn");
+    let events = [
+        SoundEvent {
+            id: row.id.clone(),
+            pos: warning_spot(audio.min_distance, 0),
+            owner: 0,
+            priority: None,
+        },
+        SoundEvent {
+            id: other.id.clone(),
+            pos: warning_spot(audio.min_distance, cap + 2),
+            owner: 1,
+            priority: None,
+        },
+    ];
+    let mut waiting = Vec::new();
+    let pick = select_voices(audio, &events, Vec3::ZERO, &playing, &mut waiting);
+    assert!(pick.voices.iter().all(|voice| voice.id != row.id));
+    assert!(pick.fade.is_empty());
+    assert!(pick.voices.iter().any(|voice| voice.id == other.id));
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].id, row.id);
+    assert_eq!(waiting[0].pos, warning_spot(audio.min_distance, 0));
+    assert_eq!(pick.warning_slots, cap as usize + 1);
+
+    let active: Vec<LiveVoice> = (1..=cap)
+        .map(|index| LiveVoice {
+            id: row.id.clone(),
+            pos: warning_spot(audio.min_distance, index),
+            priority: row.priority,
+            fading: false,
+        })
+        .collect();
+    let newcomers = [
+        SoundEvent {
+            id: row.id.clone(),
+            pos: warning_spot(audio.min_distance, 0),
+            owner: 0,
+            priority: None,
+        },
+        SoundEvent {
+            id: row.id.clone(),
+            pos: Vec3::new(audio.min_distance * 2.5, 0.0, 0.0),
+            owner: 1,
+            priority: None,
+        },
+    ];
+    let mut held = Vec::new();
+    let stacked = select_voices(audio, &newcomers, Vec3::ZERO, &active, &mut held);
+    let started = stacked.voices.iter().filter(|voice| voice.id == row.id).count();
+    assert_eq!(started, 0);
+    assert_eq!(stacked.fade.len(), 1);
+    assert_eq!(stacked.warning_slots, cap as usize);
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].pos, warning_spot(audio.min_distance, 0));
+}
+
+#[test]
+fn a_sounding_one_shot_counts_toward_its_cap() {
+    let content = Content::embedded();
+    let audio = &content.audio;
+    let row = audio.sfx.iter().find(|row| row.id == "fuel_regen_paused").expect("fuel_regen_paused");
+    assert!(!row.is_warning && !row.looped && !row.critical);
+    let cap = row.max_instances;
+    assert!(cap >= 1);
     let playing: Vec<LiveVoice> = (0..cap)
         .map(|index| LiveVoice {
             id: row.id.clone(),
             pos: warning_spot(audio.min_distance, index),
+            priority: row.priority,
+            fading: false,
         })
         .collect();
-    let other = audio.sfx.iter().find(|row| row.id == "vent_warn").expect("vent_warn");
+    let other = audio.sfx.iter().find(|row| row.id == "vent_burst").expect("vent_burst");
+    assert!(!other.is_warning && !other.critical);
     let events = [
         SoundEvent {
             id: row.id.clone(),
             pos: warning_spot(audio.min_distance, cap),
             owner: cap,
+            priority: None,
+        },
+        SoundEvent {
+            id: row.id.clone(),
+            pos: warning_spot(audio.min_distance, cap + 1),
+            owner: cap + 1,
             priority: None,
         },
         SoundEvent {
@@ -599,43 +794,558 @@ fn a_farther_warning_after_a_full_row_stays_silent() {
             priority: None,
         },
     ];
-    let pick = select_voices(audio, &events, Vec3::ZERO, &playing);
-    assert!(pick.voices.iter().all(|voice| voice.id != row.id));
-    assert!(pick.voices.iter().any(|voice| voice.id == other.id));
-    assert!(pick.fade.is_empty());
+    let full = select_voices(audio, &events, Vec3::ZERO, &playing, &mut Vec::new());
+    assert!(full.voices.iter().all(|voice| voice.id != row.id));
+    assert!(full.voices.iter().any(|voice| voice.id == other.id));
+    let room: Vec<LiveVoice> = (0..cap - 1)
+        .map(|index| LiveVoice {
+            id: row.id.clone(),
+            pos: warning_spot(audio.min_distance, index),
+            priority: row.priority,
+            fading: false,
+        })
+        .collect();
+    let pick = select_voices(audio, &events, Vec3::ZERO, &room, &mut Vec::new());
+    assert_eq!(pick.voices.iter().filter(|voice| voice.id == row.id).count(), 1);
 }
 
 #[test]
-fn a_nearer_warning_replaces_the_farthest_in_its_row() {
+fn a_pending_newcomer_waits_across_frames_for_its_slot() {
     let content = Content::embedded();
     let audio = &content.audio;
-    let row = audio.sfx.iter().find(|row| row.id == "perch_climb_warn").expect("perch_climb_warn");
+    let row = audio.sfx.iter().find(|row| row.id == "vent_warn").expect("vent_warn");
     let cap = row.max_instances;
+    assert!(cap >= 1);
+    let nearest = warning_spot(audio.min_distance, 0);
+    let farthest = warning_spot(audio.min_distance, cap);
     let mut playing: Vec<LiveVoice> = (1..=cap)
         .map(|index| LiveVoice {
             id: row.id.clone(),
             pos: warning_spot(audio.min_distance, index),
+            priority: row.priority,
+            fading: false,
         })
         .collect();
-    let other_pos = warning_spot(audio.min_distance, cap + 3);
-    playing.push(LiveVoice {
-        id: "vent_warn".into(),
-        pos: other_pos,
+    let mut waiting = Vec::new();
+    let opened = select_voices(
+        audio,
+        &[SoundEvent {
+            id: row.id.clone(),
+            pos: nearest,
+            owner: 0,
+            priority: None,
+        }],
+        Vec3::ZERO,
+        &playing,
+        &mut waiting,
+    );
+    assert!(opened.voices.iter().all(|voice| voice.id != row.id));
+    assert_eq!(opened.fade.len(), 1);
+    assert_eq!(opened.fade[0].pos, farthest);
+    assert_eq!(opened.warning_slots, cap as usize);
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].pos, nearest);
+
+    let victim = playing.iter_mut().find(|voice| voice.pos == farthest).expect("farthest");
+    victim.fading = true;
+    let held = select_voices(audio, &[], Vec3::ZERO, &playing, &mut waiting);
+    assert!(held.voices.iter().all(|voice| voice.id != row.id));
+    assert!(held.fade.is_empty());
+    assert_eq!(held.warning_slots, cap as usize);
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].id, row.id);
+    assert_eq!(waiting[0].pos, nearest);
+
+    playing.retain(|voice| voice.pos != farthest);
+    let started = select_voices(audio, &[], Vec3::ZERO, &playing, &mut waiting);
+    assert!(started.voices.iter().any(|voice| voice.id == row.id && voice.pos == nearest));
+    assert!(waiting.is_empty());
+    assert_eq!(started.warning_slots, cap as usize);
+}
+
+#[test]
+fn a_nearer_candidate_takes_the_pending_place() {
+    let content = Content::embedded();
+    let audio = &content.audio;
+    let row = audio.sfx.iter().find(|row| row.id == "vent_warn").expect("vent_warn");
+    let cap = row.max_instances;
+    assert!(cap >= 1);
+    let held_pos = warning_spot(audio.min_distance, 1);
+    let closest = warning_spot(audio.min_distance, 0);
+    let farther = warning_spot(audio.min_distance, cap + 2);
+    let mut playing: Vec<LiveVoice> = (2..=cap + 1)
+        .map(|index| LiveVoice {
+            id: row.id.clone(),
+            pos: warning_spot(audio.min_distance, index),
+            priority: row.priority,
+            fading: false,
+        })
+        .collect();
+    let mut waiting = Vec::new();
+    let opened = select_voices(
+        audio,
+        &[SoundEvent {
+            id: row.id.clone(),
+            pos: held_pos,
+            owner: 0,
+            priority: None,
+        }],
+        Vec3::ZERO,
+        &playing,
+        &mut waiting,
+    );
+    assert_eq!(opened.fade.len(), 1);
+    assert!(opened.voices.iter().all(|voice| voice.id != row.id));
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].pos, held_pos);
+    let victim = opened.fade[0].pos;
+    let slot = playing.iter_mut().find(|voice| voice.pos == victim).expect("victim");
+    slot.fading = true;
+
+    let contested = select_voices(
+        audio,
+        &[
+            SoundEvent {
+                id: row.id.clone(),
+                pos: closest,
+                owner: 1,
+                priority: None,
+            },
+            SoundEvent {
+                id: row.id.clone(),
+                pos: farther,
+                owner: 2,
+                priority: None,
+            },
+        ],
+        Vec3::ZERO,
+        &playing,
+        &mut waiting,
+    );
+    assert!(contested.voices.iter().all(|voice| voice.id != row.id));
+    assert!(contested.fade.is_empty());
+    assert_eq!(contested.warning_slots, cap as usize);
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].pos, closest);
+
+    let kept = select_voices(
+        audio,
+        &[SoundEvent {
+            id: row.id.clone(),
+            pos: farther,
+            owner: 3,
+            priority: None,
+        }],
+        Vec3::ZERO,
+        &playing,
+        &mut waiting,
+    );
+    assert!(kept.voices.iter().all(|voice| voice.id != row.id));
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].pos, closest);
+
+    playing.retain(|voice| voice.pos != victim);
+    let started = select_voices(audio, &[], Vec3::ZERO, &playing, &mut waiting);
+    assert!(started.voices.iter().any(|voice| voice.id == row.id && voice.pos == closest));
+    assert!(started.voices.iter().all(|voice| voice.pos != held_pos));
+    assert!(waiting.is_empty());
+    assert_eq!(started.warning_slots, cap as usize);
+}
+
+#[test]
+fn every_warning_row_replacing_at_once_stays_inside_the_voice_cap() {
+    let content = Content::embedded();
+    let audio = &content.audio;
+    let rows: Vec<_> = audio
+        .sfx
+        .iter()
+        .filter(|row| row.is_warning && row.id == row.row_id)
+        .collect();
+    assert!(!rows.is_empty());
+    let mut playing = Vec::new();
+    let mut events = Vec::new();
+    let mut cursor = 0u32;
+    for row in &rows {
+        let base = cursor;
+        for offset in 0..row.max_instances {
+            playing.push(LiveVoice {
+                id: row.id.clone(),
+                pos: warning_spot(audio.min_distance, base + offset + 1),
+                priority: row.priority,
+                fading: false,
+            });
+        }
+        events.push(SoundEvent {
+            id: row.id.clone(),
+            pos: warning_spot(audio.min_distance, base),
+            owner: base,
+            priority: None,
+        });
+        cursor += row.max_instances + 1;
+    }
+    events.push(SoundEvent {
+        id: "swarmer_crowd".into(),
+        pos: Vec3::new(0.0, 0.0, 1.0),
+        owner: 0,
+        priority: None,
     });
-    let nearest = warning_spot(audio.min_distance, 0);
-    let farthest = warning_spot(audio.min_distance, cap);
-    let events = [SoundEvent {
-        id: row.id.clone(),
-        pos: nearest,
+    let mut waiting = Vec::new();
+    let pick = select_voices(audio, &events, Vec3::ZERO, &playing, &mut waiting);
+    let warning_sum: usize = rows.iter().map(|row| row.max_instances as usize).sum();
+    let crowd = pick.voices.iter().filter(|voice| voice.crowd).count();
+    assert_eq!(crowd, 1);
+    assert_eq!(pick.warning_slots, warning_sum);
+    assert_eq!(pick.fade.len(), rows.len());
+    assert_eq!(waiting.len(), rows.len());
+    assert!(pick.voices.iter().all(|voice| !voice.is_warning));
+    assert!(crowd + pick.warning_slots <= audio.voice_cap);
+}
+
+#[test]
+fn live_one_shots_leave_no_room_past_the_voice_cap() {
+    let content = Content::embedded();
+    let audio = &content.audio;
+    let rows: Vec<_> = audio
+        .sfx
+        .iter()
+        .filter(|row| row.is_warning && row.id == row.row_id)
+        .collect();
+    let warning_sum: usize = rows.iter().map(|row| row.max_instances as usize).sum();
+    let crowd_loops = audio.sfx.iter().filter(|row| row.crowd && row.looped && row.id == row.row_id).count();
+    assert_eq!(warning_sum + crowd_loops + audio.hit_reserve, audio.voice_cap);
+    assert!(audio.hit_reserve > 0);
+    let steps: Vec<&str> = audio.footstep.rows.values().flatten().map(|id| id.as_str()).collect();
+    let live_row = audio
+        .sfx
+        .iter()
+        .find(|row| {
+            !row.is_warning
+                && !row.looped
+                && !row.critical
+                && !row.crowd
+                && row.id == row.row_id
+                && row.max_instances > 0
+                && !steps.contains(&row.id.as_str())
+        })
+        .expect("live one-shot");
+    let other = audio
+        .sfx
+        .iter()
+        .find(|row| {
+            row.id != live_row.id
+                && !row.is_warning
+                && !row.looped
+                && !row.critical
+                && !row.crowd
+                && row.id == row.row_id
+                && row.max_instances > 0
+                && !steps.contains(&row.id.as_str())
+        })
+        .expect("another one-shot");
+    let mut playing = Vec::new();
+    let mut cursor = 0u32;
+    for row in &rows {
+        for offset in 0..row.max_instances {
+            playing.push(LiveVoice {
+                id: row.id.clone(),
+                pos: warning_spot(audio.min_distance, cursor + offset),
+                priority: row.priority,
+                fading: false,
+            });
+        }
+        cursor += row.max_instances;
+    }
+    for offset in 0..audio.hit_reserve as u32 {
+        playing.push(LiveVoice {
+            id: live_row.id.clone(),
+            pos: warning_spot(audio.min_distance, cursor + offset),
+            priority: live_row.priority,
+            fading: false,
+        });
+    }
+    let mut events = vec![SoundEvent {
+        id: "swarmer_crowd".into(),
+        pos: Vec3::new(0.0, 0.0, 1.0),
         owner: 0,
         priority: None,
     }];
-    let pick = select_voices(audio, &events, Vec3::ZERO, &playing);
-    assert_eq!(pick.fade.len(), 1);
-    assert_eq!(pick.fade[0].id, row.id);
-    assert_eq!(pick.fade[0].pos, farthest);
-    assert!(pick.voices.iter().any(|voice| voice.id == row.id && voice.pos == nearest));
-    assert!(pick.fade.iter().all(|voice| voice.pos != other_pos));
+    for offset in 0..other.max_instances {
+        events.push(SoundEvent {
+            id: other.id.clone(),
+            pos: warning_spot(audio.min_distance, cursor + audio.hit_reserve as u32 + offset),
+            owner: offset,
+            priority: None,
+        });
+    }
+    let blocked = select_voices(audio, &events, Vec3::ZERO, &playing, &mut Vec::new());
+    let sounding = |pick: &gemini_sim::audio_mix::VoicePick, live: usize| {
+        let crowd = pick.voices.iter().filter(|voice| voice.crowd).count();
+        let shots = pick.voices.iter().filter(|voice| !voice.is_warning && !voice.crowd).count();
+        (crowd, shots, live + shots + crowd + pick.warning_slots)
+    };
+    let (crowd, shots, total) = sounding(&blocked, audio.hit_reserve);
+    assert_eq!(crowd, 1);
+    assert_eq!(blocked.warning_slots, warning_sum);
+    assert_eq!(shots, 0);
+    assert!(total <= audio.voice_cap);
+    assert_eq!(total, audio.voice_cap);
+
+    playing.pop();
+    let opened = select_voices(audio, &events, Vec3::ZERO, &playing, &mut Vec::new());
+    let (crowd, shots, total) = sounding(&opened, audio.hit_reserve - 1);
+    assert_eq!(crowd, 1);
+    assert_eq!(shots, 1);
+    assert_eq!(opened.voices.iter().filter(|voice| voice.id == other.id).count(), 1);
+    assert_eq!(total, audio.voice_cap);
+}
+
+#[test]
+fn a_full_cap_fades_the_lowest_priority_one_shots_for_warnings() {
+    let content = Content::embedded();
+    let audio = &content.audio;
+    let rows: Vec<_> = audio
+        .sfx
+        .iter()
+        .filter(|row| row.is_warning && row.id == row.row_id)
+        .collect();
+    let warning_sum: usize = rows.iter().map(|row| row.max_instances as usize).sum();
+    let crowd_loops = audio
+        .sfx
+        .iter()
+        .filter(|row| row.crowd && row.looped && row.id == row.row_id)
+        .count();
+    assert_eq!(warning_sum + crowd_loops + audio.hit_reserve, audio.voice_cap);
+    let live_count = audio.voice_cap - crowd_loops;
+
+    let row = |id: &str| {
+        audio
+            .sfx
+            .iter()
+            .find(|row| row.id == id)
+            .unwrap_or_else(|| panic!("missing {id}"))
+    };
+    let prop = row("beacon_pulse");
+    let step = row("step_dirt_1");
+    let step_far = row("step_dirt_2");
+    let enemy = row("vent_burst");
+    let hit_a = row("acid_impact");
+    let hit_b = row("player_hurt");
+    let hit_c = row("weakpoint_hit");
+    let bed = row("arena_01_bed");
+    let crowd_row = row("swarmer_crowd");
+    let remote = audio.footstep.remote_priority;
+    assert!(prop.priority < step.priority, "props before own steps");
+    assert_eq!(step.priority, step_far.priority);
+    assert!(step.priority < remote, "own steps before teammate steps");
+    assert!(remote < enemy.priority, "teammate steps before enemy");
+    assert!(enemy.priority < hit_a.priority, "enemy before hits");
+    assert_eq!(hit_a.priority, hit_b.priority);
+    assert_eq!(hit_a.priority, hit_c.priority);
+    assert!(prop.stealable && !prop.looped && step.stealable && enemy.stealable && hit_a.stealable);
+    assert!(bed.looped && !bed.stealable && crowd_row.looped && !crowd_row.stealable);
+
+    let mut specs: Vec<(&str, i32, f32)> = Vec::new();
+    for i in 0..4 {
+        specs.push((prop.id.as_str(), prop.priority, (i + 1) as f32));
+    }
+    for i in 0..4 {
+        specs.push((step.id.as_str(), step.priority, (i + 5) as f32));
+    }
+    for i in 0..4 {
+        specs.push((step_far.id.as_str(), remote, (i + 9) as f32));
+    }
+    for i in 0..15 {
+        specs.push((enemy.id.as_str(), enemy.priority, (i + 13) as f32));
+    }
+    let far = 50.0;
+    specs.push((hit_a.id.as_str(), hit_a.priority, far));
+    specs.push((hit_b.id.as_str(), hit_b.priority, far));
+    specs.push((hit_c.id.as_str(), hit_c.priority, 40.0));
+    specs.push((hit_a.id.as_str(), hit_a.priority, 20.0));
+    assert_eq!(specs.len(), live_count);
+
+    let survivors = [(hit_b.id.as_str(), far), (hit_c.id.as_str(), 40.0), (hit_a.id.as_str(), 20.0)];
+    let mut playing = Vec::new();
+    for (id, priority, x) in &specs {
+        playing.push(LiveVoice {
+            id: (*id).to_string(),
+            pos: Vec3::new(*x, 0.0, 0.0),
+            priority: *priority,
+            fading: false,
+        });
+    }
+    playing.push(LiveVoice {
+        id: bed.id.clone(),
+        pos: Vec3::new(0.0, 1.0, 0.0),
+        priority: bed.priority,
+        fading: false,
+    });
+    playing.push(LiveVoice {
+        id: crowd_row.id.clone(),
+        pos: Vec3::new(0.0, 2.0, 0.0),
+        priority: crowd_row.priority,
+        fading: false,
+    });
+
+    let mut events = Vec::new();
+    let mut n = 0u32;
+    for row in &rows {
+        for instance in 0..row.max_instances {
+            events.push(SoundEvent {
+                id: row.id.clone(),
+                pos: Vec3::new(audio.min_distance * (n as f32 + 2.0), instance as f32, 3.0),
+                owner: n,
+                priority: None,
+            });
+            n += 1;
+        }
+    }
+    assert_eq!(events.len(), warning_sum);
+    events.push(SoundEvent {
+        id: "swarmer_crowd".into(),
+        pos: Vec3::new(0.0, 0.0, 1.0),
+        owner: 0,
+        priority: None,
+    });
+
+    let mut waiting = Vec::new();
+    let pick = select_voices(audio, &events, Vec3::ZERO, &playing, &mut waiting);
+    assert!(pick.voices.iter().all(|voice| !voice.is_warning));
+    assert_eq!(pick.voices.iter().filter(|voice| voice.crowd).count(), 1);
+    assert_eq!(pick.warning_slots, 0);
+    assert_eq!(waiting.len(), warning_sum);
+    assert_eq!(pick.fade.len(), warning_sum);
+    assert!(pick.fade.iter().all(|voice| voice.id != bed.id && voice.id != crowd_row.id));
+    for (id, x) in survivors {
+        assert!(
+            pick.fade.iter().all(|voice| !(voice.id == id && (voice.pos.x - x).abs() < 1e-4)),
+            "kept {id} at {x}"
+        );
+    }
+    assert!(pick.fade.iter().any(|voice| voice.id == hit_a.id && (voice.pos.x - far).abs() < 1e-4));
+
+    let mut expected: Vec<&(&str, i32, f32)> = specs
+        .iter()
+        .filter(|spec| !survivors.iter().any(|(id, x)| spec.0 == *id && (spec.2 - x).abs() < 1e-4))
+        .collect();
+    expected.sort_by(|a, b| {
+        a.1.cmp(&b.1)
+            .then_with(|| b.2.total_cmp(&a.2))
+            .then_with(|| a.0.cmp(b.0))
+            .then_with(|| a.2.total_cmp(&b.2))
+    });
+    assert_eq!(pick.fade.len(), expected.len());
+    for (voice, spec) in pick.fade.iter().zip(&expected) {
+        assert_eq!(voice.id, spec.0, "tie-break");
+        assert_eq!(voice.priority, spec.1);
+        assert!((voice.pos.x - spec.2).abs() < 1e-4);
+    }
+    let started = pick.voices.iter().filter(|voice| !voice.crowd).count();
+    assert_eq!(started, 0);
+    assert_eq!(live_count + 1 + started, audio.voice_cap);
+
+    for voice in &mut playing {
+        if pick.fade.iter().any(|faded| faded.id == voice.id && faded.pos == voice.pos) {
+            voice.fading = true;
+        }
+    }
+    let crowd_event = SoundEvent {
+        id: "swarmer_crowd".into(),
+        pos: Vec3::new(0.0, 0.0, 1.0),
+        owner: 0,
+        priority: None,
+    };
+    let held = select_voices(audio, &[crowd_event.clone()], Vec3::ZERO, &playing, &mut waiting);
+    assert!(held.fade.is_empty(), "the fade already reserved for each waiting warning");
+    assert_eq!(waiting.len(), warning_sum);
+    assert_eq!(held.warning_slots, 0);
+    assert!(held.voices.iter().all(|voice| !voice.is_warning));
+
+    playing.retain(|voice| !voice.fading);
+    let started = select_voices(audio, &[crowd_event], Vec3::ZERO, &playing, &mut waiting);
+    assert!(waiting.is_empty());
+    assert_eq!(started.voices.iter().filter(|voice| voice.is_warning).count(), warning_sum);
+    let oneshots_left = playing
+        .iter()
+        .filter(|voice| voice.id != bed.id && voice.id != crowd_row.id)
+        .count();
+    let crowd_n = started.voices.iter().filter(|voice| voice.crowd).count();
+    let begun = started.voices.iter().filter(|voice| !voice.crowd).count();
+    assert_eq!(oneshots_left + crowd_n + begun, audio.voice_cap);
+}
+
+#[test]
+fn an_emitted_bug_voice_missing_from_the_mix_fails_to_load() {
+    let base = gemini_sim::content::embedded_sources();
+    let bugs = base.bugs.replacen("footstep = \"swarmer_footstep\"", "footstep = \"not_a_step\"", 1);
+    assert_ne!(bugs, base.bugs);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        bugs: &bugs,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("missing step");
+    assert!(err.contains("voice not_a_step is missing from the mix"), "{err}");
+    let empty = base.bugs.replacen("footstep = \"swarmer_footstep\"", "footstep = \"\"", 1);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        bugs: &empty,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("empty step");
+    assert!(err.contains("swarmer footstep"), "{err}");
+    assert!(err.contains("empty"), "{err}");
+}
+
+#[test]
+fn vent_tell_size_and_height_are_required() {
+    let content = Content::embedded();
+    assert!(content.palette.hex("vent_tell").is_some());
+    assert!(content.arena_scene.vent_tell_height > 0.0);
+    assert!(content.arena_scene.vent_tell_height <= 0.05);
+    let rgb = content.palette.key("vent_tell");
+    let scale = content.arena_scene.vent_tell_emissive;
+    let shown = [rgb[0] * scale, rgb[1] * scale, rgb[2] * scale];
+    let bytes = shown.map(|channel| (channel * 255.0).round() as u8);
+    assert_eq!(bytes, [255, 138, 30]);
+    let base = gemini_sim::content::embedded_sources();
+    let visual = |text: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            arena_visual: text,
+            ..sources_with(&base, base.coop)
+        })
+    };
+    let palette = |text: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            palette: text,
+            ..sources_with(&base, base.coop)
+        })
+    };
+    let missing_height = base.arena_visual.replacen("vent_tell_height = 0.05\n", "", 1);
+    assert_ne!(missing_height, base.arena_visual);
+    let err = visual(&missing_height).expect_err("missing height");
+    assert!(err.contains("vent_tell_height"), "{err}");
+    let missing_size = base.arena_visual.replacen("vent_tell_size = [4.0, 4.0]\n", "", 1);
+    assert_ne!(missing_size, base.arena_visual);
+    let err = visual(&missing_size).expect_err("missing size");
+    assert!(err.contains("vent_tell_size"), "{err}");
+    let tall = base.arena_visual.replacen("vent_tell_height = 0.05", "vent_tell_height = 0.06", 1);
+    let err = visual(&tall).expect_err("tall tell");
+    assert!(err.contains("vent_tell_height"), "{err}");
+    let flat = base.arena_visual.replacen("vent_tell_height = 0.05", "vent_tell_height = 0", 1);
+    let err = visual(&flat).expect_err("zero height");
+    assert!(err.contains("vent_tell_height"), "{err}");
+    let missing_key = base.palette.replacen("vent_tell = \"#FF8A1E\"\n", "", 1);
+    assert_ne!(missing_key, base.palette);
+    let err = palette(&missing_key).expect_err("missing vent_tell");
+    assert!(err.contains("vent_tell"), "{err}");
+    let missing_scale = base.arena_visual.replacen("vent_tell_emissive = 1.0\n", "", 1);
+    assert_ne!(missing_scale, base.arena_visual);
+    let err = visual(&missing_scale).expect_err("missing emissive");
+    assert!(err.contains("vent_tell_emissive"), "{err}");
+    let clipped = base.arena_visual.replacen("vent_tell_emissive = 1.0", "vent_tell_emissive = 3.35", 1);
+    assert_ne!(clipped, base.arena_visual);
+    let err = visual(&clipped).expect_err("clipped tell");
+    assert!(err.contains("vent_tell_emissive"), "{err}");
+    assert!(err.contains("clips"), "{err}");
 }
 
 #[test]

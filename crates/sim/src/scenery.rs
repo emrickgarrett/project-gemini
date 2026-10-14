@@ -4,6 +4,11 @@
 use crate::content::{self, Arena, BossDef, Combat, Palette, WavesFile};
 use crate::math::Vec3;
 
+/// A pending-vent tell is a ground decal. Taller than this is rejected, not clamped.
+const VENT_TELL_MAX_HEIGHT: f32 = 0.05;
+/// A painted channel above this is clipped. The vent tell is not clamped down to it.
+const VENT_TELL_CLIP: f32 = 1.0;
+
 #[derive(Clone, Debug)]
 pub struct Play {
     pub rules: SceneryRules,
@@ -92,6 +97,12 @@ pub struct ArenaScene {
     pub panel_count: u32,
     pub vent_size: [f32; 3],
     pub vent_center_y: f32,
+    /// XZ extent of the pending-vent decal, in meters.
+    pub vent_tell_size: [f32; 2],
+    /// Height of the pending-vent decal, in meters. Must stay in (0, 0.05].
+    pub vent_tell_height: f32,
+    /// Scale applied to the `vent_tell` color. The product must stay at or under `VENT_TELL_CLIP`.
+    pub vent_tell_emissive: f32,
     pub ledge_size: [f32; 3],
     pub ledge_thickness: f32,
     pub ledge_skirt_scale: f32,
@@ -427,6 +438,9 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
         panel_count: content::vis_u32(table, "panel_count", what)?,
         vent_size: content::vis_vec3(table, "vent_size", what)?,
         vent_center_y: content::vis_f32(table, "vent_center_y", what)?,
+        vent_tell_size: content::vis_vec2(table, "vent_tell_size", what)?,
+        vent_tell_height: content::vis_f32(table, "vent_tell_height", what)?,
+        vent_tell_emissive: content::vis_f32(table, "vent_tell_emissive", what)?,
         ledge_size: content::vis_vec3(table, "ledge_size", what)?,
         ledge_thickness: content::vis_f32(table, "ledge_thickness", what)?,
         ledge_skirt_scale: content::vis_f32(table, "ledge_skirt_scale", what)?,
@@ -542,6 +556,18 @@ pub fn load_scene(table: &toml::map::Map<String, toml::Value>) -> Result<ArenaSc
     if !(scene.beacon_glow_period > 0.0) {
         return Err("arena_visual.toml beacon_glow_period must be > 0".into());
     }
+    if scene.vent_tell_size.iter().any(|n| !(*n > 0.0)) {
+        return Err("arena_visual.toml vent_tell_size must be > 0".into());
+    }
+    if !(scene.vent_tell_height > 0.0) || scene.vent_tell_height > VENT_TELL_MAX_HEIGHT {
+        return Err(format!(
+            "arena_visual.toml vent_tell_height must be in (0, {VENT_TELL_MAX_HEIGHT}], got {}",
+            scene.vent_tell_height
+        ));
+    }
+    if !(scene.vent_tell_emissive > 0.0) {
+        return Err("arena_visual.toml vent_tell_emissive must be > 0".into());
+    }
     if !(scene.cover_chamfer > 0.0)
         || !(scene.trim_height > 0.0)
         || !(scene.trim_outset > 0.0)
@@ -618,6 +644,7 @@ pub fn validate(
     if (rules.mover_height - eye_height).abs() > rules.overlap_epsilon {
         return Err("arena_01 mover_height must match controller eye_height".into());
     }
+    vent_tell_color(scene, palette)?;
     let mut ranges = vec![
         ("spitter".to_string(), waves.enemies.spitter.range),
         ("swarmer".to_string(), waves.enemies.swarmer.range),
@@ -1388,6 +1415,21 @@ fn aabb_hits(a0: [f32; 2], a1: [f32; 2], b0: [f32; 2], b1: [f32; 2], epsilon: f3
         && a1[0] > b0[0] - epsilon
         && a0[1] < b1[1] + epsilon
         && a1[1] > b0[1] - epsilon
+}
+
+/// `vent_tell` times `vent_tell_emissive`. A channel past the clip point fails the load.
+fn vent_tell_color(scene: &ArenaScene, palette: &Palette) -> Result<[f32; 3], String> {
+    let rgb = rgb_of(palette, "vent_tell", "vent_tell")?;
+    let scale = scene.vent_tell_emissive;
+    let shown = [rgb[0] * scale, rgb[1] * scale, rgb[2] * scale];
+    for (name, channel) in [("r", shown[0]), ("g", shown[1]), ("b", shown[2])] {
+        if channel > VENT_TELL_CLIP {
+            return Err(format!(
+                "vent_tell {name} * vent_tell_emissive = {channel} clips past {VENT_TELL_CLIP}"
+            ));
+        }
+    }
+    Ok(shown)
 }
 
 fn rgb_of(palette: &Palette, name: &str, owner: &str) -> Result<[f32; 3], String> {

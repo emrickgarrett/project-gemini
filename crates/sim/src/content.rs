@@ -239,6 +239,7 @@ impl Content {
         )
         .map_err(|err| format!("arena scenery: {err}"))?;
         validate_arena_audio(&arena, &audio).map_err(|err| format!("audio_mix.toml: {err}"))?;
+        require_emitted_game_voices(&audio, &bugs, &bosses, &heroes, &ui)?;
         validate_stage_offset(&palette, &crate_reveal.layout)?;
         Ok(Self {
             fingerprint,
@@ -2509,6 +2510,9 @@ fn load_arena_dressing(text: &str) -> Result<(ArenaDressing, crate::scenery::Are
             "panel_count",
             "vent_size",
             "vent_center_y",
+            "vent_tell_size",
+            "vent_tell_height",
+            "vent_tell_emissive",
             "ledge_size",
             "ledge_thickness",
             "ledge_skirt_scale",
@@ -4313,6 +4317,7 @@ pub struct PaletteKeys {
     pub rubble_violet: String,
     pub crack_dark: String,
     pub vein_resin: String,
+    pub vent_tell: String,
     pub flora_stalk: String,
     pub flora_bulb: String,
     pub fog_violet: String,
@@ -4392,6 +4397,7 @@ impl Palette {
             "rubble_violet" => self.keys.rubble_violet.as_str(),
             "crack_dark" => self.keys.crack_dark.as_str(),
             "vein_resin" => self.keys.vein_resin.as_str(),
+            "vent_tell" => self.keys.vent_tell.as_str(),
             "flora_stalk" => self.keys.flora_stalk.as_str(),
             "flora_bulb" => self.keys.flora_bulb.as_str(),
             "fog_violet" => self.keys.fog_violet.as_str(),
@@ -4794,8 +4800,8 @@ pub struct SfxDef {
     pub sync_at: Option<f32>,
     /// True when the mix row's category is `ui`. Menu cues must be this category.
     pub category_ui: bool,
-    /// A full voice list may stop this one-shot to make room for a UI cue.
-    /// Looping rows are forced off when the mix loads.
+    /// A full voice list may stop this voice to make room.
+    /// UI admission only stops non-looping rows. A warning may take a stealable prop loop.
     pub stealable: bool,
     /// Telegraphs and other cues that must play out. Loading rejects a warning that is stealable.
     pub is_warning: bool,
@@ -4807,6 +4813,61 @@ pub struct SfxDef {
     /// Mix row category. `category_ui` stays the ui flag.
     #[serde(default)]
     pub category: String,
+}
+
+fn require_emitted_game_voices(
+    audio: &AudioTable,
+    bugs: &crate::bugs::BugBook,
+    bosses: &[BossDef],
+    heroes: &[HeroCard],
+    ui: &Ui,
+) -> Result<(), String> {
+    let mut ids = Vec::new();
+    let mut push = |what: &str, id: &str| -> Result<(), String> {
+        if id.is_empty() {
+            return Err(format!("{what} voice id is empty"));
+        }
+        ids.push(id.to_string());
+        Ok(())
+    };
+    for (name, row) in bugs.rows() {
+        push(&format!("{name} footstep"), &row.audio.footstep)?;
+    }
+    let spitter = bugs.of(EnemyKind::Spitter);
+    push("spitter charge", &spitter.audio.charge)?;
+    push("spitter fire", &spitter.audio.fire)?;
+    push("spitter sac_pop", &spitter.audio.sac_pop)?;
+    let brute = bugs.of(EnemyKind::Brute);
+    push("brute attack", &brute.audio.attack)?;
+    push("brute shell_open", &brute.audio.shell_open)?;
+    push("brood_mother attack", &bugs.of(EnemyKind::BroodMother).audio.attack)?;
+    push("hive_tyrant attack", &bugs.of(EnemyKind::HiveTyrant).audio.attack)?;
+    push("weakpoint_hit", &bugs.feedback.weakpoint_hit)?;
+    for hero in heroes {
+        for suffix in ["fire", "reload", "ability", "ability_end"] {
+            push(&format!("{} {suffix}", hero.id), &format!("{}_{suffix}", hero.id))?;
+        }
+    }
+    for boss in bosses {
+        for (field, sfx) in [
+            ("intro_sfx", &boss.intro_sfx),
+            ("death_sfx", &boss.death_sfx),
+            ("fizzle_sfx", &boss.fizzle_sfx),
+            ("charge_sfx", &boss.charge_sfx),
+            ("hatch_sfx", &boss.hatch_sfx),
+            ("acid_sfx", &boss.acid_sfx),
+            ("scythe_sfx", &boss.scythe_sfx),
+        ] {
+            if sfx.is_empty() {
+                continue;
+            }
+            push(&format!("{} {field}", boss.id), sfx)?;
+        }
+    }
+    for (slot, id) in ui.sounds.ids() {
+        push(&format!("ui {slot}"), id)?;
+    }
+    crate::audio_mix::require_emitted_voices(audio, &ids)
 }
 
 fn validate_arena_audio(arena: &Arena, audio: &AudioTable) -> Result<(), String> {
@@ -4863,8 +4924,10 @@ fn validate_arena_audio(arena: &Arena, audio: &AudioTable) -> Result<(), String>
             .iter()
             .find(|row| row.id == id)
             .ok_or_else(|| format!("{id} is missing"))?;
-        if !row.looped || row.category != "prop" || row.flat || row.max_instances == 0 {
-            return Err(format!("{id} must be a spatial prop loop with max_instances > 0"));
+        if !row.looped || row.category != "prop" || row.flat || row.max_instances == 0 || !row.stealable {
+            return Err(format!(
+                "{id} must be a stealable spatial prop loop with max_instances > 0"
+            ));
         }
     }
     let pulse = audio

@@ -1085,7 +1085,11 @@ fn paint_scenery(
         let ib = tri[1] as usize;
         let ic = tri[2] as usize;
         let normal = mesh.normals[ia];
-        let shade = scenery_shade(content, normal, piece.glow);
+        let shade = if piece.role == "vent_tell" {
+            content.arena_scene.vent_tell_emissive
+        } else {
+            scenery_shade(content, normal, piece.glow)
+        };
         let rgb = [albedo[0] * shade, albedo[1] * shade, albedo[2] * shade];
         let Some(a) = project(mesh.positions[ia], cam.eye, cam.right, cam.up, cam.forward, cam.focal, cam.aspect, cam.w, cam.h) else {
             continue;
@@ -1142,6 +1146,32 @@ fn fog_arena(color: &mut [u8], depth: &[f32], content: &gemini_sim::content::Con
 
 /// Arena only, from an authored eye. Used for the before/after review stills.
 pub fn raster_arena(eye: [f32; 3], look: [f32; 3], fov_deg: f32, width: u32, height: u32) -> Vec<u8> {
+    raster_arena_pieces(eye, look, fov_deg, width, height, &[])
+}
+
+/// Arena plus a flat decal on each pending vent index.
+pub fn raster_vent_tells(
+    pending: &[u8],
+    eye: [f32; 3],
+    look: [f32; 3],
+    fov_deg: f32,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    use gemini_sim::content::Content;
+    let content = Content::embedded();
+    let tells = crate::arena::vent_tell_pieces(&content, pending);
+    raster_arena_pieces(eye, look, fov_deg, width, height, &tells)
+}
+
+fn raster_arena_pieces(
+    eye: [f32; 3],
+    look: [f32; 3],
+    fov_deg: f32,
+    width: u32,
+    height: u32,
+    extras: &[crate::ArenaPiece],
+) -> Vec<u8> {
     use gemini_sim::content::Content;
     let content = Content::embedded();
     let sky = content.palette.key(&content.arena_scene.light.sky_color);
@@ -1173,6 +1203,9 @@ pub fn raster_arena(eye: [f32; 3], look: [f32; 3], fov_deg: f32, width: u32, hei
     let shadows = ShadowWorld::build(&content);
     for piece in crate::arena_pieces(&content) {
         paint_scenery(&mut color, &mut depth, &piece, &palette, &cam, &content, &shadows);
+    }
+    for piece in extras {
+        paint_scenery(&mut color, &mut depth, piece, &palette, &cam, &content, &shadows);
     }
     fog_arena(&mut color, &depth, &content);
     color

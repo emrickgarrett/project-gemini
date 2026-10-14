@@ -174,6 +174,34 @@ fn mat<'a>(materials: &'a [SceneMaterial], id: &str) -> &'a SceneMaterial {
         .unwrap_or_else(|| panic!("missing scenery material {id}"))
 }
 
+/// Flat decal for each pending vent index. Height comes from `vent_tell_height`.
+pub fn vent_tell_pieces(content: &Content, pending: &[u8]) -> Vec<ArenaPiece> {
+    let scene = &content.arena_scene;
+    let height = scene.vent_tell_height;
+    let span = scene.vent_tell_size;
+    let size = [span[0], height, span[1]];
+    pending
+        .iter()
+        .map(|index| {
+            let vent = content.arena.vents.get(*index as usize).unwrap_or_else(|| {
+                panic!("pending vent {index} has no arena vent")
+            });
+            let mut mesh = MeshData::new();
+            geom::box_mesh(&mut mesh, [vent.pos.x, height * 0.5, vent.pos.z], size, INK);
+            ArenaPiece {
+                mesh,
+                palette: "vent_tell".into(),
+                glow: true,
+                lit: false,
+                roughness: 1.0,
+                metallic: 0.0,
+                bloom: false,
+                role: "vent_tell",
+            }
+        })
+        .collect()
+}
+
 fn piece(mesh: MeshData, material: &SceneMaterial) -> ArenaPiece {
     tagged(mesh, material, "scenery")
 }
@@ -1079,4 +1107,40 @@ fn ramp_wedge(from: [f32; 2], to: [f32; 2], width: f32, height: f32) -> MeshData
     geom::add_face(&mut mesh, a0, a1, a0g, INK);
     geom::add_face(&mut mesh, b0, b0g, b1, INK);
     mesh
+}
+
+#[cfg(test)]
+mod tests {
+    use super::vent_tell_pieces;
+    use gemini_sim::content::Content;
+
+    #[test]
+    fn vent_tell_sits_on_the_ground_using_its_palette_key() {
+        let content = Content::embedded();
+        let pieces = vent_tell_pieces(&content, &[0, 1, 2, 3]);
+        assert_eq!(pieces.len(), 4);
+        let height = content.arena_scene.vent_tell_height;
+        let span = content.arena_scene.vent_tell_size;
+        for (index, piece) in pieces.iter().enumerate() {
+            assert_eq!(piece.palette, "vent_tell");
+            assert!(piece.glow);
+            assert!(!piece.bloom);
+            let vent = &content.arena.vents[index];
+            let mut min_y = f32::MAX;
+            let mut max_y = f32::MIN;
+            let mut min_x = f32::MAX;
+            let mut max_x = f32::MIN;
+            for p in &piece.mesh.positions {
+                min_y = min_y.min(p[1]);
+                max_y = max_y.max(p[1]);
+                min_x = min_x.min(p[0]);
+                max_x = max_x.max(p[0]);
+            }
+            assert!((min_y - 0.0).abs() < 1e-4, "{min_y}");
+            assert!((max_y - height).abs() < 1e-4, "{max_y}");
+            assert!((max_x - min_x - span[0]).abs() < 1e-3);
+            assert!((piece.mesh.positions[0][0] - vent.pos.x).abs() < span[0]);
+        }
+        assert!(content.palette.hex("vent_tell").is_some());
+    }
 }

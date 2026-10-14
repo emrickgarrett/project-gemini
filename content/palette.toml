@@ -114,6 +114,8 @@ beacon_cyan = "#123E3C"
 rubble_violet = "#272429"
 crack_dark = "#181719"
 vein_resin = "#1C2C20"
+# Pending-vent decal. Not a scenery albedo.
+vent_tell = "#FF8A1E"
 flora_stalk = "#1B2A26"
 flora_bulb = "#193329"
 fog_violet = "#3A3642"

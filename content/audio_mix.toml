@@ -6,11 +6,17 @@ crowd_radius = 30.0
 crowd_full_count = 18
 min_distance = 0.5
 hit_reserve = 3
-# Seconds a replaced warning voice fades out. Nearest-wins stays inside one warning row.
+# Seconds a replaced warning voice fades out. The newcomer waits for that fade
+# to free the row slot. Nearest-wins stays inside one warning row.
+# A warning that needs a voice when none are free fades the lowest-priority
+# stealable voice (then the farthest, then the voice id) and waits the same way.
+# Stealable prop loops count in the live cap and can be taken. The bed and the
+# crowd loop are not stealable, so they are never that voice.
+# The crowd loop is reserved every frame, whether or not swarmers are near.
 warning_fade = 0.030
 critical = ["spitter_charge", "player_downed", "wave_start", "brood_roar", "tyrant_roar"]
 
-# Sim event ids that name a file. Unlisted events stay silent.
+# Sim event ids that name a file. An id the game can emit must be a row or an alias.
 [alias]
 hit = "acid_impact"
 hurt = "player_hurt"
@@ -1158,7 +1164,7 @@ sync_at = 3.0
 [vent_warn]
 volume_db = -3.2
 pitch_rand_semitones = 0
-max_instances = 4
+max_instances = 3
 loop = false
 category = "enemy"
 priority = 100
@@ -1192,7 +1198,7 @@ measured_rms_db = -14.0
 [perch_climb_warn]
 volume_db = -2.4
 pitch_rand_semitones = 0
-max_instances = 3
+max_instances = 4
 loop = false
 category = "enemy"
 priority = 100

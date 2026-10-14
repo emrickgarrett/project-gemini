@@ -47,6 +47,8 @@ pub(crate) struct ArenaAudio {
     travel: BTreeMap<u32, f32>,
     variant: BTreeMap<u32, u32>,
     beacon_cycle: i64,
+    /// Warning newcomers waiting for a fade to free their row slot.
+    waiting: Vec<Voice>,
 }
 
 #[derive(Component)]
@@ -167,6 +169,8 @@ pub(crate) struct OneShot {
     /// Linear volume before a co-op pause duck. Solo pause pauses the sink instead.
     gain: f32,
     pos: SimVec,
+    /// Content priority this voice was played at, including a teammate step's remote priority.
+    priority: i32,
     /// Seconds left on a warning replacement fade. Zero means this voice is not fading.
     fade_left: f32,
     fade_dur: f32,
@@ -235,6 +239,7 @@ pub fn boot(mut commands: Commands, assets: Res<AssetServer>, game: Res<Game>) {
         travel: BTreeMap::new(),
         variant: BTreeMap::new(),
         beacon_cycle: (game.sim.time / period).floor() as i64,
+        waiting: Vec::new(),
     });
     commands.insert_resource(music);
     commands.insert_resource(Crowd::default());
@@ -253,7 +258,7 @@ pub fn play(
     prefs: Res<Prefs>,
     hold: Res<PauseMenu>,
     mut arena_audio: ResMut<ArenaAudio>,
-    mut prop_loops: Query<(Entity, &PropLoop, &mut OneShot)>,
+    mut prop_loops: Query<(Entity, &PropLoop, &mut OneShot, Option<&mut AudioSink>)>,
 ) {
     let hud = &game.content.presentation.hud.away;
     let mix = away_mix(away.view.look, hud.music_duck_db, hud.music_duck_lowpass_hz);
@@ -290,30 +295,61 @@ pub fn play(
             sink.set_volume(Volume::Linear(volume));
         }
     }
+    for (entity, _, mut shot, mut sink) in &mut prop_loops {
+        if !(shot.fade_dur > 0.0) {
+            continue;
+        }
+        shot.fade_left -= dt;
+        if !(shot.fade_left > 0.0) {
+            finished.push(entity);
+            continue;
+        }
+        let volume = warning_fade_gain(shot.gain, shot.fade_left, shot.fade_dur);
+        if let Some(sink) = sink.as_mut() {
+            sink.set_volume(Volume::Linear(volume));
+        }
+    }
     for entity in finished {
         commands.entity(entity).despawn();
     }
-    let playing: Vec<LiveVoice> = shots
+    let mut playing: Vec<LiveVoice> = shots
         .iter()
         .filter_map(|(_, shot, _)| {
-            if shot.fade_dur > 0.0 {
-                return None;
-            }
             let def = game.content.sfx(&shot.id)?;
-            if !def.is_warning {
+            if def.looped {
                 return None;
             }
             Some(LiveVoice {
                 id: shot.id.clone(),
                 pos: shot.pos,
+                priority: shot.priority,
+                fading: shot.fade_dur > 0.0,
             })
         })
         .collect();
+    for (_, _, shot, _) in &prop_loops {
+        playing.push(LiveVoice {
+            id: shot.id.clone(),
+            pos: shot.pos,
+            priority: shot.priority,
+            fading: shot.fade_dur > 0.0,
+        });
+    }
     let mut events = fx.sounds.clone();
     events.extend(arena_cues(&mut arena_audio, &game));
-    let pick = select_voices(&game.content.audio, &events, listener, &playing);
+    let pick = select_voices(&game.content.audio, &events, listener, &playing, &mut arena_audio.waiting);
     for faded in &pick.fade {
         for (_, mut shot, mut sink) in &mut shots {
+            if shot.fade_dur > 0.0 || shot.id != faded.id || shot.pos != faded.pos {
+                continue;
+            }
+            begin_warning_fade(&mut shot, game.content.audio.warning_fade);
+            if let Some(sink) = sink.as_mut() {
+                sink.set_volume(Volume::Linear(shot.gain));
+            }
+            break;
+        }
+        for (_, _, mut shot, mut sink) in &mut prop_loops {
             if shot.fade_dur > 0.0 || shot.id != faded.id || shot.pos != faded.pos {
                 continue;
             }
@@ -370,6 +406,7 @@ pub fn play(
                     order: next_voice_order(),
                     gain: full,
                     pos: voice.pos,
+                    priority: voice.priority,
                     fade_left: 0.0,
                     fade_dur: 0.0,
                 },
@@ -501,6 +538,7 @@ pub fn flush_ui_cues(
                 order: next_voice_order(),
                 gain: def.volume * bus_gain(&prefs, false),
                 pos: SimVec::ZERO,
+                priority: def.priority,
                 fade_left: 0.0,
                 fade_dur: 0.0,
             },
@@ -1143,6 +1181,7 @@ fn footstep_cues(state: &mut ArenaAudio, game: &Game) -> Vec<SoundEvent> {
         // Catching up would burst steps and beacon pulses, so the clocks restart.
         state.travel.clear();
         state.variant.clear();
+        state.waiting.clear();
         let period = game.content.arena_scene.beacon_glow_period;
         if !(period > 0.0) {
             panic!("beacon_glow_period must be > 0");
@@ -1258,7 +1297,7 @@ fn sync_prop_loops(
     time: f32,
     listener: SimVec,
     selected: &[Voice],
-    existing: &mut Query<(Entity, &PropLoop, &mut OneShot)>,
+    existing: &mut Query<(Entity, &PropLoop, &mut OneShot, Option<&mut AudioSink>)>,
 ) {
     let mut wanted: Vec<Voice> = selected
         .iter()
@@ -1269,7 +1308,7 @@ fn sync_prop_loops(
         })
         .cloned()
         .collect();
-    for (entity, prop, mut shot) in existing.iter_mut() {
+    for (entity, prop, mut shot, _) in existing.iter_mut() {
         let slot = wanted
             .iter()
             .position(|voice| voice.id == prop.id && voice.pos == prop.pos);
@@ -1286,7 +1325,7 @@ fn sync_prop_loops(
             };
             shot.gain = def.volume * atten * bus_gain(prefs, false);
             wanted.remove(index);
-        } else {
+        } else if !(shot.fade_dur > 0.0) {
             commands.entity(entity).despawn();
         }
     }
@@ -1318,6 +1357,7 @@ fn sync_prop_loops(
                 order: next_voice_order(),
                 gain: full,
                 pos: voice.pos,
+                priority: voice.priority,
                 fade_left: 0.0,
                 fade_dur: 0.0,
             },
@@ -1482,7 +1522,7 @@ mod tests {
             assert!(!stolen.stop.contains(index), "protected {}", playing[*index].id);
             let row = content.sfx(&playing[*index].id).unwrap();
             assert!(row.is_warning || row.looped);
-            assert!(!row.stealable);
+            assert!(!row.stealable || row.looped);
         }
         assert_eq!(playing.len() - stolen.stop.len() + stolen.play.len(), voice_cap);
 
@@ -1553,16 +1593,28 @@ mod tests {
             pending_pick: None,
         };
         let cycle = (game.sim.time / period).floor() as i64;
+        let warn = game.content.sfx("vent_warn").expect("vent_warn");
         let mut state = super::ArenaAudio {
             last_time: game.sim.time + period,
             travel: std::collections::BTreeMap::from([(player, stride)]),
             variant: std::collections::BTreeMap::from([(player, 1)]),
             beacon_cycle: cycle + 1,
+            waiting: vec![gemini_sim::audio_mix::Voice {
+                id: warn.id.clone(),
+                score: warn.loudness,
+                critical: warn.critical,
+                crowd: warn.crowd,
+                gain: warn.volume,
+                pos: gemini_sim::math::Vec3::ZERO,
+                priority: warn.priority,
+                is_warning: warn.is_warning,
+            }],
         };
         let events = super::arena_cues(&mut state, &game);
         assert_eq!(state.last_time, game.sim.time);
         assert!(state.travel.is_empty());
         assert!(state.variant.is_empty());
+        assert!(state.waiting.is_empty());
         assert_eq!(state.beacon_cycle, cycle);
         assert!(events.iter().all(|event| !event.id.starts_with("step_")));
         assert!(events.iter().all(|event| event.id != "beacon_pulse"));
@@ -1579,6 +1631,7 @@ mod tests {
             order: 0,
             gain: content.audio.warning_fade,
             pos: gemini_sim::math::Vec3::ZERO,
+            priority: content.sfx("vent_warn").expect("vent_warn").priority,
             fade_left: 0.0,
             fade_dur: 0.0,
         };

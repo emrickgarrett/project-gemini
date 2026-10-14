@@ -1018,6 +1018,70 @@ fn rgba(content: &gemini_sim::content::Content, key: &str) -> Rgba {
     Rgba(content.palette.key(key))
 }
 
+#[derive(Component)]
+pub(crate) struct VentTellMesh {
+    index: u8,
+}
+
+/// One flat decal per vent that has a pending telegraph. The voice list is not an input.
+/// The mesh and material are built once and reused for every vent.
+pub fn sync_vent_tells(
+    mut commands: Commands,
+    game: Res<Game>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut shared: Local<Option<(Handle<Mesh>, Handle<StandardMaterial>)>>,
+    glows: Query<(Entity, &VentTellMesh)>,
+) {
+    let tells = gemini_sim::sim::vent_tells(&game.content, &game.sim.pending_vents)
+        .unwrap_or_else(|err| panic!("{err}"));
+    let mut wanted = Vec::new();
+    for tell in &tells {
+        if !wanted.contains(&tell.vent) {
+            wanted.push(tell.vent);
+        }
+    }
+    for (entity, glow) in &glows {
+        if !wanted.contains(&glow.index) {
+            commands.entity(entity).despawn();
+        }
+    }
+    if wanted.is_empty() {
+        return;
+    }
+    if shared.is_none() {
+        let scene = &game.content.arena_scene;
+        let height = scene.vent_tell_height;
+        let span = scene.vent_tell_size;
+        let mesh = upload(
+            &mut meshes,
+            &box_at([0.0, height * 0.5, 0.0], [span[0], height, span[1]]),
+        );
+        let rgb = game.content.palette.key("vent_tell");
+        let scale = scene.vent_tell_emissive;
+        let material = materials.add(StandardMaterial {
+            base_color: Color::srgb(rgb[0] * scale, rgb[1] * scale, rgb[2] * scale),
+            unlit: true,
+            ..default()
+        });
+        *shared = Some((mesh, material));
+    }
+    let (mesh, material) = shared.clone().expect("vent tell mesh");
+    for index in wanted {
+        if glows.iter().any(|(_, glow)| glow.index == index) {
+            continue;
+        }
+        let tell = tells.iter().find(|tell| tell.vent == index).expect("vent tell");
+        commands.spawn((
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_xyz(tell.pos.x, 0.0, tell.pos.z),
+            VentTellMesh { index },
+            PlayPiece,
+        ));
+    }
+}
+
 fn box_at(center: [f32; 3], size: [f32; 3]) -> MeshData {
     let mut mesh = MeshData::new();
     // Local box; caller places it with a transform when center is baked in.
