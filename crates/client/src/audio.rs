@@ -296,16 +296,14 @@ pub fn play(
     let playing: Vec<LiveVoice> = shots
         .iter()
         .filter_map(|(_, shot, _)| {
-            if shot.fade_dur > 0.0 {
-                return None;
-            }
             let def = game.content.sfx(&shot.id)?;
-            if !def.is_warning {
+            if def.looped {
                 return None;
             }
             Some(LiveVoice {
                 id: shot.id.clone(),
                 pos: shot.pos,
+                fading: def.is_warning && shot.fade_dur > 0.0,
             })
         })
         .collect();

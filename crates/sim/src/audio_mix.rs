@@ -25,11 +25,14 @@ pub struct Voice {
     pub is_warning: bool,
 }
 
-/// A warning voice that is already sounding. Nearest-wins compares newcomers to these.
+/// A voice that is already sounding. Warnings use this for nearest-wins.
+/// One-shots use it so `max_instances` counts what is already in the air.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LiveVoice {
     pub id: String,
     pub pos: Vec3,
+    /// A warning fading out still holds its row slot until the fade ends.
+    pub fading: bool,
 }
 
 /// New voices to start, and warning voices already playing that should fade out.
@@ -37,6 +40,8 @@ pub struct LiveVoice {
 pub struct VoicePick {
     pub voices: Vec<Voice>,
     pub fade: Vec<LiveVoice>,
+    /// Warning voices that will be sounding after this pick, including fades.
+    pub warning_slots: usize,
 }
 
 pub fn select_voices(
@@ -112,8 +117,8 @@ pub fn select_voices(
     let sorted = shots;
     let (warnings, fade, warning_slots) = admit_warnings(audio, &sorted, playing, listener);
     let others: Vec<Voice> = sorted.iter().filter(|voice| !voice.is_warning).cloned().collect();
-    let capped = cap_instances(audio, others);
-    let mut step_count = 0u32;
+    let capped = cap_instances(audio, others, playing);
+    let mut step_count = playing.iter().filter(|voice| is_player_step(audio, &voice.id)).count() as u32;
     let rest: Vec<Voice> = capped
         .into_iter()
         .filter(|voice| {
@@ -144,7 +149,11 @@ pub fn select_voices(
             voices.push(crit);
         }
     }
-    VoicePick { voices, fade }
+    VoicePick {
+        voices,
+        fade,
+        warning_slots,
+    }
 }
 
 /// Nearest-wins inside one warning row. A row never reads another row's slots.
@@ -159,7 +168,7 @@ fn admit_warnings(
         let row = row_id(audio, &voice.id);
         fresh.entry(row).or_default().push(voice.clone());
     }
-    let mut live: std::collections::BTreeMap<String, Vec<(LiveVoice, f32)>> = std::collections::BTreeMap::new();
+    let mut live: std::collections::BTreeMap<String, Vec<(LiveVoice, f32, bool)>> = std::collections::BTreeMap::new();
     for voice in playing {
         let def = audio
             .sfx
@@ -172,7 +181,7 @@ fn admit_warnings(
         let score = score_of(audio, def, voice.pos, listener);
         live.entry(def.row_id.clone())
             .or_default()
-            .push((voice.clone(), score));
+            .push((voice.clone(), score, voice.fading));
     }
     let mut rows: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     rows.extend(fresh.keys().cloned());
@@ -206,30 +215,41 @@ fn admit_warnings(
                     LiveVoice {
                         id: voice.id.clone(),
                         pos: voice.pos,
+                        fading: false,
                     },
                     voice.score,
+                    false,
                 ));
                 play.push(voice);
                 continue;
             }
-            let far = occupied
+            // A fade still holds its slot, so another start would put the row over its cap.
+            if occupied.iter().any(|item| item.2) {
+                continue;
+            }
+            let far_at = occupied
                 .iter()
                 .enumerate()
                 .min_by(|(_, a), (_, b)| a.1.total_cmp(&b.1).then_with(|| a.0.pos.x.total_cmp(&b.0.pos.x)))
+                .map(|(index, _)| index)
                 .expect("a full warning row has a farthest voice");
-            let far_at = far.0;
-            if voice.score.total_cmp(&occupied[far_at].1) == std::cmp::Ordering::Greater {
-                fade.push(occupied[far_at].0.clone());
-                occupied.remove(far_at);
-                occupied.push((
-                    LiveVoice {
-                        id: voice.id.clone(),
-                        pos: voice.pos,
-                    },
-                    voice.score,
-                ));
-                play.push(voice);
+            if voice.score.total_cmp(&occupied[far_at].1) != std::cmp::Ordering::Greater {
+                continue;
             }
+            let (mut victim, victim_score, _) = occupied.remove(far_at);
+            victim.fading = true;
+            fade.push(victim.clone());
+            occupied.push((victim, victim_score, true));
+            occupied.push((
+                LiveVoice {
+                    id: voice.id.clone(),
+                    pos: voice.pos,
+                    fading: false,
+                },
+                voice.score,
+                false,
+            ));
+            play.push(voice);
         }
         slots += occupied.len();
     }
@@ -269,8 +289,19 @@ fn is_player_step(audio: &AudioTable, id: &str) -> bool {
         .any(|ids| ids.iter().any(|row| row == id))
 }
 
-fn cap_instances(audio: &AudioTable, voices: Vec<Voice>) -> Vec<Voice> {
+fn cap_instances(audio: &AudioTable, voices: Vec<Voice>, playing: &[LiveVoice]) -> Vec<Voice> {
     let mut counts: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
+    for live in playing {
+        let def = audio
+            .sfx
+            .iter()
+            .find(|row| row.id == live.id)
+            .unwrap_or_else(|| panic!("playing voice {} is not in the mix", live.id));
+        if def.is_warning || def.looped {
+            continue;
+        }
+        *counts.entry(live.id.clone()).or_insert(0) += 1;
+    }
     let mut kept = Vec::new();
     for voice in voices {
         let cap = audio
@@ -834,6 +865,7 @@ flat = true
             .map(|i| super::LiveVoice {
                 id: row.id.clone(),
                 pos: crate::math::Vec3::new(audio.min_distance * (i as f32 + 2.0), 0.0, 0.0),
+                fading: false,
             })
             .collect();
         let farther = super::SoundEvent {

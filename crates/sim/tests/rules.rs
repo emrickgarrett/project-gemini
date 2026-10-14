@@ -583,6 +583,7 @@ fn a_farther_vent_after_a_full_row_stays_silent_and_every_tell_runs() {
         .map(|index| LiveVoice {
             id: "vent_warn".into(),
             pos: warning_spot(audio.min_distance, index),
+            fading: false,
         })
         .collect();
     let perch = audio.sfx.iter().find(|row| row.id == "perch_climb_warn").expect("perch_climb_warn");
@@ -617,12 +618,14 @@ fn a_nearer_vent_replaces_the_farthest_and_every_tell_runs() {
         .map(|index| LiveVoice {
             id: "vent_warn".into(),
             pos: warning_spot(audio.min_distance, index),
+            fading: false,
         })
         .collect();
     let perch_pos = warning_spot(audio.min_distance, count + 2);
     playing.push(LiveVoice {
         id: "perch_climb_warn".into(),
         pos: perch_pos,
+        fading: false,
     });
     let nearest = warning_spot(audio.min_distance, 0);
     let farthest = warning_spot(audio.min_distance, cap);
@@ -638,7 +641,153 @@ fn a_nearer_vent_replaces_the_farthest_and_every_tell_runs() {
     assert_eq!(pick.fade[0].pos, farthest);
     assert!(pick.voices.iter().any(|voice| voice.id == "vent_warn" && voice.pos == nearest));
     assert!(pick.fade.iter().all(|voice| voice.pos != perch_pos));
+    assert_eq!(pick.warning_slots, cap as usize + 2);
     assert_every_vent_tell(&content, &vent_pending(&content, count));
+}
+
+#[test]
+fn four_vents_are_all_heard() {
+    let content = Content::embedded();
+    let audio = &content.audio;
+    let row = audio.sfx.iter().find(|row| row.id == "vent_warn").expect("vent_warn");
+    let vents = &content.arena.vents;
+    let heard_from = vents.len() as u32;
+    let cap = row.max_instances;
+    let events: Vec<SoundEvent> = (0..heard_from)
+        .map(|index| SoundEvent {
+            id: row.id.clone(),
+            pos: warning_spot(audio.min_distance, index),
+            owner: index,
+            priority: None,
+        })
+        .collect();
+    let pick = select_voices(audio, &events, Vec3::ZERO, &[]);
+    let played: Vec<_> = pick.voices.iter().filter(|voice| voice.id == row.id).collect();
+    let expect = heard_from.min(cap);
+    assert_eq!(played.len(), expect as usize);
+    for index in 0..expect {
+        let pos = warning_spot(audio.min_distance, index);
+        assert!(played.iter().any(|voice| voice.pos == pos), "silent vent {index}");
+    }
+}
+
+#[test]
+fn a_fading_warning_keeps_its_row_at_its_cap() {
+    let content = Content::embedded();
+    let audio = &content.audio;
+    let row = audio.sfx.iter().find(|row| row.id == "vent_warn").expect("vent_warn");
+    let cap = row.max_instances;
+    assert!(cap >= 1);
+    let mut playing: Vec<LiveVoice> = (0..cap - 1)
+        .map(|index| LiveVoice {
+            id: row.id.clone(),
+            pos: warning_spot(audio.min_distance, index + 1),
+            fading: false,
+        })
+        .collect();
+    playing.push(LiveVoice {
+        id: row.id.clone(),
+        pos: warning_spot(audio.min_distance, cap),
+        fading: true,
+    });
+    let other = audio.sfx.iter().find(|row| row.id == "perch_climb_warn").expect("perch_climb_warn");
+    let events = [
+        SoundEvent {
+            id: row.id.clone(),
+            pos: warning_spot(audio.min_distance, 0),
+            owner: 0,
+            priority: None,
+        },
+        SoundEvent {
+            id: other.id.clone(),
+            pos: warning_spot(audio.min_distance, cap + 2),
+            owner: 1,
+            priority: None,
+        },
+    ];
+    let pick = select_voices(audio, &events, Vec3::ZERO, &playing);
+    assert!(pick.voices.iter().all(|voice| voice.id != row.id));
+    assert!(pick.fade.is_empty());
+    assert!(pick.voices.iter().any(|voice| voice.id == other.id));
+    assert_eq!(pick.warning_slots, cap as usize + 1);
+
+    let active: Vec<LiveVoice> = (1..=cap)
+        .map(|index| LiveVoice {
+            id: row.id.clone(),
+            pos: warning_spot(audio.min_distance, index),
+            fading: false,
+        })
+        .collect();
+    let newcomers = [
+        SoundEvent {
+            id: row.id.clone(),
+            pos: warning_spot(audio.min_distance, 0),
+            owner: 0,
+            priority: None,
+        },
+        SoundEvent {
+            id: row.id.clone(),
+            pos: Vec3::new(audio.min_distance * 2.5, 0.0, 0.0),
+            owner: 1,
+            priority: None,
+        },
+    ];
+    let stacked = select_voices(audio, &newcomers, Vec3::ZERO, &active);
+    let started = stacked.voices.iter().filter(|voice| voice.id == row.id).count();
+    assert_eq!(started, 1);
+    assert_eq!(stacked.fade.len(), 1);
+    assert_eq!(stacked.warning_slots, cap as usize + 1);
+}
+
+#[test]
+fn a_sounding_one_shot_counts_toward_its_cap() {
+    let content = Content::embedded();
+    let audio = &content.audio;
+    let row = audio.sfx.iter().find(|row| row.id == "fuel_regen_paused").expect("fuel_regen_paused");
+    assert!(!row.is_warning && !row.looped && !row.critical);
+    let cap = row.max_instances;
+    assert!(cap >= 1);
+    let playing: Vec<LiveVoice> = (0..cap)
+        .map(|index| LiveVoice {
+            id: row.id.clone(),
+            pos: warning_spot(audio.min_distance, index),
+            fading: false,
+        })
+        .collect();
+    let other = audio.sfx.iter().find(|row| row.id == "vent_burst").expect("vent_burst");
+    assert!(!other.is_warning && !other.critical);
+    let events = [
+        SoundEvent {
+            id: row.id.clone(),
+            pos: warning_spot(audio.min_distance, cap),
+            owner: cap,
+            priority: None,
+        },
+        SoundEvent {
+            id: row.id.clone(),
+            pos: warning_spot(audio.min_distance, cap + 1),
+            owner: cap + 1,
+            priority: None,
+        },
+        SoundEvent {
+            id: other.id.clone(),
+            pos: warning_spot(audio.min_distance, cap + 2),
+            owner: cap + 2,
+            priority: None,
+        },
+    ];
+    let full = select_voices(audio, &events, Vec3::ZERO, &playing);
+    assert!(full.voices.iter().all(|voice| voice.id != row.id));
+    assert!(full.voices.iter().any(|voice| voice.id == other.id));
+    let room: Vec<LiveVoice> = (0..cap - 1)
+        .map(|index| LiveVoice {
+            id: row.id.clone(),
+            pos: warning_spot(audio.min_distance, index),
+            fading: false,
+        })
+        .collect();
+    let pick = select_voices(audio, &events, Vec3::ZERO, &room);
+    assert_eq!(pick.voices.iter().filter(|voice| voice.id == row.id).count(), 1);
 }
 
 #[test]
