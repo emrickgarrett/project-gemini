@@ -239,6 +239,7 @@ impl Content {
         )
         .map_err(|err| format!("arena scenery: {err}"))?;
         validate_arena_audio(&arena, &audio).map_err(|err| format!("audio_mix.toml: {err}"))?;
+        require_emitted_game_voices(&audio, &bugs, &bosses, &heroes, &ui)?;
         validate_stage_offset(&palette, &crate_reveal.layout)?;
         Ok(Self {
             fingerprint,
@@ -4812,6 +4813,61 @@ pub struct SfxDef {
     /// Mix row category. `category_ui` stays the ui flag.
     #[serde(default)]
     pub category: String,
+}
+
+fn require_emitted_game_voices(
+    audio: &AudioTable,
+    bugs: &crate::bugs::BugBook,
+    bosses: &[BossDef],
+    heroes: &[HeroCard],
+    ui: &Ui,
+) -> Result<(), String> {
+    let mut ids = Vec::new();
+    let mut push = |what: &str, id: &str| -> Result<(), String> {
+        if id.is_empty() {
+            return Err(format!("{what} voice id is empty"));
+        }
+        ids.push(id.to_string());
+        Ok(())
+    };
+    for (name, row) in bugs.rows() {
+        push(&format!("{name} footstep"), &row.audio.footstep)?;
+    }
+    let spitter = bugs.of(EnemyKind::Spitter);
+    push("spitter charge", &spitter.audio.charge)?;
+    push("spitter fire", &spitter.audio.fire)?;
+    push("spitter sac_pop", &spitter.audio.sac_pop)?;
+    let brute = bugs.of(EnemyKind::Brute);
+    push("brute attack", &brute.audio.attack)?;
+    push("brute shell_open", &brute.audio.shell_open)?;
+    push("brood_mother attack", &bugs.of(EnemyKind::BroodMother).audio.attack)?;
+    push("hive_tyrant attack", &bugs.of(EnemyKind::HiveTyrant).audio.attack)?;
+    push("weakpoint_hit", &bugs.feedback.weakpoint_hit)?;
+    for hero in heroes {
+        for suffix in ["fire", "reload", "ability", "ability_end"] {
+            push(&format!("{} {suffix}", hero.id), &format!("{}_{suffix}", hero.id))?;
+        }
+    }
+    for boss in bosses {
+        for (field, sfx) in [
+            ("intro_sfx", &boss.intro_sfx),
+            ("death_sfx", &boss.death_sfx),
+            ("fizzle_sfx", &boss.fizzle_sfx),
+            ("charge_sfx", &boss.charge_sfx),
+            ("hatch_sfx", &boss.hatch_sfx),
+            ("acid_sfx", &boss.acid_sfx),
+            ("scythe_sfx", &boss.scythe_sfx),
+        ] {
+            if sfx.is_empty() {
+                continue;
+            }
+            push(&format!("{} {field}", boss.id), sfx)?;
+        }
+    }
+    for (slot, id) in ui.sounds.ids() {
+        push(&format!("ui {slot}"), id)?;
+    }
+    crate::audio_mix::require_emitted_voices(audio, &ids)
 }
 
 fn validate_arena_audio(arena: &Arena, audio: &AudioTable) -> Result<(), String> {

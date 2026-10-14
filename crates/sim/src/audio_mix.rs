@@ -31,11 +31,14 @@ pub struct Voice {
 pub struct LiveVoice {
     pub id: String,
     pub pos: Vec3,
-    /// A warning fading out still holds its row slot until the fade ends.
+    /// Content priority this voice was played at. Teammate steps use `footstep.remote_priority`.
+    pub priority: i32,
+    /// A fade still holds its slot until it ends. A warning holds its row slot.
+    /// A stolen one-shot holds its place in the voice cap.
     pub fading: bool,
 }
 
-/// New voices to start, and warning voices already playing that should fade out.
+/// New voices to start, and voices already playing that should fade out.
 #[derive(Clone, Debug, PartialEq)]
 pub struct VoicePick {
     pub voices: Vec<Voice>,
@@ -59,9 +62,11 @@ pub fn select_voices(
     let mut shots: Vec<Voice> = Vec::new();
 
     for event in events {
-        let Some(def) = audio.sfx.iter().find(|s| s.id == event.id) else {
-            continue;
-        };
+        let def = audio
+            .sfx
+            .iter()
+            .find(|s| s.id == event.id)
+            .unwrap_or_else(|| panic!("voice {} is not in the mix", event.id));
         if def.crowd {
             let dx = event.pos.x - listener.x;
             let dz = event.pos.z - listener.z;
@@ -120,7 +125,18 @@ pub fn select_voices(
             .then_with(|| a.id.cmp(&b.id))
     });
     let sorted = shots;
-    let (warnings, fade, warning_slots) = admit_warnings(audio, &sorted, playing, listener, waiting);
+    let (warnings, mut fade, warning_slots) = admit_warnings(audio, &sorted, playing, listener, waiting);
+    let crowd_slots = voices.iter().filter(|voice| voice.crowd).count();
+    let (warnings, warning_slots) = fit_warnings(
+        audio,
+        listener,
+        playing,
+        crowd_slots,
+        warnings,
+        &mut fade,
+        waiting,
+        warning_slots,
+    );
     let others: Vec<Voice> = sorted.iter().filter(|voice| !voice.is_warning).cloned().collect();
     let capped = cap_instances(audio, others, playing);
     let mut step_count = playing.iter().filter(|voice| is_player_step(audio, &voice.id)).count() as u32;
@@ -138,8 +154,8 @@ pub fn select_voices(
         })
         .collect();
     voices.extend(warnings);
-    let crowd_slots = voices.iter().filter(|voice| voice.crowd).count();
     // One-shots already sounding are not in `voices`. Warnings are `warning_slots`.
+    // A warning that did not fit is waiting on a fade, so it is not in either count.
     let live_oneshots = playing.iter().filter(|voice| is_live_oneshot(audio, voice)).count();
     let used = crowd_slots + warning_slots + live_oneshots;
     let room = audio.voice_cap.saturating_sub(used);
@@ -243,6 +259,7 @@ fn admit_warnings(
                     LiveVoice {
                         id: voice.id.clone(),
                         pos: voice.pos,
+                        priority: voice.priority,
                         fading: false,
                     },
                     voice.score,
@@ -282,6 +299,92 @@ fn admit_warnings(
     (play, fade, slots)
 }
 
+/// Warnings that fit in the voice cap start. The rest take a live stealable one-shot
+/// and wait out its fade, the same way a replacement newcomer waits on its row.
+/// The victim order is the content priority, then the farthest voice, then the id.
+fn fit_warnings(
+    audio: &AudioTable,
+    listener: Vec3,
+    playing: &[LiveVoice],
+    crowd_slots: usize,
+    warnings: Vec<Voice>,
+    fade: &mut Vec<LiveVoice>,
+    waiting: &mut Vec<Voice>,
+    warning_slots: usize,
+) -> (Vec<Voice>, usize) {
+    if warnings.len() > warning_slots {
+        panic!("started warnings exceed warning slots");
+    }
+    let live_oneshots = playing.iter().filter(|voice| is_live_oneshot(audio, voice)).count();
+    let already = warning_slots - warnings.len();
+    let mut used = crowd_slots + already + live_oneshots;
+    let mut reserved = playing
+        .iter()
+        .filter(|voice| is_stealable_oneshot(audio, voice) && voice.fading)
+        .count();
+    let mut victims = steal_order(audio, listener, playing);
+    let mut started = Vec::new();
+    let mut slots = already;
+    for warning in warnings {
+        if used < audio.voice_cap {
+            started.push(warning);
+            used += 1;
+            slots += 1;
+            continue;
+        }
+        if reserved > 0 {
+            reserved -= 1;
+            waiting.push(warning);
+            continue;
+        }
+        let Some(index) = victims.iter().position(|candidate| !candidate.taken) else {
+            panic!("warning {} has no stealable one-shot to take", warning.id);
+        };
+        let mut victim = victims[index].voice.clone();
+        victims[index].taken = true;
+        victim.fading = true;
+        fade.push(victim);
+        waiting.push(warning);
+    }
+    (started, slots)
+}
+
+struct StealCandidate {
+    voice: LiveVoice,
+    distance: f32,
+    taken: bool,
+}
+
+fn steal_order(audio: &AudioTable, listener: Vec3, playing: &[LiveVoice]) -> Vec<StealCandidate> {
+    let mut victims: Vec<StealCandidate> = playing
+        .iter()
+        .filter(|voice| is_stealable_oneshot(audio, voice) && !voice.fading)
+        .map(|voice| StealCandidate {
+            distance: distance(voice.pos, listener),
+            voice: voice.clone(),
+            taken: false,
+        })
+        .collect();
+    victims.sort_by(|a, b| {
+        a.voice
+            .priority
+            .cmp(&b.voice.priority)
+            .then_with(|| b.distance.total_cmp(&a.distance))
+            .then_with(|| a.voice.id.cmp(&b.voice.id))
+            .then_with(|| a.voice.pos.x.total_cmp(&b.voice.pos.x))
+            .then_with(|| a.voice.pos.y.total_cmp(&b.voice.pos.y))
+            .then_with(|| a.voice.pos.z.total_cmp(&b.voice.pos.z))
+    });
+    victims
+}
+
+fn distance(pos: Vec3, listener: Vec3) -> f32 {
+    let dx = pos.x - listener.x;
+    let dy = pos.y - listener.y;
+    let dz = pos.z - listener.z;
+    (dx * dx + dy * dy + dz * dz).sqrt()
+}
+
 fn row_id(audio: &AudioTable, id: &str) -> String {
     audio
         .sfx
@@ -314,6 +417,15 @@ fn is_live_oneshot(audio: &AudioTable, voice: &LiveVoice) -> bool {
         .find(|row| row.id == voice.id)
         .unwrap_or_else(|| panic!("playing voice {} is not in the mix", voice.id));
     !def.is_warning && !def.looped
+}
+
+fn is_stealable_oneshot(audio: &AudioTable, voice: &LiveVoice) -> bool {
+    let def = audio
+        .sfx
+        .iter()
+        .find(|row| row.id == voice.id)
+        .unwrap_or_else(|| panic!("playing voice {} is not in the mix", voice.id));
+    def.stealable && !def.looped && !def.is_warning
 }
 
 fn is_player_step(audio: &AudioTable, id: &str) -> bool {
@@ -540,7 +652,19 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
             "warning voices {warning_voices} + crowd loops {crowd_loops} + hit_reserve {hit_reserve} exceed voice_cap {voice_cap}"
         ));
     }
-    Ok(AudioTable {
+    let blocked = budget_voices(&sfx, |row| {
+        row.is_warning || (row.crowd && row.looped) || (!row.is_warning && !row.looped && !row.stealable)
+    })?;
+    if blocked as usize >= voice_cap {
+        return Err(format!(
+            "non-stealable voices {blocked} fill voice_cap {voice_cap}, so a warning has no stealable one-shot to take"
+        ));
+    }
+    let mut emitted: Vec<String> = code_voice_ids().iter().map(|id| (*id).to_string()).collect();
+    for ids in footstep.rows.values() {
+        emitted.extend(ids.iter().cloned());
+    }
+    let table = AudioTable {
         voice_cap,
         hit_reserve,
         warning_fade,
@@ -554,7 +678,55 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
         sting,
         pitch: Vec::new(),
         footstep,
-    })
+    };
+    require_emitted_voices(&table, emitted)?;
+    Ok(table)
+}
+
+/// Ids the sim and the client pass to the mixer as literals. Content-driven ids are
+/// checked with [`require_emitted_voices`] once those tables have loaded.
+fn code_voice_ids() -> &'static [&'static str] {
+    &[
+        "dash",
+        "jump",
+        "fuel_regen_paused",
+        "wave",
+        "hit",
+        "hurt",
+        "downed",
+        "pickup",
+        "vent_warn",
+        "vent_burst",
+        "perch_climb_warn",
+        "swarmer_crowd",
+        "beacon_pulse",
+        "hive_nest_idle",
+        "relay_tower_hum",
+        "arena_01_bed",
+        "revive_start",
+        "low_hp_warn",
+        "ammo_low_warn",
+        "ability_ready",
+        "host_away",
+        "host_back",
+    ]
+}
+
+/// Every id the game can put on a voice must already be a mix row.
+pub fn require_emitted_voices(
+    audio: &AudioTable,
+    ids: impl IntoIterator<Item = impl AsRef<str>>,
+) -> Result<(), String> {
+    for id in ids {
+        let id = id.as_ref();
+        if id.is_empty() {
+            return Err("emitted voice id is empty".into());
+        }
+        if !audio.sfx.iter().any(|row| row.id == id) {
+            return Err(format!("voice {id} is missing from the mix"));
+        }
+    }
+    Ok(())
 }
 
 fn parse_footsteps(value: &toml::Value) -> Result<crate::content::Footsteps, String> {
@@ -900,6 +1072,7 @@ flat = true
             .map(|i| super::LiveVoice {
                 id: row.id.clone(),
                 pos: crate::math::Vec3::new(audio.min_distance * (i as f32 + 2.0), 0.0, 0.0),
+                priority: row.priority,
                 fading: false,
             })
             .collect();
@@ -1004,6 +1177,31 @@ flat = true
             is_warning: false,
         };
         super::cap_instances(&audio, vec![voice], &[]);
+    }
+
+    #[test]
+    fn a_missing_emitted_voice_fails_to_load() {
+        let source = include_str!("../../../content/audio_mix.toml");
+        let header = "[jump]\n";
+        let start = source.find(header).expect("jump row");
+        let rest = &source[start + header.len()..];
+        let end = rest.find("\n[").map(|index| start + header.len() + index + 1).unwrap_or(source.len());
+        let text = format!("{}{}", &source[..start], &source[end..]);
+        assert_ne!(text, source);
+        let err = load_mix(&text).expect_err("missing jump");
+        assert!(err.contains("voice jump is missing from the mix"), "{err}");
+    }
+
+    #[test]
+    fn a_cap_with_no_stealable_one_shot_fails_to_load() {
+        let source = include_str!("../../../content/audio_mix.toml");
+        let from = "[jump]\nvolume_db = -1.4\npitch_rand_semitones = 0.3\nmax_instances = 2\nloop = false\ncategory = \"player\"\npriority = 70\nstealable = true\n";
+        let to = "[jump]\nvolume_db = -1.4\npitch_rand_semitones = 0.3\nmax_instances = 4\nloop = false\ncategory = \"player\"\npriority = 70\nstealable = false\n";
+        let text = source.replacen(from, to, 1);
+        assert_ne!(text, source);
+        let err = load_mix(&text).expect_err("nothing to take");
+        assert!(err.contains("no stealable one-shot"), "{err}");
+        assert!(err.contains("voice_cap"), "{err}");
     }
 }
 

@@ -8,10 +8,13 @@ min_distance = 0.5
 hit_reserve = 3
 # Seconds a replaced warning voice fades out. The newcomer waits for that fade
 # to free the row slot. Nearest-wins stays inside one warning row.
+# A warning that needs a voice when none are free fades the lowest-priority
+# stealable one-shot (then the farthest, then the voice id) and waits the same way.
+# Loops are not stealable, so the bed and the crowd loop are never that one-shot.
 warning_fade = 0.030
 critical = ["spitter_charge", "player_downed", "wave_start", "brood_roar", "tyrant_roar"]
 
-# Sim event ids that name a file. Unlisted events stay silent.
+# Sim event ids that name a file. An id the game can emit must be a row or an alias.
 [alias]
 hit = "acid_impact"
 hurt = "player_hurt"

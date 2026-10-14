@@ -169,6 +169,8 @@ pub(crate) struct OneShot {
     /// Linear volume before a co-op pause duck. Solo pause pauses the sink instead.
     gain: f32,
     pos: SimVec,
+    /// Content priority this voice was played at, including a teammate step's remote priority.
+    priority: i32,
     /// Seconds left on a warning replacement fade. Zero means this voice is not fading.
     fade_left: f32,
     fade_dur: f32,
@@ -306,7 +308,8 @@ pub fn play(
             Some(LiveVoice {
                 id: shot.id.clone(),
                 pos: shot.pos,
-                fading: def.is_warning && shot.fade_dur > 0.0,
+                priority: shot.priority,
+                fading: shot.fade_dur > 0.0,
             })
         })
         .collect();
@@ -371,6 +374,7 @@ pub fn play(
                     order: next_voice_order(),
                     gain: full,
                     pos: voice.pos,
+                    priority: voice.priority,
                     fade_left: 0.0,
                     fade_dur: 0.0,
                 },
@@ -502,6 +506,7 @@ pub fn flush_ui_cues(
                 order: next_voice_order(),
                 gain: def.volume * bus_gain(&prefs, false),
                 pos: SimVec::ZERO,
+                priority: def.priority,
                 fade_left: 0.0,
                 fade_dur: 0.0,
             },
@@ -1144,6 +1149,7 @@ fn footstep_cues(state: &mut ArenaAudio, game: &Game) -> Vec<SoundEvent> {
         // Catching up would burst steps and beacon pulses, so the clocks restart.
         state.travel.clear();
         state.variant.clear();
+        state.waiting.clear();
         let period = game.content.arena_scene.beacon_glow_period;
         if !(period > 0.0) {
             panic!("beacon_glow_period must be > 0");
@@ -1319,6 +1325,7 @@ fn sync_prop_loops(
                 order: next_voice_order(),
                 gain: full,
                 pos: voice.pos,
+                priority: voice.priority,
                 fade_left: 0.0,
                 fade_dur: 0.0,
             },
@@ -1554,17 +1561,28 @@ mod tests {
             pending_pick: None,
         };
         let cycle = (game.sim.time / period).floor() as i64;
+        let warn = game.content.sfx("vent_warn").expect("vent_warn");
         let mut state = super::ArenaAudio {
             last_time: game.sim.time + period,
             travel: std::collections::BTreeMap::from([(player, stride)]),
             variant: std::collections::BTreeMap::from([(player, 1)]),
             beacon_cycle: cycle + 1,
-            waiting: Vec::new(),
+            waiting: vec![gemini_sim::audio_mix::Voice {
+                id: warn.id.clone(),
+                score: warn.loudness,
+                critical: warn.critical,
+                crowd: warn.crowd,
+                gain: warn.volume,
+                pos: gemini_sim::math::Vec3::ZERO,
+                priority: warn.priority,
+                is_warning: warn.is_warning,
+            }],
         };
         let events = super::arena_cues(&mut state, &game);
         assert_eq!(state.last_time, game.sim.time);
         assert!(state.travel.is_empty());
         assert!(state.variant.is_empty());
+        assert!(state.waiting.is_empty());
         assert_eq!(state.beacon_cycle, cycle);
         assert!(events.iter().all(|event| !event.id.starts_with("step_")));
         assert!(events.iter().all(|event| event.id != "beacon_pulse"));
@@ -1581,6 +1599,7 @@ mod tests {
             order: 0,
             gain: content.audio.warning_fade,
             pos: gemini_sim::math::Vec3::ZERO,
+            priority: content.sfx("vent_warn").expect("vent_warn").priority,
             fade_left: 0.0,
             fade_dur: 0.0,
         };
