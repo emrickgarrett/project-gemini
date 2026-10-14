@@ -37,6 +37,19 @@ fn main() {
         width,
         height,
     );
+    write(
+        out.join("connection_lost.png"),
+        &paint_grid(
+            &content,
+            &GridStill { items: &one, ready: true, again: true, focus: 0, shortfall: "", failure: &content.ui.copy.connection_lost },
+            width,
+            height,
+        )
+        .expect("connection lost")
+        .0,
+        width,
+        height,
+    );
 
     let mut cards = vec![GridCard { rarity: "common".into(), fakeout: None, item: visor.clone() }; pods];
     cards[pods / 2].rarity = "legendary".into();

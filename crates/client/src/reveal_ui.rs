@@ -103,11 +103,11 @@ pub fn drive(
     mut crate_box: ResMut<flow::ServerCrate>,
     voices: Query<Entity, With<RevealVoice>>,
     roots: Query<Entity, With<RevealRoot>>,
-    prefs: Option<Res<Prefs>>,
+    mut prefs: ResMut<Prefs>,
 ) {
     let content = Content::embedded();
     let dt = time.delta_secs();
-    let bus = prefs.as_ref().map(|prefs| crate::audio::bus_gain(prefs, false)).unwrap_or(1.0);
+    let bus = crate::audio::bus_gain(&prefs, false);
     let gen = crate_box.reveal_gen;
     match &mut playback.0 {
         RevealShow::Single(run) => {
@@ -121,9 +121,12 @@ pub fn drive(
             for id in cues {
                 play_cue(&mut commands, &assets, &content, &id, bus, gen);
             }
-            if run.time >= run.plan.card_at && keys.just_pressed(KeyCode::Enter) {
-                next.set(AppState::Menu);
-                return;
+            if run.time >= run.plan.card_at {
+                flow::mark_pull_seen(&mut prefs);
+                if keys.just_pressed(KeyCode::Enter) {
+                    next.set(AppState::Menu);
+                    return;
+                }
             }
             for entity in &roots {
                 commands.entity(entity).despawn();
@@ -143,6 +146,9 @@ pub fn drive(
                 play_cue(&mut commands, &assets, &content, &id, bus, gen);
             }
             crate_box.buttons_ready = run.finished();
+            if run.finished() {
+                flow::mark_pull_seen(&mut prefs);
+            }
         }
         RevealShow::Refund(run) => {
             let cues = run.advance(dt);

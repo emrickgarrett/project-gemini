@@ -19,6 +19,14 @@ pub struct Prefs {
     pub effects: f32,
     pub character: Option<String>,
     pub difficulty: Option<String>,
+    /// Idempotency key of the pull this client has not finished watching. Empty means none.
+    pub pull_key: String,
+    /// True when `pull_key` was a ten-pull.
+    pub pull_ten: bool,
+    /// True once that pull's best card has flipped on this client. The server never stores this.
+    pub pull_seen: bool,
+    /// True when the last send of `pull_key` never got a reply. The next press reuses the key.
+    pub pull_awaiting: bool,
 }
 
 pub enum Loaded {
@@ -42,12 +50,16 @@ impl Prefs {
             effects: settings.effects,
             character: None,
             difficulty: None,
+            pull_key: String::new(),
+            pull_ten: false,
+            pull_seen: false,
+            pull_awaiting: false,
         }
     }
 
     pub fn encode(&self) -> String {
         format!(
-            "sensitivity = {}\nfov = {}\ninvert_y = {}\nview_bob = {}\nmaster = {}\nmusic = {}\neffects = {}\ncharacter = {}\ndifficulty = {}\n",
+            "sensitivity = {}\nfov = {}\ninvert_y = {}\nview_bob = {}\nmaster = {}\nmusic = {}\neffects = {}\ncharacter = {}\ndifficulty = {}\npull_key = {}\npull_ten = {}\npull_seen = {}\npull_awaiting = {}\n",
             self.sensitivity,
             self.fov,
             self.invert_y,
@@ -57,6 +69,10 @@ impl Prefs {
             self.effects,
             quote_opt(self.character.as_deref()),
             quote_opt(self.difficulty.as_deref()),
+            quote_opt(Some(self.pull_key.as_str())),
+            self.pull_ten,
+            self.pull_seen,
+            self.pull_awaiting,
         )
     }
 }
@@ -116,7 +132,19 @@ pub fn parse_prefs(text: &str, content: &Content) -> Result<Prefs, String> {
     prefs.effects = ranged(table, "effects", settings.volume_min, settings.volume_max)?;
     prefs.character = remembered_hero(table, content)?;
     prefs.difficulty = remembered_tier(table, content)?;
+    prefs.pull_key = required_text(table, "pull_key")?;
+    prefs.pull_ten = flag(table, "pull_ten")?;
+    prefs.pull_seen = flag(table, "pull_seen")?;
+    prefs.pull_awaiting = flag(table, "pull_awaiting")?;
     Ok(prefs)
+}
+
+fn required_text(table: &toml::map::Map<String, toml::Value>, key: &str) -> Result<String, String> {
+    table
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+        .ok_or_else(|| format!("settings {key} is not a string"))
 }
 
 fn ranged(table: &toml::map::Map<String, toml::Value>, key: &str, min: f32, max: f32) -> Result<f32, String> {
@@ -235,6 +263,18 @@ mod tests {
         let low = text.replace("master = 0.5", "master = -0.1");
         assert!(parse_prefs(&low, &content).is_err());
         assert!(parse_prefs("fov = 90", &content).is_err(), "missing keys");
+        let missing_pull = text.replace("pull_key = \"\"\n", "");
+        assert!(parse_prefs(&missing_pull, &content).is_err(), "pull_key is required");
+        let mut unseen = prefs.clone();
+        unseen.pull_key = "0123456789abcdef0123456789abcdef".into();
+        unseen.pull_ten = true;
+        unseen.pull_seen = false;
+        unseen.pull_awaiting = true;
+        let loaded = parse_prefs(&unseen.encode(), &content).expect("unseen pull round trip");
+        assert_eq!(loaded.pull_key, unseen.pull_key);
+        assert!(loaded.pull_ten);
+        assert!(!loaded.pull_seen);
+        assert!(loaded.pull_awaiting);
         assert!(parse_prefs("not toml", &content).is_err());
 
         let unknown_hero = text.replace(&format!("character = \"{}\"", content.hero.id), "character = \"nope\"");

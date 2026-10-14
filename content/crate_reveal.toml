@@ -30,6 +30,26 @@ divider_px = 2
 divider_blend = 0.45
 gem_edge_blend = 0.45
 crack_glow_blend = 0.45
+# Card rule width is the face times rule_num / rule_den.
+rule_num = 2
+rule_den = 3
+# Dropped crate width is the frame width / crate_w_div, and at least crate_w_min.
+crate_w_div = 6
+crate_w_min = 12
+# Crack rays leave the crate midline. reach scales with crack, hot is the core blend.
+crack_reach = 0.62
+crack_mid = 0.5
+crack_hot_blend = 0.82
+crack_rays = [
+    [1.0, 0.0],
+    [0.82, -0.42],
+    [0.78, 0.48],
+    [0.5, -0.82],
+    [0.46, 0.88],
+    [0.28, -0.12],
+]
+# Pixels kept between a failure line and the bottom edge of the frame.
+failure_clear = 28.0
 stage = "reveal_stage"
 ink_dark = "reveal_ink"
 ink_light = "reveal_paper"

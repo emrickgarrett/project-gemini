@@ -111,8 +111,6 @@ struct StoredPull {
     banner: String,
     ten: bool,
     seq: u64,
-    /// A version-3 receipt has no banner or kind. A matching replay still returns it.
-    legacy: bool,
     pulls: Vec<Pull>,
     fault: Option<PullError>,
 }
@@ -458,7 +456,7 @@ impl Account {
             }
             for index in 0..pull_keys {
                 let key = read_str(bytes, &mut at)?;
-                let (banner, ten, seq, _legacy) = if version >= 4 {
+                let (banner, ten, seq) = if version >= 4 {
                     let banner = read_str(bytes, &mut at)?;
                     if banner.is_empty() {
                         return Err("dev account save has a pull key with no banner".into());
@@ -470,9 +468,9 @@ impl Account {
                         other => return Err(format!("dev account save has a bad pull kind {other}")),
                     };
                     let seq = read_u64(bytes, &mut at)?;
-                    (banner, ten, seq, false)
+                    (banner, ten, seq)
                 } else {
-                    (String::new(), false, index as u64, true)
+                    (String::new(), false, index as u64)
                 };
                 let pull_len = read_u32(bytes, &mut at)? as usize;
                 if pull_len > 1024 {
@@ -511,7 +509,7 @@ impl Account {
                     continue;
                 }
                 if pulls_by_key
-                    .insert(key, StoredPull { banner, ten, seq, legacy: false, pulls, fault })
+                    .insert(key, StoredPull { banner, ten, seq, pulls, fault })
                     .is_some()
                 {
                     return Err("dev account save repeats a pull key".into());
@@ -588,7 +586,7 @@ impl Account {
             return Err(PullError::Banner);
         }
         if let Some(stored) = self.pulls_by_key.get(key) {
-            if !stored.legacy && (stored.banner != banner || stored.ten != ten) {
+            if stored.banner != banner || stored.ten != ten {
                 return Err(PullError::Mismatch);
             }
             return stored.replay();
@@ -617,7 +615,7 @@ impl Account {
         self.next_pull_seq = self.next_pull_seq.saturating_add(1);
         self.pulls_by_key.insert(
             key.to_string(),
-            StoredPull { banner: banner.to_string(), ten, seq, legacy: false, pulls, fault },
+            StoredPull { banner: banner.to_string(), ten, seq, pulls, fault },
         );
         self.prune(content);
     }
@@ -1759,6 +1757,11 @@ mod tests {
         let again = account.pull_with_key(&content, "standard", "same").unwrap();
         assert!(!again.fresh);
         assert_eq!(again.pulls, first.pulls);
+        let stored = account.pulls_by_key.get("same").expect("the key is stored");
+        assert_eq!(stored.banner, "standard");
+        assert!(!stored.ten);
+        assert!(stored.fault.is_none());
+        assert_eq!(stored.pulls, first.pulls);
         let mut loaded = Account::from_bytes(&account.to_bytes(&content).unwrap(), &content).unwrap();
         assert_eq!(loaded.pull_ten(&content, "standard", "same").unwrap_err(), PullError::Mismatch);
     }

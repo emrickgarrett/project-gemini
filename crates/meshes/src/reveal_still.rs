@@ -65,7 +65,7 @@ pub fn paint_reveal(content: &Content, plan: &RevealPlan, t: f32, width: u32, he
             layout,
         );
     } else {
-        paint_crate(&mut rgb, width, height, &view, color, light, layout.crack_glow_blend);
+        paint_crate(&mut rgb, width, height, &view, color, light, layout);
         if view.burst > 0.02 {
             paint_burst(&mut rgb, width, height, color, view.burst);
         }
@@ -158,7 +158,7 @@ fn paint_card(
         (face_x, face_y, face_w, face_h),
         layout.gem_edge_blend,
     );
-    let rule_w = (face_w * 2 / 3).max(1);
+    let rule_w = face_w.saturating_mul(layout.rule_num) / layout.rule_den;
     fill(
         rgb,
         width,
@@ -206,8 +206,16 @@ fn paint_gem(
     }
 }
 
-fn paint_crate(rgb: &mut [u8], width: u32, height: u32, view: &gemini_sim::reveal::RevealLook, color: [u8; 3], light: [u8; 3], glow_blend: f32) {
-    let crate_w = (width / 6).max(12);
+fn paint_crate(
+    rgb: &mut [u8],
+    width: u32,
+    height: u32,
+    view: &gemini_sim::reveal::RevealLook,
+    color: [u8; 3],
+    light: [u8; 3],
+    layout: &gemini_sim::content::RevealLayout,
+) {
+    let crate_w = (width / layout.crate_w_div).max(layout.crate_w_min);
     let crate_h = (height / 3).max(crate_w + 4);
     let landed = (height / 2) as i32;
     let risen = landed - (height as i32 / 4);
@@ -239,7 +247,7 @@ fn paint_crate(rgb: &mut [u8], width: u32, height: u32, view: &gemini_sim::revea
     }
     paint_capsule(rgb, width, height, left, top, crate_w, crate_h, color, light);
     if view.crack > 0.0 {
-        paint_cracks(rgb, width, height, cx, top, crate_w, crate_h, color, light, view.crack, glow_blend);
+        paint_cracks(rgb, width, height, cx, top, crate_w, crate_h, color, light, view.crack, layout);
     }
 }
 
@@ -310,22 +318,15 @@ fn paint_cracks(
     color: [u8; 3],
     light: [u8; 3],
     crack: f32,
-    glow_blend: f32,
+    layout: &gemini_sim::content::RevealLayout,
 ) {
     let crack = crack.clamp(0.0, 1.0);
-    let reach = (crate_w as f32) * 0.62 * crack;
-    let mid_y = top as f32 + crate_h as f32 * 0.5;
-    let hot = blend(color, light, 0.82);
-    let glow = blend(color, light, glow_blend);
-    let rays = [
-        (1.0f32, 0.0f32),
-        (0.82, -0.42),
-        (0.78, 0.48),
-        (0.5, -0.82),
-        (0.46, 0.88),
-        (0.28, -0.12),
-    ];
-    for (dx, dy) in rays {
+    let reach = (crate_w as f32) * layout.crack_reach * crack;
+    let mid_y = top as f32 + crate_h as f32 * layout.crack_mid;
+    let hot = blend(color, light, layout.crack_hot_blend);
+    let glow = blend(color, light, layout.crack_glow_blend);
+    for ray in &layout.crack_rays {
+        let (dx, dy) = (ray[0], ray[1]);
         for sign in [-1.0f32, 1.0] {
             let x1 = cx as f32 + sign * dx * reach;
             let y1 = mid_y + dy * reach;
@@ -669,7 +670,17 @@ pub fn paint_refund(content: &Content, shot: &RefundStill<'_>, width: u32, heigh
     let layout = &content.crate_reveal.layout;
     let title_h = ((ui.title_scale * layout.glyph_rows) as f32 * sy).round() as i32;
     let line_h = ((ui.button_scale * layout.glyph_rows) as f32 * sy).round() as i32;
-    let (x, y, panel_w, panel_h, button_w, button_h, gap, margin_x, margin_y) = refund_column(content, width, height, !shot.shortfall.is_empty());
+    let (x, mut y, panel_w, panel_h, button_w, button_h, gap, margin_x, margin_y) = refund_column(content, width, height, !shot.shortfall.is_empty());
+    if !shot.failure.is_empty() {
+        let clear = layout.failure_clear.round() as i32;
+        let overflow = y + panel_h + line_h + clear - height as i32;
+        if overflow > 0 {
+            y -= overflow;
+        }
+        if y < 0 || y + panel_h + line_h + clear > height as i32 {
+            return Err("refund failure line does not fit under the panel".into());
+        }
+    }
     let face = palette_bytes(content, &grid.refund_face);
     let ink = palette_bytes(content, &grid.refund_ink);
     draw_bevel(&mut rgb, width, height, x, y, panel_w, panel_h, &chunk_bevel(content, panel_h, panel_h as f32, ink, face));
@@ -842,12 +853,24 @@ fn paint_result_chrome(
     let gap = ui.layout.row_gap.round() as i32;
     let total = button_w * 2 + gap;
     let x = (width as i32 - total) / 2;
-    let mut y = height as i32 - button_h - ui.layout.margin_y.round() as i32;
     let line_h = (layout.glyph_rows.max(1) * ui.layout.button_scale) as i32;
+    let clear = layout.failure_clear.round() as i32;
+    let mut y = height as i32 - button_h - ui.layout.margin_y.round() as i32;
+    if !failure.is_empty() {
+        let overflow = y + button_h + line_h + clear - height as i32;
+        if overflow > 0 {
+            y -= overflow;
+        }
+    }
     if !shortfall.is_empty() {
-        y -= line_h + gap;
-        blit_centered(rgb, width, height, 0, width as i32, y, shortfall, paper, ui.layout.button_scale, layout);
-        y += line_h + gap;
+        let short_y = y - line_h - gap;
+        if short_y < 0 {
+            return Err("crate reveal shortfall does not fit above the buttons".into());
+        }
+        blit_centered(rgb, width, height, 0, width as i32, short_y, shortfall, paper, ui.layout.button_scale, layout);
+    }
+    if y < 0 {
+        return Err("crate reveal buttons do not fit".into());
     }
     let mut hits = Vec::new();
     let continue_on = ready;
@@ -862,7 +885,7 @@ fn paint_result_chrome(
     }
     if !failure.is_empty() {
         let failure_y = y + button_h;
-        if failure_y < 0 || failure_y + line_h > height as i32 {
+        if failure_y < 0 || failure_y + line_h + clear > height as i32 {
             return Err("crate reveal failure line does not fit under the buttons".into());
         }
         let ink = palette_bytes(content, &content.crate_reveal.grid.failure_ink);
@@ -1171,6 +1194,8 @@ mod tests {
         assert_eq!(face_swatch(&refund, width, refund_slot, &content), refund_paper);
 
         let failed_line = content.ui.copy.pull_failed.as_str();
+        let lost_line = content.ui.copy.connection_lost.as_str();
+        assert_ne!(failed_line, lost_line);
         let (failed_paint, failed_hits) = paint_grid(
             &content,
             &GridStill { items: &faces, ready: true, again: true, focus: 0, shortfall: "", failure: failed_line },
@@ -1178,25 +1203,41 @@ mod tests {
             height,
         )
         .unwrap();
+        let (lost_paint, lost_hits) = paint_grid(
+            &content,
+            &GridStill { items: &faces, ready: true, again: true, focus: 0, shortfall: "", failure: lost_line },
+            width,
+            height,
+        )
+        .unwrap();
         assert!(failed_hits.iter().any(|hit| hit.id == "continue") && failed_hits.iter().any(|hit| hit.id == "pull_again"));
+        assert!(lost_hits.iter().any(|hit| hit.id == "continue") && lost_hits.iter().any(|hit| hit.id == "pull_again"));
         let failure_ink = palette_bytes(&content, &content.crate_reveal.grid.failure_ink);
         assert_eq!(failure_ink, palette_bytes(&content, &content.crate_reveal.layout.ink_light));
         assert_ne!(failure_ink, palette_bytes(&content, &content.ui.colors.defeat));
-        let button_bottom = failed_hits.iter().map(|hit| hit.y + hit.h).max().unwrap() as u32;
-        let mut saw_failure = false;
-        for (index, (before, after)) in mixed.chunks_exact(3).zip(failed_paint.chunks_exact(3)).enumerate() {
-            if before == after {
-                continue;
+        let clear = content.crate_reveal.layout.failure_clear.round() as u32;
+        for (name, paint, hits) in [("pull failed", &failed_paint, &failed_hits), ("connection lost", &lost_paint, &lost_hits)] {
+            let button_bottom = hits.iter().map(|hit| hit.y + hit.h).max().unwrap() as u32;
+            let mut saw_failure = false;
+            let mut lowest = 0u32;
+            for (index, px) in paint.chunks_exact(3).enumerate() {
+                if px != failure_ink.as_slice() {
+                    continue;
+                }
+                let y = index as u32 / width;
+                if y < button_bottom {
+                    continue;
+                }
+                saw_failure = true;
+                lowest = lowest.max(y);
             }
-            let y = index as u32 / width;
-            assert!(y >= button_bottom, "a failed pull changed a pixel above the buttons at y {y}");
-            assert_eq!(after, &failure_ink, "the failure line is paper");
-            saw_failure = true;
+            assert!(saw_failure, "{name} draws the paper line under the buttons");
+            assert!(lowest + 1 + clear <= height, "{name} line ends at {lowest} and the frame is {height}");
+            for (index, slot) in slots.iter().enumerate() {
+                assert_eq!(card_pixels(&mixed, width, *slot), card_pixels(paint, width, *slot), "{name} card {index} changed");
+            }
         }
-        assert!(saw_failure, "the failure line is drawn under the buttons");
-        for (index, slot) in slots.iter().enumerate() {
-            assert_eq!(card_pixels(&mixed, width, *slot), card_pixels(&failed_paint, width, *slot), "card {index} changed");
-        }
+        assert_ne!(failed_paint, lost_paint, "the two failure lines are different pictures");
 
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../");
         let flip = std::fs::read(root.join("assets/audio/crate_flip.ogg")).unwrap();
@@ -1250,6 +1291,7 @@ mod tests {
             ("refund.png", refund),
             ("no_credits.png", broke.0),
             ("pull_failed.png", failed_paint),
+            ("connection_lost.png", lost_paint),
         ];
         for (name, rgb) in stills {
             let bytes = std::fs::read(root.join("art/ten_pull").join(name)).unwrap();

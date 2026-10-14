@@ -472,6 +472,7 @@ mod tests {
         assert_eq!(request.banner, content.banners.id);
         assert_eq!(request.idempotency_key, "pull-1");
         assert!(!request.ten);
+        assert!(!request.seen, "the client does not send a seen write");
 
         let mut app = menu_app();
         app.update();
@@ -482,7 +483,7 @@ mod tests {
         let missed = app.world().resource::<flow::ServerCrate>().clone();
         assert!(missed.failed);
         assert!(missed.rarity.is_none());
-        assert_eq!(missed.reason, content.ui.copy.pull_needs_server);
+        assert_eq!(missed.reason, content.ui.copy.connection_lost);
 
         let short = gemini_proto::CratePullReply {
             version: gemini_proto::PROTOCOL_VERSION,
@@ -689,7 +690,7 @@ mod tests {
         app.world_mut().run_system_once(flow::reveal_act).unwrap();
         let keys = app.world().resource::<flow::ServerCrate>().sent_keys.clone();
         assert_eq!(keys.len(), 2);
-        assert_ne!(keys[0], keys[1], "each accepted press gets its own key");
+        assert_eq!(keys[0], keys[1], "a lost connection retries the same key");
         assert_eq!(keys[0].len(), 32);
     }
 
@@ -720,7 +721,7 @@ mod tests {
         let crate_box = app.world().resource::<flow::ServerCrate>();
         assert_eq!(crate_box.reveal_gen, old_gen);
         assert_eq!(crate_box.credits, credits);
-        assert_eq!(crate_box.reason, content.ui.copy.pull_needs_server);
+        assert_eq!(crate_box.reason, content.ui.copy.connection_lost);
         assert_eq!(grid_faces(&mut app), before);
         app.world_mut().run_system_once(reveal_ui::mark_fades).unwrap();
         assert_eq!(fading_voices(&mut app), 0, "a failed reply does not fade the sting");
@@ -742,7 +743,7 @@ mod tests {
                 again: true,
                 focus: 0,
                 shortfall: "",
-                failure: &content.ui.copy.pull_needs_server,
+                failure: &content.ui.copy.connection_lost,
             },
             width,
             height,
@@ -772,6 +773,13 @@ mod tests {
         let rank = app.world().resource::<session::Account>().rank;
         let before = grid_faces(&mut app);
         app.world_mut().spawn(reveal_ui::RevealVoice { id: "crate_legendary".into(), gen: old_gen, gain: 1.0 });
+        {
+            let mut saved = app.world_mut().resource_mut::<settings::Prefs>();
+            saved.pull_key = "0123456789abcdef0123456789abcdef".into();
+            saved.pull_ten = true;
+            saved.pull_seen = true;
+            saved.pull_awaiting = true;
+        }
         let pods = content.banners.cost.pods as usize;
         let mut reply_pods = Vec::new();
         for _ in 0..pods {
@@ -796,11 +804,239 @@ mod tests {
         let crate_box = app.world().resource::<flow::ServerCrate>();
         assert_eq!(crate_box.reveal_gen, old_gen);
         assert_eq!(crate_box.credits, credits);
-        assert_eq!(crate_box.reason, content.ui.copy.pull_failed);
+        assert!(crate_box.reason.is_empty(), "a seen replay draws no failure line");
+        assert_eq!(crate_box.sent_keys.last().map(String::as_str), Some("0123456789abcdef0123456789abcdef"));
         assert_eq!(app.world().resource::<session::Account>().rank, rank);
         assert_eq!(grid_faces(&mut app), before);
         app.world_mut().run_system_once(reveal_ui::mark_fades).unwrap();
         assert_eq!(fading_voices(&mut app), 0, "a replay leaves the old voices alone");
+    }
+
+    #[test]
+    fn a_confirmed_fault_says_no_credits_were_spent_and_the_next_key_is_new() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        let content = gemini_sim::content::Content::embedded();
+        assert_eq!(content.ui.copy.pull_failed, "PULL FAILED · NO CREDITS SPENT");
+        assert_eq!(content.ui.copy.connection_lost, "CONNECTION LOST, RETRY");
+        pull_host::clear_scripted_pull();
+        open_grid(&mut app, true);
+        let old_gen = app.world().resource::<flow::ServerCrate>().reveal_gen;
+        let credits = app.world().resource::<flow::ServerCrate>().credits;
+        let rank = app.world().resource::<session::Account>().rank;
+        pull_host::script_next_pull(Ok(gemini_proto::CratePullReply {
+            version: gemini_proto::PROTOCOL_VERSION,
+            rarity: None,
+            fakeout: None,
+            rank: rank.saturating_add(1),
+            fault: Some(gemini_proto::CratePullFault::Banner),
+            pods: Vec::new(),
+            fresh: false,
+            ten: true,
+            credits: 3.0,
+        }));
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        let cues = ui_cues(&mut app);
+        assert_eq!(cues.iter().filter(|id| *id == &content.crate_reveal.grid.pull_failed).count(), 1, "{cues:?}");
+        let crate_box = app.world().resource::<flow::ServerCrate>();
+        assert_eq!(crate_box.reason, content.ui.copy.pull_failed);
+        assert_eq!(crate_box.reveal_gen, old_gen);
+        assert_eq!(crate_box.credits, credits);
+        assert_eq!(app.world().resource::<session::Account>().rank, rank);
+        assert!(app.world().resource::<settings::Prefs>().pull_key.is_empty(), "a confirmed fault is not replayed");
+        let first = crate_box.sent_keys[0].clone();
+        app.world_mut().run_system_once(flow::release_pull).unwrap();
+        pull_host::script_next_pull(Err(pull_host::PullHostError::Timeout("timed out".into())));
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        let crate_box = app.world().resource::<flow::ServerCrate>();
+        assert_eq!(crate_box.reason, content.ui.copy.connection_lost);
+        assert_ne!(crate_box.sent_keys.last().unwrap(), &first, "the fault was confirmed, so the next press is a new key");
+        assert!(app.world().resource::<settings::Prefs>().pull_awaiting);
+    }
+
+    #[test]
+    fn a_lost_connection_retries_the_same_key_and_an_unseen_pull_plays_the_reveal() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        let content = gemini_sim::content::Content::embedded();
+        pull_host::clear_scripted_pull();
+        open_grid(&mut app, true);
+        let old_gen = app.world().resource::<flow::ServerCrate>().reveal_gen;
+        app.world_mut().spawn(reveal_ui::RevealVoice { id: "crate_legendary".into(), gen: old_gen, gain: 1.0 });
+        pull_host::script_next_pull(Err(pull_host::PullHostError::Timeout("timed out".into())));
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        let lost = app.world().resource::<flow::ServerCrate>().sent_keys[0].clone();
+        assert_eq!(app.world().resource::<flow::ServerCrate>().reason, content.ui.copy.connection_lost);
+        assert_eq!(ui_cues(&mut app).iter().filter(|id| *id == &content.crate_reveal.grid.pull_failed).count(), 1);
+        app.world_mut().run_system_once(flow::release_pull).unwrap();
+        let pods = content.banners.cost.pods as usize;
+        let visor = content.crate_item("visor").expect("visor").id.clone();
+        let mark = content.crate_item("mark").expect("mark").id.clone();
+        let mut reply_pods = Vec::new();
+        for index in 0..pods {
+            if index == pods / 2 {
+                reply_pods.push(gemini_proto::CratePod { rarity: "legendary".into(), fakeout: None, item: mark.clone() });
+            } else {
+                reply_pods.push(gemini_proto::CratePod { rarity: "common".into(), fakeout: None, item: visor.clone() });
+            }
+        }
+        pull_host::script_next_pull(Ok(gemini_proto::CratePullReply {
+            version: gemini_proto::PROTOCOL_VERSION,
+            rarity: None,
+            fakeout: None,
+            rank: 4,
+            fault: None,
+            pods: reply_pods,
+            fresh: false,
+            ten: true,
+            credits: 80.0,
+        }));
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        assert_eq!(app.world().resource::<flow::ServerCrate>().sent_keys.last().unwrap(), &lost);
+        assert_eq!(ui_cues(&mut app).iter().filter(|id| *id == &content.crate_reveal.grid.pull_failed).count(), 1, "the reveal does not play the error cue again");
+        assert_eq!(app.world().resource::<flow::ServerCrate>().reveal_gen, old_gen + 1);
+        assert_eq!(app.world().resource::<session::Account>().rank, 4);
+        let playback = app.world().resource::<reveal_ui::RevealPlayback>();
+        let reveal_ui::RevealShow::Grid(run) = &playback.0 else { panic!("an unseen replay opens the grid") };
+        assert!(!run.finished(), "the replay starts from the backs");
+        app.world_mut().run_system_once(reveal_ui::mark_fades).unwrap();
+        assert_eq!(fading_voices(&mut app), 1, "the old sting fades when the new reveal starts");
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(Duration::from_secs(30)));
+        app.world_mut().resource_mut::<bevy::time::Time<bevy::time::Virtual>>().set_max_delta(Duration::from_secs(60));
+        app.update();
+        let mut voices = app.world_mut().query::<&reveal_ui::RevealVoice>();
+        let ids: Vec<_> = voices.iter(app.world()).map(|voice| voice.id.clone()).collect();
+        assert!(ids.iter().any(|id| id == &content.crate_reveal.grid.flip_cue), "the replay flips: {ids:?}");
+        assert!(ids.iter().any(|id| id == "crate_legendary"), "the replay plays the sting: {ids:?}");
+        assert!(ids.iter().all(|id| id != &content.crate_reveal.grid.pull_failed), "the sting is not a second error cue: {ids:?}");
+    }
+
+    #[test]
+    fn a_refund_fades_the_old_sting() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        let content = gemini_sim::content::Content::embedded();
+        pull_host::clear_scripted_pull();
+        open_grid(&mut app, true);
+        let old_gen = app.world().resource::<flow::ServerCrate>().reveal_gen;
+        app.world_mut().spawn(reveal_ui::RevealVoice { id: "crate_legendary".into(), gen: old_gen, gain: 1.0 });
+        pull_host::script_next_pull(Ok(gemini_proto::CratePullReply {
+            version: gemini_proto::PROTOCOL_VERSION,
+            rarity: None,
+            fakeout: None,
+            rank: 1,
+            fault: Some(gemini_proto::CratePullFault::Pod { pod: 1 }),
+            pods: Vec::new(),
+            fresh: false,
+            ten: true,
+            credits: content.banners.dev.starting_credits,
+        }));
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        assert!(ui_cues(&mut app).iter().all(|id| id != &content.crate_reveal.grid.pull_failed), "a refund is not the failure cue");
+        assert_eq!(app.world().resource::<flow::ServerCrate>().reveal_gen, old_gen + 1);
+        assert!(matches!(app.world().resource::<reveal_ui::RevealPlayback>().0, reveal_ui::RevealShow::Refund(_)));
+        app.world_mut().run_system_once(reveal_ui::mark_fades).unwrap();
+        assert_eq!(fading_voices(&mut app), 1, "the refund fades the sting that was playing");
+    }
+
+    #[test]
+    fn a_failed_grid_start_does_not_leave_the_rank_stale() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        let content = gemini_sim::content::Content::embedded();
+        pull_host::clear_scripted_pull();
+        open_grid(&mut app, true);
+        let old_gen = app.world().resource::<flow::ServerCrate>().reveal_gen;
+        let before = grid_faces(&mut app);
+        let rank = app.world().resource::<session::Account>().rank;
+        let pods = content.banners.cost.pods as usize;
+        let visor = content.crate_item("visor").expect("visor").id.clone();
+        let reply_pods = vec![gemini_proto::CratePod { rarity: "legendary".into(), fakeout: None, item: visor }; pods];
+        pull_host::script_next_pull(Ok(gemini_proto::CratePullReply {
+            version: gemini_proto::PROTOCOL_VERSION,
+            rarity: None,
+            fakeout: None,
+            rank: rank + 4,
+            fault: None,
+            pods: reply_pods,
+            fresh: true,
+            ten: true,
+            credits: 12.0,
+        }));
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        assert_eq!(app.world().resource::<session::Account>().rank, rank + 4, "the server rank lands even when the grid cannot start");
+        assert_eq!(app.world().resource::<flow::ServerCrate>().credits, Some(12.0));
+        assert_eq!(app.world().resource::<flow::ServerCrate>().reveal_gen, old_gen);
+        assert_ne!(app.world().resource::<flow::ServerCrate>().reason, content.ui.copy.pull_failed);
+        assert_eq!(grid_faces(&mut app), before);
+    }
+
+    #[test]
+    fn an_unseen_key_survives_a_relaunch_and_crates_plays_the_reveal() {
+        let _guard = settings_lock();
+        let content = gemini_sim::content::Content::embedded();
+        let key = "abcdef0123456789abcdef0123456789";
+        let mut prefs = settings::Prefs::defaults(&content);
+        prefs.pull_key = key.into();
+        prefs.pull_ten = true;
+        settings::store(&content, &prefs);
+        {
+            let app = menu_app();
+            let loaded = app.world().resource::<settings::Prefs>();
+            assert_eq!(loaded.pull_key, key);
+            assert!(!loaded.pull_seen);
+            assert!(loaded.pull_ten);
+        }
+        let mut app = menu_app();
+        assert_eq!(app.world().resource::<settings::Prefs>().pull_key, key, "the unseen key is still there after relaunch");
+        let pods = content.banners.cost.pods as usize;
+        let visor = content.crate_item("visor").expect("visor").id.clone();
+        let mark = content.crate_item("mark").expect("mark").id.clone();
+        let mut reply_pods = Vec::new();
+        for index in 0..pods {
+            if index == pods / 2 {
+                reply_pods.push(gemini_proto::CratePod { rarity: "legendary".into(), fakeout: None, item: mark.clone() });
+            } else {
+                reply_pods.push(gemini_proto::CratePod { rarity: "common".into(), fakeout: None, item: visor.clone() });
+            }
+        }
+        pull_host::script_next_pull(Ok(gemini_proto::CratePullReply {
+            version: gemini_proto::PROTOCOL_VERSION,
+            rarity: None,
+            fakeout: None,
+            rank: 2,
+            fault: None,
+            pods: reply_pods,
+            fresh: false,
+            ten: true,
+            credits: content.banners.dev.starting_credits,
+        }));
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("crates".into());
+        app.world_mut().run_system_once(flow::apply).unwrap();
+        assert!(ui_cues(&mut app).iter().all(|id| id != &content.crate_reveal.grid.pull_failed), "opening crates replays the pull without the error cue");
+        assert_eq!(app.world().resource::<flow::ServerCrate>().sent_keys.last().map(String::as_str), Some(key));
+        let playback = app.world().resource::<reveal_ui::RevealPlayback>();
+        let reveal_ui::RevealShow::Grid(run) = &playback.0 else { panic!("crates opens the saved pull") };
+        assert!(!run.finished());
+        app.update();
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(Duration::from_secs(30)));
+        app.world_mut().resource_mut::<bevy::time::Time<bevy::time::Virtual>>().set_max_delta(Duration::from_secs(60));
+        app.update();
+        let mut voices = app.world_mut().query::<&reveal_ui::RevealVoice>();
+        let ids: Vec<_> = voices.iter(app.world()).map(|voice| voice.id.clone()).collect();
+        assert!(ids.iter().any(|id| id == &content.crate_reveal.grid.flip_cue), "the relaunch flips: {ids:?}");
+        assert!(ids.iter().any(|id| id == "crate_legendary"), "the relaunch plays the sting: {ids:?}");
+        assert!(app.world().resource::<settings::Prefs>().pull_seen, "the best card marks the pull seen on this client");
+        let path = std::env::var("GEMINI_SETTINGS").unwrap();
+        let text = std::fs::read_to_string(path).unwrap();
+        assert!(text.contains("pull_seen = true"), "{text}");
+        assert!(text.contains(key), "{text}");
     }
 
     #[test]

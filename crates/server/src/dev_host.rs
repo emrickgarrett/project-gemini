@@ -125,6 +125,17 @@ pub fn answer(account: &mut Account, content: &Content, packet: &Packet) -> Resu
 }
 
 fn answer_pull(account: &mut Account, content: &Content, request: &gemini_proto::CratePullRequest) -> Result<Packet, ExchangeError> {
+    if request.seen {
+        return Ok(Packet::CratePullReply(pull_reply(
+            account,
+            request.ten,
+            None,
+            None,
+            Vec::new(),
+            false,
+            Some(CratePullFault::Seen),
+        )));
+    }
     if request.version != PROTOCOL_VERSION {
         return Err(ExchangeError::Failed(format!(
             "crate pull version {} does not match {PROTOCOL_VERSION}",
@@ -307,6 +318,7 @@ mod tests {
             banner: banner.to_string(),
             idempotency_key: key.to_string(),
             ten,
+            seen: false,
         })
         .encode()
         .unwrap()
@@ -542,6 +554,35 @@ mod tests {
         assert!((second.balance - first.balance).abs() < 1e-3);
         let still = Account::from_bytes(&fs::read(&path).unwrap(), &content).unwrap();
         assert!((still.credits() - first.balance).abs() < 1e-3);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_server_rejects_a_seen_write() {
+        let dir = scratch("seen");
+        let path = dir.join("account.bin");
+        let content = Content::embedded();
+        let banner = content.banners.id.clone();
+        let first = Packet::decode(&exchange_at(&path, &request(&banner, "real")).unwrap()).unwrap();
+        let Packet::CratePullReply(first) = first else { panic!("reply") };
+        assert!(first.fault.is_none(), "{first:?}");
+        let before = fs::read(&path).unwrap();
+        let seen = Packet::CratePull(CratePullRequest {
+            version: PROTOCOL_VERSION,
+            banner,
+            idempotency_key: "seen-key".into(),
+            ten: true,
+            seen: true,
+        })
+        .encode()
+        .unwrap();
+        let packet = Packet::decode(&exchange_at(&path, &seen).unwrap()).unwrap();
+        let Packet::CratePullReply(reply) = packet else { panic!("reply") };
+        assert!(matches!(reply.fault, Some(CratePullFault::Seen)), "{reply:?}");
+        assert!(reply.pods.is_empty());
+        assert!(!reply.fresh);
+        assert!((reply.credits - first.credits).abs() < 1e-3, "a seen write does not charge");
+        assert_eq!(fs::read(&path).unwrap(), before, "a seen write does not touch the save");
         let _ = fs::remove_dir_all(&dir);
     }
 }

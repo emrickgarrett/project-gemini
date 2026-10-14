@@ -15,12 +15,14 @@ pub(crate) enum PullHostError {
     #[allow(dead_code)]
     Unreadable(String),
     Unavailable(String),
+    /// The socket timed out. The server may already have saved the pull.
+    Timeout(String),
 }
 
 impl fmt::Display for PullHostError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Corrupt(message) | Self::Unreadable(message) | Self::Unavailable(message) => f.write_str(message),
+            Self::Corrupt(message) | Self::Unreadable(message) | Self::Unavailable(message) | Self::Timeout(message) => f.write_str(message),
         }
     }
 }
@@ -31,6 +33,7 @@ pub(crate) fn request_bytes(banner: &str, key: &str, ten: bool) -> Result<Vec<u8
         banner: banner.to_string(),
         idempotency_key: key.to_string(),
         ten,
+        seen: false,
     })
     .encode()
     .map_err(|err| PullHostError::Unavailable(err.to_string()))
