@@ -47,6 +47,8 @@ pub(crate) struct ArenaAudio {
     travel: BTreeMap<u32, f32>,
     variant: BTreeMap<u32, u32>,
     beacon_cycle: i64,
+    /// Warning newcomers waiting for a fade to free their row slot.
+    waiting: Vec<Voice>,
 }
 
 #[derive(Component)]
@@ -235,6 +237,7 @@ pub fn boot(mut commands: Commands, assets: Res<AssetServer>, game: Res<Game>) {
         travel: BTreeMap::new(),
         variant: BTreeMap::new(),
         beacon_cycle: (game.sim.time / period).floor() as i64,
+        waiting: Vec::new(),
     });
     commands.insert_resource(music);
     commands.insert_resource(Crowd::default());
@@ -309,7 +312,7 @@ pub fn play(
         .collect();
     let mut events = fx.sounds.clone();
     events.extend(arena_cues(&mut arena_audio, &game));
-    let pick = select_voices(&game.content.audio, &events, listener, &playing);
+    let pick = select_voices(&game.content.audio, &events, listener, &playing, &mut arena_audio.waiting);
     for faded in &pick.fade {
         for (_, mut shot, mut sink) in &mut shots {
             if shot.fade_dur > 0.0 || shot.id != faded.id || shot.pos != faded.pos {
@@ -1556,6 +1559,7 @@ mod tests {
             travel: std::collections::BTreeMap::from([(player, stride)]),
             variant: std::collections::BTreeMap::from([(player, 1)]),
             beacon_cycle: cycle + 1,
+            waiting: Vec::new(),
         };
         let events = super::arena_cues(&mut state, &game);
         assert_eq!(state.last_time, game.sim.time);

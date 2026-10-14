@@ -41,14 +41,19 @@ pub struct VoicePick {
     pub voices: Vec<Voice>,
     pub fade: Vec<LiveVoice>,
     /// Warning voices that will be sounding after this pick, including fades.
+    /// A newcomer waiting on a fade is not a slot.
     pub warning_slots: usize,
 }
 
+/// `waiting` holds each warning newcomer that has won its row and is waiting for a
+/// fade to free the slot. The same vec is the state for the next frame: a nearer
+/// candidate for that row replaces the voice that was waiting.
 pub fn select_voices(
     audio: &AudioTable,
     events: &[SoundEvent],
     listener: Vec3,
     playing: &[LiveVoice],
+    waiting: &mut Vec<Voice>,
 ) -> VoicePick {
     let mut crowd_counts: Vec<(String, u32, f32, Vec3)> = Vec::new();
     let mut shots: Vec<Voice> = Vec::new();
@@ -115,7 +120,7 @@ pub fn select_voices(
             .then_with(|| a.id.cmp(&b.id))
     });
     let sorted = shots;
-    let (warnings, fade, warning_slots) = admit_warnings(audio, &sorted, playing, listener);
+    let (warnings, fade, warning_slots) = admit_warnings(audio, &sorted, playing, listener, waiting);
     let others: Vec<Voice> = sorted.iter().filter(|voice| !voice.is_warning).cloned().collect();
     let capped = cap_instances(audio, others, playing);
     let mut step_count = playing.iter().filter(|voice| is_player_step(audio, &voice.id)).count() as u32;
@@ -134,7 +139,9 @@ pub fn select_voices(
         .collect();
     voices.extend(warnings);
     let crowd_slots = voices.iter().filter(|voice| voice.crowd).count();
-    let used = crowd_slots + warning_slots;
+    // One-shots already sounding are not in `voices`. Warnings are `warning_slots`.
+    let live_oneshots = playing.iter().filter(|voice| is_live_oneshot(audio, voice)).count();
+    let used = crowd_slots + warning_slots + live_oneshots;
     let room = audio.voice_cap.saturating_sub(used);
     voices.extend(rest.into_iter().take(room));
     // Critical cues that the cap dropped still play. Warning rows stay on their own cap,
@@ -162,11 +169,25 @@ fn admit_warnings(
     shots: &[Voice],
     playing: &[LiveVoice],
     listener: Vec3,
+    waiting: &mut Vec<Voice>,
 ) -> (Vec<Voice>, Vec<LiveVoice>, usize) {
     let mut fresh: std::collections::BTreeMap<String, Vec<Voice>> = std::collections::BTreeMap::new();
     for voice in shots.iter().filter(|voice| voice.is_warning) {
         let row = row_id(audio, &voice.id);
         fresh.entry(row).or_default().push(voice.clone());
+    }
+    let mut pending: std::collections::BTreeMap<String, Vec<Voice>> = std::collections::BTreeMap::new();
+    for mut voice in std::mem::take(waiting) {
+        let def = audio
+            .sfx
+            .iter()
+            .find(|row| row.id == voice.id)
+            .unwrap_or_else(|| panic!("waiting voice {} is not in the mix", voice.id));
+        if !def.is_warning {
+            panic!("waiting voice {} is not a warning", voice.id);
+        }
+        voice.score = score_of(audio, def, voice.pos, listener);
+        pending.entry(def.row_id.clone()).or_default().push(voice);
     }
     let mut live: std::collections::BTreeMap<String, Vec<(LiveVoice, f32, bool)>> = std::collections::BTreeMap::new();
     for voice in playing {
@@ -186,8 +207,10 @@ fn admit_warnings(
     let mut rows: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     rows.extend(fresh.keys().cloned());
     rows.extend(live.keys().cloned());
+    rows.extend(pending.keys().cloned());
     let mut play = Vec::new();
     let mut fade = Vec::new();
+    let mut next_wait = Vec::new();
     let mut slots = 0usize;
     for row in rows {
         let def = audio
@@ -201,6 +224,9 @@ fn admit_warnings(
         }
         let mut occupied = live.remove(&row).unwrap_or_default();
         let mut events = fresh.remove(&row).unwrap_or_default();
+        if let Some(held) = pending.remove(&row) {
+            events.extend(held);
+        }
         events.sort_by(|a, b| {
             b.score
                 .total_cmp(&a.score)
@@ -209,6 +235,8 @@ fn admit_warnings(
                 .then_with(|| a.pos.y.total_cmp(&b.pos.y))
                 .then_with(|| a.pos.z.total_cmp(&b.pos.z))
         });
+        // The nearest voice that won the row and did not start. One fade frees one slot.
+        let mut replacement: Option<Voice> = None;
         for voice in events {
             if (occupied.len() as u32) < cap {
                 occupied.push((
@@ -223,8 +251,11 @@ fn admit_warnings(
                 play.push(voice);
                 continue;
             }
-            // A fade still holds its slot, so another start would put the row over its cap.
+            // A fade still holds its slot. The newcomer waits; it does not start on top.
             if occupied.iter().any(|item| item.2) {
+                if replacement.is_none() {
+                    replacement = Some(voice);
+                }
                 continue;
             }
             let far_at = occupied
@@ -240,19 +271,14 @@ fn admit_warnings(
             victim.fading = true;
             fade.push(victim.clone());
             occupied.push((victim, victim_score, true));
-            occupied.push((
-                LiveVoice {
-                    id: voice.id.clone(),
-                    pos: voice.pos,
-                    fading: false,
-                },
-                voice.score,
-                false,
-            ));
-            play.push(voice);
+            replacement = Some(voice);
+        }
+        if let Some(voice) = replacement {
+            next_wait.push(voice);
         }
         slots += occupied.len();
     }
+    *waiting = next_wait;
     (play, fade, slots)
 }
 
@@ -279,6 +305,15 @@ fn budget_voices(sfx: &[SfxDef], keep: impl Fn(&SfxDef) -> bool) -> Result<u32, 
         sum += canonical.max_instances;
     }
     Ok(sum)
+}
+
+fn is_live_oneshot(audio: &AudioTable, voice: &LiveVoice) -> bool {
+    let def = audio
+        .sfx
+        .iter()
+        .find(|row| row.id == voice.id)
+        .unwrap_or_else(|| panic!("playing voice {} is not in the mix", voice.id));
+    !def.is_warning && !def.looped
 }
 
 fn is_player_step(audio: &AudioTable, id: &str) -> bool {
@@ -308,8 +343,8 @@ fn cap_instances(audio: &AudioTable, voices: Vec<Voice>, playing: &[LiveVoice]) 
             .sfx
             .iter()
             .find(|s| s.id == voice.id)
-            .map(|s| s.max_instances)
-            .unwrap_or(0);
+            .unwrap_or_else(|| panic!("voice {} is not in the mix", voice.id))
+            .max_instances;
         let n = counts.entry(voice.id.clone()).or_insert(0);
         if cap > 0 && *n >= cap {
             continue;
@@ -787,7 +822,7 @@ flat = true
             let row = audio.sfx.iter().find(|row| row.id == id).unwrap();
             push(&mut events, id, row.max_instances.max(1), None, &mut n);
         }
-        let voices = super::select_voices(&audio, &events, crate::math::Vec3::ZERO, &[]).voices;
+        let voices = super::select_voices(&audio, &events, crate::math::Vec3::ZERO, &[], &mut Vec::new()).voices;
         assert!(voices.len() <= audio.voice_cap, "voices {}", voices.len());
         for row in audio.sfx.iter().filter(|row| row.is_warning) {
             assert!(voices.iter().any(|voice| voice.id == row.id), "stolen {}", row.id);
@@ -800,7 +835,7 @@ flat = true
             .filter(|event| !step_ids.contains(&event.id.as_str()))
             .cloned()
             .collect();
-        let without = super::select_voices(&audio, &quiet, crate::math::Vec3::ZERO, &[]).voices;
+        let without = super::select_voices(&audio, &quiet, crate::math::Vec3::ZERO, &[], &mut Vec::new()).voices;
         for voice in without.iter().filter(|voice| voice.priority == 70) {
             assert!(
                 voices.iter().any(|kept| kept.id == voice.id && kept.pos == voice.pos),
@@ -838,7 +873,7 @@ flat = true
                 n += 1;
             }
         }
-        let pick = super::select_voices(&audio, &events, crate::math::Vec3::ZERO, &[]);
+        let pick = super::select_voices(&audio, &events, crate::math::Vec3::ZERO, &[], &mut Vec::new());
         assert!(pick.fade.is_empty());
         let warning_sum: u32 = rows.iter().map(|row| row.max_instances).sum();
         let heard = pick.voices.iter().filter(|voice| voice.is_warning).count();
@@ -874,7 +909,7 @@ flat = true
             owner: 0,
             priority: None,
         };
-        let pick = super::select_voices(&audio, &[farther], crate::math::Vec3::ZERO, &playing);
+        let pick = super::select_voices(&audio, &[farther], crate::math::Vec3::ZERO, &playing, &mut Vec::new());
         assert!(pick.voices.iter().all(|voice| voice.id != row.id));
         assert!(pick.fade.is_empty());
     }
@@ -952,6 +987,23 @@ flat = true
         let err = super::budget_voices(&[alias], |row| row.is_warning).expect_err("missing source");
         assert!(err.contains("alias downed"), "{err}");
         assert!(err.contains("player_downed"), "{err}");
+    }
+
+    #[test]
+    #[should_panic(expected = "voice not_a_row is not in the mix")]
+    fn an_unknown_voice_is_not_left_uncapped() {
+        let audio = load_mix(include_str!("../../../content/audio_mix.toml")).expect("audio mix");
+        let voice = super::Voice {
+            id: "not_a_row".into(),
+            score: 1.0,
+            critical: false,
+            crowd: false,
+            gain: 1.0,
+            pos: crate::math::Vec3::ZERO,
+            priority: 0,
+            is_warning: false,
+        };
+        super::cap_instances(&audio, vec![voice], &[]);
     }
 }
 

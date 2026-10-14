@@ -6,7 +6,8 @@ crowd_radius = 30.0
 crowd_full_count = 18
 min_distance = 0.5
 hit_reserve = 3
-# Seconds a replaced warning voice fades out. Nearest-wins stays inside one warning row.
+# Seconds a replaced warning voice fades out. The newcomer waits for that fade
+# to free the row slot. Nearest-wins stays inside one warning row.
 warning_fade = 0.030
 critical = ["spitter_charge", "player_downed", "wave_start", "brood_roar", "tyrant_roar"]
 
