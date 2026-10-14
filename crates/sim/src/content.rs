@@ -4819,8 +4819,7 @@ pub struct SfxDef {
     /// Mix row category. `category_ui` stays the ui flag.
     #[serde(default)]
     pub category: String,
-    /// UI bus cues that do not take a `voice_cap` slot.
-    #[serde(default)]
+    /// UI bus cues that do not take a `voice_cap` slot. `load_mix` sets this from the row.
     pub outside_voice_cap: bool,
 }
 

@@ -1509,6 +1509,7 @@ category = "ui"
 priority = 10
 stealable = true
 flat = true
+outside_voice_cap = true
 
 # Short bank chime after the count-up. Quit and disconnect do not play it.
 [ui_bank_chime]
@@ -1520,3 +1521,4 @@ category = "ui"
 priority = 10
 stealable = true
 flat = true
+outside_voice_cap = true

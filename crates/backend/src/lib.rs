@@ -1119,4 +1119,40 @@ mod tests {
         assert_eq!(second.earned, first.earned);
         assert_eq!(again.credits(), first.balance);
     }
+
+    #[test]
+    fn the_wallet_and_the_match_key_are_saved_together() {
+        let content = gemini_sim::Content::embedded();
+        let mut sim = gemini_sim::Sim::new(&content, "normal", 1);
+        let player = sim.players[0].token;
+        sim.enemies.clear();
+        sim.pending_vents.clear();
+        sim.director.pool = 0.0;
+        sim.director.queue = 0.0;
+        sim.phase = gemini_sim::Phase::Combat;
+        sim.step(&content, gemini_sim::PlayerInput::default());
+        let earned = sim.currency_gain[&player];
+        assert!(earned > 0.0, "a cleared wave is a real deposit");
+        let (book, id) = noted(&sim);
+        let mut account = Account::from_seed(12);
+        let start = account.credits();
+        let receipt = account.bank(book.record(id).unwrap(), player).unwrap();
+        assert!(receipt.fresh);
+        assert_eq!(receipt.earned, earned);
+        assert_eq!(account.credits(), start + earned);
+        assert_eq!(account.banks[&(id, player)].earned, earned);
+        assert_eq!(account.banks[&(id, player)].bonus, receipt.bonus);
+        let bytes = account.to_bytes().unwrap();
+        let loaded = Account::from_bytes(&bytes).unwrap();
+        assert_eq!(loaded.credits(), start + earned);
+        assert_eq!(loaded.banks[&(id, player)].earned, earned);
+        assert_eq!(loaded.banks[&(id, player)].bonus, receipt.bonus);
+        let record_bytes = std::mem::size_of::<u64>() * 2 + std::mem::size_of::<f32>() * 2;
+        assert!(Account::from_bytes(&bytes[..bytes.len() - record_bytes]).is_err(), "a cut save is not a balance without its key");
+        let mut again = loaded;
+        let second = again.bank(book.record(id).unwrap(), player).unwrap();
+        assert!(!second.fresh);
+        assert_eq!(second.earned, earned);
+        assert_eq!(again.credits(), start + earned);
+    }
 }

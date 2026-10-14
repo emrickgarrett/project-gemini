@@ -148,6 +148,35 @@ mod tests {
     }
 
     #[test]
+    fn a_quit_past_a_wave_20_milestone_keeps_the_milestone_pay() {
+        let content = Content::embedded();
+        let mut sim = Sim::new(&content, "normal", 1);
+        sim.endless_mode = true;
+        let token = sim.players[0].token;
+        let tier = content.tier("normal").currency;
+        let flat = content.currency.flat_after_wave;
+        let milestone_wave = flat + content.currency.endless_milestone_every;
+        assert_eq!(milestone_payout(&content.currency, flat, tier), 0.0);
+        let mile = milestone_payout(&content.currency, milestone_wave, tier);
+        assert_eq!(mile, content.currency.endless_milestone_bonus * tier);
+        assert!(mile > 0.0);
+        let mut n = 0u32;
+        while n < milestone_wave {
+            clear_wave(&mut sim, &content);
+            n += 1;
+            if n < milestone_wave {
+                open_next_wave(&mut sim, &content);
+            }
+        }
+        assert_eq!(sim.director.wave, milestone_wave);
+        assert!(!matches!(sim.phase, Phase::Victory), "a quit is not a win");
+        let expected = crate::content::currency_reward(&content.currency, milestone_wave, tier, false, 0);
+        assert_eq!(sim.currency_gain[&token], expected);
+        assert_eq!(sim.currency_bonus[&token], mile, "the milestone stays and the win bonus does not");
+        assert!(expected > mile);
+    }
+
+    #[test]
     fn clearing_the_last_wave_banks_the_win_bonus_once() {
         let content = Content::embedded();
         let mut sim = Sim::new(&content, "normal", 2);

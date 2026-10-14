@@ -410,6 +410,7 @@ mod tests {
         assert_eq!(first.earned, sim.currency_gain[&player]);
         let saved = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
         assert!((saved.credits() - first.balance).abs() < 1e-3);
+        assert!(!partial_path(&path).exists(), "the wallet and the match key land in the one renamed save");
         let second = Packet::decode(&exchange_at(&path, &bytes).unwrap()).unwrap();
         let Packet::BankReply(second) = second else { panic!("bank reply") };
         assert!(!second.fresh);
@@ -419,6 +420,47 @@ mod tests {
         let unknown = Packet::decode(&exchange_at(&path, &Packet::Bank(missing).encode().unwrap()).unwrap()).unwrap();
         let Packet::BankReply(unknown) = unknown else { panic!("bank reply") };
         assert_eq!(unknown.fault, Some(BankFault::Unknown));
+        let still = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        assert!((still.credits() - first.balance).abs() < 1e-3);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bank_writes_the_balance_and_the_match_key_together() {
+        let dir = scratch("bank-txn");
+        let path = dir.join("account.bin");
+        let content = Content::embedded();
+        let mut sim = gemini_sim::Sim::new(&content, "normal", 1);
+        let player = sim.players[0].token;
+        sim.enemies.clear();
+        sim.pending_vents.clear();
+        sim.director.pool = 0.0;
+        sim.director.queue = 0.0;
+        sim.phase = gemini_sim::Phase::Combat;
+        sim.step(&content, gemini_sim::PlayerInput::default());
+        let earned = sim.currency_gain[&player];
+        assert!(earned > 0.0, "a cleared wave changes the wallet");
+        let id = open_match().unwrap();
+        note_match(id, &sim).unwrap();
+        let request = Packet::Bank(BankRequest {
+            version: PROTOCOL_VERSION,
+            match_id: id,
+            player_id: player,
+        })
+        .encode()
+        .unwrap();
+        let first = Packet::decode(&exchange_at(&path, &request).unwrap()).unwrap();
+        let Packet::BankReply(first) = first else { panic!("bank reply") };
+        assert!(first.fresh && first.fault.is_none(), "{first:?}");
+        assert!((first.earned - earned).abs() < 1e-3);
+        let saved = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        assert!((saved.credits() - first.balance).abs() < 1e-3);
+        assert!(!partial_path(&path).exists(), "one rename replaces the save");
+        let second = Packet::decode(&exchange_at(&path, &request).unwrap()).unwrap();
+        let Packet::BankReply(second) = second else { panic!("bank reply") };
+        assert!(!second.fresh, "the match key was in the same save as the balance");
+        assert!((second.earned - first.earned).abs() < 1e-3);
+        assert!((second.balance - first.balance).abs() < 1e-3);
         let still = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
         assert!((still.credits() - first.balance).abs() < 1e-3);
         let _ = fs::remove_dir_all(&dir);

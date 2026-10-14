@@ -124,7 +124,10 @@ pub fn select_voices(
             .then_with(|| b.score.total_cmp(&a.score))
             .then_with(|| a.id.cmp(&b.id))
     });
-    let sorted = shots;
+    // Outside the cap: they play, they do not take a slot, and they are not a steal.
+    let (outside, sorted): (Vec<Voice>, Vec<Voice>) = shots.into_iter().partition(|voice| {
+        voice_def(audio, &voice.id).outside_voice_cap
+    });
     let (warnings, mut fade, warning_slots) = admit_warnings(audio, &sorted, playing, listener, waiting);
     // The crowd loop keeps playing when no swarmer is in range, so the slot is
     // held every frame. One-shots cannot fill it and overflow when the swarm arrives.
@@ -181,6 +184,8 @@ pub fn select_voices(
             voices.push(crit);
         }
     }
+    // `max_instances` still applies. These cues do not enter `room` and do not fade a victim.
+    voices.extend(cap_instances(audio, outside, playing));
     VoicePick {
         voices,
         fade,
@@ -421,10 +426,11 @@ fn budget_voices(sfx: &[SfxDef], keep: impl Fn(&SfxDef) -> bool) -> Result<u32, 
 }
 
 /// One-shots and stealable loops hold a voice-cap slot. Warnings are counted on
-/// their own. The bed, the crowd loop, and any other non-stealable loop do not.
+/// their own. The bed, the crowd loop, any other non-stealable loop, and
+/// `outside_voice_cap` rows do not.
 fn occupies_voice(audio: &AudioTable, voice: &LiveVoice) -> bool {
     let def = voice_def(audio, &voice.id);
-    if def.is_warning {
+    if def.outside_voice_cap || def.is_warning {
         return false;
     }
     if def.looped {
@@ -435,7 +441,7 @@ fn occupies_voice(audio: &AudioTable, voice: &LiveVoice) -> bool {
 
 fn is_stealable_voice(audio: &AudioTable, voice: &LiveVoice) -> bool {
     let def = voice_def(audio, &voice.id);
-    def.stealable && !def.is_warning
+    def.stealable && !def.is_warning && !def.outside_voice_cap
 }
 
 fn continues_live_loop(audio: &AudioTable, voice: &Voice, playing: &[LiveVoice], fading: &[LiveVoice]) -> bool {
@@ -535,6 +541,7 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
         .collect::<Result<_, _>>()?;
     let alias = table.get("alias").and_then(|v| v.as_table()).ok_or("audio mix is missing alias")?;
     let mut by_file: std::collections::BTreeMap<String, SfxDef> = std::collections::BTreeMap::new();
+    let mut outside_flag: std::collections::BTreeMap<String, bool> = std::collections::BTreeMap::new();
     for (key, value) in table {
         if matches!(
             key.as_str(),
@@ -611,6 +618,12 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
                 .or_else(|| value.as_float().map(|n| n as i32))
                 .ok_or_else(|| format!("{key} priority is not a number"))?,
         };
+        if let Some(value) = row.get("outside_voice_cap") {
+            let flag = value
+                .as_bool()
+                .ok_or_else(|| format!("{key} outside_voice_cap is not a bool"))?;
+            outside_flag.insert(key.clone(), flag);
+        }
         by_file.insert(
             key.clone(),
             SfxDef {
@@ -682,25 +695,51 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
     if !(warning_fade > 0.0) {
         return Err("warning_fade must be > 0".into());
     }
-    let outside_rows = table
-        .get("outside_voice_cap")
-        .and_then(|value| value.as_array())
-        .ok_or("audio mix is missing outside_voice_cap")?;
+    let outside_rows = match table.get("outside_voice_cap") {
+        None => return Err("audio mix is missing outside_voice_cap".into()),
+        Some(value) => value
+            .as_array()
+            .ok_or_else(|| "outside_voice_cap is not a list".to_string())?,
+    };
     let mut outside_ids = Vec::new();
     for value in outside_rows {
         let id = value
             .as_str()
             .filter(|id| !id.is_empty())
             .ok_or_else(|| "outside_voice_cap entry is not a string".to_string())?;
+        if outside_ids.iter().any(|seen| seen == id) {
+            return Err(format!("outside_voice_cap repeats {id}"));
+        }
         if !sfx.iter().any(|row| row.id == id) {
             return Err(format!("outside_voice_cap names missing row {id}"));
         }
         outside_ids.push(id.to_string());
     }
     for row in &mut sfx {
-        if outside_ids.iter().any(|id| id == &row.id || id == &row.row_id) {
-            row.outside_voice_cap = true;
-        }
+        let listed = outside_ids.iter().any(|id| id == &row.id || id == &row.row_id);
+        let flagged = outside_flag.get(&row.row_id).copied();
+        row.outside_voice_cap = match (listed, flagged) {
+            (true, Some(true)) => true,
+            (true, Some(false)) => {
+                return Err(format!(
+                    "{} is listed in outside_voice_cap and must set outside_voice_cap = true",
+                    row.row_id
+                ));
+            }
+            (true, None) => {
+                return Err(format!(
+                    "{} is listed in outside_voice_cap and is missing outside_voice_cap",
+                    row.row_id
+                ));
+            }
+            (false, Some(true)) => {
+                return Err(format!(
+                    "{} sets outside_voice_cap but is not listed in outside_voice_cap",
+                    row.row_id
+                ));
+            }
+            (false, Some(false) | None) => false,
+        };
     }
     let warning_voices = budget_voices(&sfx, |row| row.is_warning)?;
     let crowd_loops = budget_voices(&sfx, |row| row.crowd && row.looped)?;
@@ -1404,6 +1443,141 @@ flat = true
         let err = load_mix(&text).expect_err("nothing to take");
         assert!(err.contains("no stealable one-shot"), "{err}");
         assert!(err.contains("voice_cap"), "{err}");
+    }
+
+    #[test]
+    fn bank_cues_never_consume_a_cap_voice_and_never_steal() {
+        let audio = load_mix(include_str!("../../../content/audio_mix.toml")).expect("audio mix");
+        assert_eq!(audio.voice_cap, 32);
+        assert_eq!(audio.hit_reserve, 3);
+        let vent = audio.sfx.iter().find(|row| row.id == "vent_warn").expect("vent_warn");
+        let perch = audio.sfx.iter().find(|row| row.id == "perch_climb_warn").expect("perch_climb_warn");
+        assert_eq!(vent.max_instances, 3);
+        assert_eq!(perch.max_instances, 4);
+        let warning_sum: u32 = audio
+            .sfx
+            .iter()
+            .filter(|row| row.is_warning && row.id == row.row_id)
+            .map(|row| row.max_instances)
+            .sum();
+        assert_eq!(warning_sum, 28);
+        for id in ["hive_nest_idle", "relay_tower_hum"] {
+            let row = audio.sfx.iter().find(|row| row.id == id).unwrap_or_else(|| panic!("missing {id}"));
+            assert!(row.looped && row.stealable, "{id} stays a counted stealable prop loop");
+            let live = super::LiveVoice {
+                id: row.id.clone(),
+                pos: crate::math::Vec3::new(4.0, 0.0, 0.0),
+                priority: row.priority,
+                fading: false,
+            };
+            assert!(super::occupies_voice(&audio, &live), "{id} holds a cap voice");
+            assert!(super::is_stealable_voice(&audio, &live), "{id} can be taken");
+        }
+        for id in ["ui_count_tick", "ui_bank_chime"] {
+            let row = audio.sfx.iter().find(|row| row.id == id).unwrap_or_else(|| panic!("missing {id}"));
+            assert!(row.outside_voice_cap, "{id}");
+            assert_eq!(row.max_instances, 1, "{id}");
+            assert!((row.volume - super::db_to_linear(-16.0)).abs() < 1e-4, "{id}");
+            let live = super::LiveVoice {
+                id: row.id.clone(),
+                pos: crate::math::Vec3::ZERO,
+                priority: row.priority,
+                fading: false,
+            };
+            assert!(!super::occupies_voice(&audio, &live), "{id} consumes a cap voice");
+            assert!(!super::is_stealable_voice(&audio, &live), "{id} can be stolen");
+        }
+        let filler = audio
+            .sfx
+            .iter()
+            .find(|row| {
+                row.stealable && !row.looped && !row.is_warning && !row.outside_voice_cap && row.id == row.row_id
+            })
+            .expect("stealable one-shot");
+        let playing: Vec<super::LiveVoice> = (0..audio.voice_cap)
+            .map(|index| super::LiveVoice {
+                id: filler.id.clone(),
+                pos: crate::math::Vec3::new(index as f32 + 1.0, 0.0, 0.0),
+                priority: filler.priority,
+                fading: false,
+            })
+            .collect();
+        assert_eq!(playing.iter().filter(|voice| super::occupies_voice(&audio, voice)).count(), audio.voice_cap);
+        let events = ["ui_count_tick", "ui_bank_chime"]
+            .into_iter()
+            .map(|id| super::SoundEvent {
+                id: id.to_string(),
+                pos: crate::math::Vec3::ZERO,
+                owner: 0,
+                priority: None,
+            })
+            .collect::<Vec<_>>();
+        let mut waiting = Vec::new();
+        let pick = super::select_voices(&audio, &events, crate::math::Vec3::ZERO, &playing, &mut waiting);
+        assert!(pick.fade.is_empty(), "a bank cue does not steal a cap voice");
+        assert!(waiting.is_empty());
+        assert_eq!(pick.voices.iter().filter(|voice| voice.id == "ui_count_tick").count(), 1);
+        assert_eq!(pick.voices.iter().filter(|voice| voice.id == "ui_bank_chime").count(), 1);
+        assert!(
+            pick.voices.iter().all(|voice| voice.id == "ui_count_tick" || voice.id == "ui_bank_chime"),
+            "bank cues do not push a cap voice out of the pick"
+        );
+        let held = vec![super::LiveVoice {
+            id: "ui_count_tick".into(),
+            pos: crate::math::Vec3::ZERO,
+            priority: 10,
+            fading: false,
+        }];
+        let again = super::select_voices(&audio, &events, crate::math::Vec3::ZERO, &held, &mut Vec::new());
+        assert!(again.voices.iter().all(|voice| voice.id != "ui_count_tick"), "max_instances still drops a second tick");
+        assert_eq!(again.voices.iter().filter(|voice| voice.id == "ui_bank_chime").count(), 1);
+        assert!(again.fade.is_empty());
+        let mut with_tick = playing.clone();
+        with_tick.push(super::LiveVoice {
+            id: "ui_count_tick".into(),
+            pos: crate::math::Vec3::ZERO,
+            priority: 10,
+            fading: false,
+        });
+        assert_eq!(
+            with_tick.iter().filter(|voice| super::occupies_voice(&audio, voice)).count(),
+            audio.voice_cap,
+            "a live tick does not add a cap voice"
+        );
+    }
+
+    #[test]
+    fn outside_voice_cap_requires_the_list_and_the_row_flag() {
+        let source = include_str!("../../../content/audio_mix.toml");
+        let missing_list = source
+            .lines()
+            .filter(|line| !line.starts_with("outside_voice_cap = ["))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let err = load_mix(&missing_list).expect_err("missing list");
+        assert!(err.contains("missing outside_voice_cap"), "{err}");
+        let missing_flag = source.replacen("outside_voice_cap = true\n", "", 1);
+        assert_ne!(missing_flag, source);
+        let err = load_mix(&missing_flag).expect_err("missing row flag");
+        assert!(err.contains("ui_count_tick"), "{err}");
+        assert!(err.contains("missing outside_voice_cap"), "{err}");
+        let bad_flag = source.replacen("outside_voice_cap = true\n", "outside_voice_cap = 1\n", 1);
+        let err = load_mix(&bad_flag).expect_err("flag is not a bool");
+        assert!(err.contains("ui_count_tick"), "{err}");
+        assert!(err.contains("not a bool"), "{err}");
+        let false_flag = source.replacen("outside_voice_cap = true\n", "outside_voice_cap = false\n", 1);
+        let err = load_mix(&false_flag).expect_err("listed row is false");
+        assert!(err.contains("ui_count_tick"), "{err}");
+        assert!(err.contains("must set outside_voice_cap = true"), "{err}");
+        let extra = source.replacen(
+            "[jump]\nvolume_db = -1.4\n",
+            "[jump]\nvolume_db = -1.4\noutside_voice_cap = true\n",
+            1,
+        );
+        assert_ne!(extra, source);
+        let err = load_mix(&extra).expect_err("unlisted row");
+        assert!(err.contains("jump"), "{err}");
+        assert!(err.contains("not listed"), "{err}");
     }
 }
 
