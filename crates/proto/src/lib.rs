@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use gemini_sim::PlayerInput;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
 /// Welcome seat when the joiner is queued for the next breather.
 pub const PENDING_SEAT: u32 = u32::MAX;
@@ -55,6 +55,19 @@ pub struct Welcome {
 pub struct CratePullRequest {
     pub version: u32,
     pub banner: String,
+    /// Opaque idempotency key. A replay of the same key does not charge again.
+    pub idempotency_key: String,
+    /// Ten pods in one transaction. False is one pod.
+    pub ten: bool,
+}
+
+/// One pod the client renders. Roll order is the order of [`CratePullReply::pods`].
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CratePod {
+    pub rarity: String,
+    pub fakeout: Option<String>,
+    /// Catalog id from the server roll. The client looks up the icon and the name.
+    pub item: String,
 }
 
 /// Why the host did not return a tier. The client prints copy from content. It does not roll.
@@ -66,16 +79,30 @@ pub enum CratePullFault {
     Unavailable,
     /// The rolled rarity has no shard cost in content.
     Shards,
+    /// A pod inside a ten-pull failed. The wallet is unchanged.
+    Pod { pod: u32 },
+    /// The pull had no idempotency key.
+    Key,
+    /// The key was saved for a different banner or pull kind.
+    Mismatch,
+    /// The rolled rarity has no item in the catalog.
+    Item,
 }
 
 /// The host's answer to [`CratePullRequest`]. A later server sends the same bytes.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CratePullReply {
     pub version: u32,
+    /// Set for a single pull. A ten-pull leaves this empty and fills [`Self::pods`].
     pub rarity: Option<String>,
     pub fakeout: Option<String>,
     pub rank: u32,
     pub fault: Option<CratePullFault>,
+    pub pods: Vec<CratePod>,
+    pub fresh: bool,
+    pub ten: bool,
+    /// Wallet after this answer. The client uses it to disable a pull it cannot afford.
+    pub credits: f32,
 }
 
 /// Ask the host to deposit the gain it already recorded for this match and player.

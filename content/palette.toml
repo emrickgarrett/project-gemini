@@ -121,5 +121,7 @@ flora_bulb = "#193329"
 fog_violet = "#3A3642"
 sky_haze = "#2A2730"
 key_warm = "#FFE2C0"
+# MARK on the paper card. key_warm sits too close to reveal_paper.
+mark_ink = "#5C3317"
 fill_cool = "#C9D7EA"
 ambient_haze = "#DDD4EA"

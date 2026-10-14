@@ -60,7 +60,7 @@ pub enum MenuShot {
         bonus: f32,
         balance: Option<f32>,
     },
-    Crates { focus: usize, rarity: Option<String>, failed: bool, can_pull: bool, reason: String },
+    Crates { focus: usize, rarity: Option<String>, failed: bool, credits: Option<f32>, reason: String },
     ClickToPlay,
 }
 
@@ -149,8 +149,8 @@ pub fn paint_menu_masked(content: &Content, shot: &MenuShot, width: u32, height:
         MenuShot::Results { focus, show, waves, kills, seconds, earned, bonus, balance } => {
             paint_results(&mut rgb, content, frame, *focus, *show, *waves, *kills, *seconds, *earned, *bonus, *balance)
         }
-        MenuShot::Crates { focus, rarity, failed, can_pull, reason } => {
-            paint_crates(&mut rgb, content, frame, *focus, rarity.as_deref(), *failed, *can_pull, reason)
+        MenuShot::Crates { focus, rarity, failed, credits, reason } => {
+            paint_crates(&mut rgb, content, frame, *focus, rarity.as_deref(), *failed, *credits, reason)
         }
         MenuShot::ClickToPlay => paint_click(&mut rgb, content, frame),
     };
@@ -441,7 +441,7 @@ fn paint_results(
     hits
 }
 
-fn paint_crates(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, rarity: Option<&str>, failed: bool, can_pull: bool, reason: &str) -> Vec<Hit> {
+fn paint_crates(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, rarity: Option<&str>, failed: bool, credits: Option<f32>, reason: &str) -> Vec<Hit> {
     let ui = &content.ui;
     draw_title(rgb, content, frame, &ui.copy.crates_title);
     let rows = content.crate_reveal.layout.glyph_rows;
@@ -451,7 +451,7 @@ fn paint_crates(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, r
     let paper = palette(content, &ui.colors.text);
     let line = if let Some(rarity) = rarity {
         rarity.to_uppercase()
-    } else if failed && !reason.is_empty() {
+    } else if !reason.is_empty() {
         reason.to_string()
     } else if failed {
         ui.copy.pull_failed.clone()
@@ -461,13 +461,39 @@ fn paint_crates(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, r
     let tw = measure(&line, scale, glyph) as i32;
     blit(rgb, frame.width, frame.height, (frame.width as i32 - tw) / 2, y, &line, paper, scale, glyph);
     y += (scale * rows) as i32 + frame.px(ui.layout.title_gap);
+    let places = ui.layout.currency_decimals;
+    let short = |cost: u32| credits.filter(|have| *have + 1e-3 < cost as f32).map(|have| (cost as f32 - have).max(0.0));
     let mut hits = Vec::new();
     let mut index = 0;
-    if can_pull {
+    let pull_missing = short(content.banners.cost.single);
+    let ten_missing = short(content.banners.cost.ten_pull_cost);
+    let pull_open = pull_missing.is_none();
+    let ten_open = ten_missing.is_none();
+    if pull_open {
         let hit = crate_button(rgb, content, frame, y, &ui.copy.crates_pull, focus == index);
         y = hit.y + hit.h + frame.px(ui.layout.row_gap);
         hits.push(Hit { id: "pull".into(), ..hit });
         index += 1;
+    } else if let Some(missing) = pull_missing {
+        let hit = crate_button_dim(rgb, content, frame, y, &ui.copy.crates_pull);
+        y = hit.y + hit.h + frame.px(ui.layout.spacing_block);
+        let text = gemini_sim::content::shortfall_line(&ui.copy, places, missing);
+        let tw = measure(&text, scale, glyph) as i32;
+        blit(rgb, frame.width, frame.height, (frame.width as i32 - tw) / 2, y, &text, paper, scale, glyph);
+        y += (scale * rows) as i32 + frame.px(ui.layout.row_gap);
+    }
+    if ten_open {
+        let hit = crate_button(rgb, content, frame, y, &ui.copy.crates_ten, focus == index);
+        y = hit.y + hit.h + frame.px(ui.layout.row_gap);
+        hits.push(Hit { id: "ten".into(), ..hit });
+        index += 1;
+    } else if let Some(missing) = ten_missing {
+        let hit = crate_button_dim(rgb, content, frame, y, &ui.copy.crates_ten);
+        y = hit.y + hit.h + frame.px(ui.layout.spacing_block);
+        let text = gemini_sim::content::shortfall_line(&ui.copy, places, missing);
+        let tw = measure(&text, scale, glyph) as i32;
+        blit(rgb, frame.width, frame.height, (frame.width as i32 - tw) / 2, y, &text, paper, scale, glyph);
+        y += (scale * rows) as i32 + frame.px(ui.layout.row_gap);
     }
     if rarity.is_some() {
         let hit = crate_button(rgb, content, frame, y, &ui.copy.crates_open, focus == index);
@@ -478,6 +504,28 @@ fn paint_crates(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, r
     let _ = index;
     hits.push(Hit { id: "back".into(), ..crate_button(rgb, content, frame, y, &ui.copy.back, focus == hits.len()) });
     hits
+}
+
+fn crate_button_dim(rgb: &mut [u8], content: &Content, frame: Frame, y: i32, label: &str) -> Hit {
+    let edge = palette(content, &content.ui.colors.dim);
+    let x = (frame.width as i32 - frame.px(content.ui.layout.button_width)) / 2;
+    let hit = pause_button(rgb, content, frame, x, y, "", edge);
+    let glyph = content.crate_reveal.layout.title_glyph_px;
+    let scale = frame.text(content.ui.layout.button_scale);
+    let tw = measure(label, scale, glyph) as i32;
+    let th = (content.crate_reveal.layout.glyph_rows * scale) as i32;
+    blit(
+        rgb,
+        frame.width,
+        frame.height,
+        hit.x + (hit.w - tw) / 2,
+        hit.y + (hit.h - th) / 2,
+        label,
+        edge,
+        scale,
+        glyph,
+    );
+    hit
 }
 
 fn crate_button(rgb: &mut [u8], content: &Content, frame: Frame, y: i32, label: &str, focused: bool) -> Hit {
@@ -1386,7 +1434,7 @@ mod tests {
                 focus: 0,
                 rarity: None,
                 failed: true,
-                can_pull: true,
+                credits: None,
                 reason: "NEED 100 CREDITS HAVE 0".into(),
             },
             1280,
@@ -1394,7 +1442,7 @@ mod tests {
         );
         let (generic, _) = paint_menu(
             &content,
-            &MenuShot::Crates { focus: 0, rarity: None, failed: true, can_pull: true, reason: String::new() },
+            &MenuShot::Crates { focus: 0, rarity: None, failed: true, credits: None, reason: String::new() },
             1280,
             720,
         );
@@ -1457,7 +1505,7 @@ mod tests {
                 focus: 0,
                 rarity: None,
                 failed: true,
-                can_pull: true,
+                credits: None,
                 reason: "NEED 100 CREDITS HAVE 0".into(),
             },
             1280,

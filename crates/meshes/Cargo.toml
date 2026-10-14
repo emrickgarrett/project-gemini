@@ -40,3 +40,7 @@ path = "src/bin/arenashot.rs"
 [[bin]]
 name = "venttell"
 path = "src/bin/venttell.rs"
+
+[[bin]]
+name = "tenshot"
+path = "src/bin/tenshot.rs"

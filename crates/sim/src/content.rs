@@ -254,8 +254,8 @@ impl Content {
                 currency
             },
             banners: {
-                let banners: Banners = parse("banners.toml", src.banners)?;
-                validate_banners(&banners)?;
+                let banners = load_banners(src.banners)?;
+                validate_ten_grid(&crate_reveal, &banners, &ui, &audio, &palette)?;
                 banners
             },
             duplicate: load_duplicate(src.duplicate_ranks)?,
@@ -290,6 +290,11 @@ impl Content {
             arena_scene,
             cast,
         })
+    }
+
+    /// The award named by a server pull. `None` when the id is not in the catalog.
+    pub fn crate_item(&self, id: &str) -> Option<&CrateItem> {
+        self.banners.items.iter().find(|item| item.id == id)
     }
 
     /// Playtest selection. `unlock_all` does not grant ownership, currency, or crates.
@@ -894,7 +899,21 @@ pub struct Banners {
     pub pity: BannerPity,
     pub published: BannerPublished,
     pub cost: BannerCost,
+    pub saved: BannerSaved,
     pub dev: BannerDev,
+    /// `[[item]]` rows. The server picks one of the rolled rarity.
+    #[serde(default, rename = "item")]
+    pub items: Vec<CrateItem>,
+}
+
+/// One crate award. `icon` is rows of `#` (ink) and `.` (paper). `ink` is not a rarity color.
+#[derive(Clone, Debug, Deserialize)]
+pub struct CrateItem {
+    pub id: String,
+    pub name: String,
+    pub rarity: String,
+    pub ink: String,
+    pub icon: Vec<String>,
 }
 
 /// Dev-build test wallet. The backend reads this. A release account does not.
@@ -928,7 +947,14 @@ pub struct BannerPublished {
 #[derive(Clone, Debug, Deserialize)]
 pub struct BannerCost {
     pub single: u32,
-    pub ten_pull: u32,
+    pub pods: u32,
+    pub ten_pull_cost: u32,
+}
+
+/// How many pull receipts a save keeps. Older keys are dropped.
+#[derive(Clone, Debug, Deserialize)]
+pub struct BannerSaved {
+    pub max_keys: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -4329,6 +4355,7 @@ pub struct PaletteKeys {
     pub fog_violet: String,
     pub sky_haze: String,
     pub key_warm: String,
+    pub mark_ink: String,
     pub fill_cool: String,
     pub ambient_haze: String,
 }
@@ -4409,6 +4436,7 @@ impl Palette {
             "fog_violet" => self.keys.fog_violet.as_str(),
             "sky_haze" => self.keys.sky_haze.as_str(),
             "key_warm" => self.keys.key_warm.as_str(),
+            "mark_ink" => self.keys.mark_ink.as_str(),
             "fill_cool" => self.keys.fill_cool.as_str(),
             "ambient_haze" => self.keys.ambient_haze.as_str(),
             "hero_teal" | "teal" => self.hero.teal.as_str(),
@@ -4542,8 +4570,10 @@ pub struct CrateReveal {
     pub epic: CrateTier,
     pub legendary: CrateTier,
     pub multi_pull: CrateMulti,
+    pub grid: CrateGrid,
     pub hint: RevealHint,
     pub card: CardTitle,
+    pub icon: CrateIcon,
     pub layout: RevealLayout,
 }
 
@@ -4579,6 +4609,9 @@ pub struct RevealLayout {
     pub gem_height: f32,
     pub gem_glow: f32,
     pub divider_px: u32,
+    pub divider_blend: f32,
+    pub gem_edge_blend: f32,
+    pub crack_glow_blend: f32,
     pub stage: String,
     pub ink_dark: String,
     pub ink_light: String,
@@ -4633,6 +4666,15 @@ fn validate_reveal_panel(layout: &RevealLayout) -> Result<(), String> {
     }
     if layout.divider_px == 0 {
         return Err("crate_reveal.toml layout divider_px must be > 0".into());
+    }
+    for (name, blend) in [
+        ("divider_blend", layout.divider_blend),
+        ("gem_edge_blend", layout.gem_edge_blend),
+        ("crack_glow_blend", layout.crack_glow_blend),
+    ] {
+        if !(blend > 0.0 && blend <= 1.0) {
+            return Err(format!("crate_reveal.toml layout {name} must be in (0, 1]"));
+        }
     }
     let face_w = layout.panel_width - border * 2.0;
     let legend = 9.0 * layout.title_glyph_px as f32;
@@ -4697,6 +4739,7 @@ fn require_arena_colors(palette: &Palette, arena: &Arena) -> Result<(), String> 
 pub struct CrateTier {
     pub tease: String,
     pub sting: String,
+    pub rank: u32,
     pub drop: [f32; 2],
     pub crack: [f32; 2],
     pub burst: f32,
@@ -4714,6 +4757,39 @@ pub struct CrateMulti {
     pub pod_interval: f32,
     pub full_sequence_for: String,
     pub summary_grid: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct CrateGrid {
+    pub fast_flip: f32,
+    pub columns: u32,
+    pub rows: u32,
+    pub gap: f32,
+    pub card_w: f32,
+    pub card_h: f32,
+    pub back: String,
+    pub frame: String,
+    pub face: String,
+    pub refund_message: String,
+    pub refund_w: f32,
+    pub refund_h: f32,
+    pub refund_face: String,
+    pub refund_ink: String,
+    pub refund_tick: String,
+    pub flip_cue: String,
+    pub pull_failed: String,
+    pub failure_ink: String,
+    pub display: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct CrateIcon {
+    pub width_num: u32,
+    pub width_den: u32,
+    pub height_num: u32,
+    pub height_den: u32,
+    pub highlight_div: u32,
+    pub highlight_blend: f32,
 }
 
 impl CrateReveal {
@@ -5119,6 +5195,17 @@ fn require_font(text: &str, what: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// `NEED <n> MORE CREDITS`. `missing` is the shortfall, not the sticker price.
+pub fn shortfall_line(copy: &UiCopy, places: u32, missing: f32) -> String {
+    format!(
+        "{} {} {} {}",
+        copy.pull_need,
+        format_fixed(missing.max(0.0), places),
+        copy.pull_more,
+        copy.pull_credits
+    )
+}
+
 /// Fixed-decimal display. Does not change the stored value.
 pub fn format_fixed(value: f32, decimals: u32) -> String {
     let decimals = decimals.min(6) as usize;
@@ -5224,9 +5311,13 @@ pub struct UiCopy {
     pub crates_title: String,
     pub crates_empty: String,
     pub crates_pull: String,
+    pub crates_ten: String,
     pub crates_open: String,
+    pub crates_continue: String,
+    pub crates_pull_again: String,
     pub pull_failed: String,
     pub pull_need: String,
+    pub pull_more: String,
     pub pull_have: String,
     pub pull_credits: String,
     pub pull_needs_server: String,
@@ -5406,16 +5497,283 @@ fn load_ui(text: &str) -> Result<Ui, String> {
     parse("ui.toml", text)
 }
 
+fn load_banners(text: &str) -> Result<Banners, String> {
+    let mut value: toml::Value = toml::from_str(text).map_err(|err| format!("banners.toml: {err}"))?;
+    let cost = value
+        .get_mut("cost")
+        .and_then(|item| item.as_table_mut())
+        .ok_or("banners.toml is missing cost")?;
+    if cost.get("single").is_none() {
+        return Err("banners.toml is missing cost.single".into());
+    }
+    if cost.get("pods").is_none() {
+        return Err("banners.toml is missing cost.pods".into());
+    }
+    if cost.get("ten_pull_cost").is_none() {
+        return Err("banners.toml is missing cost.ten_pull_cost".into());
+    }
+    let saved = value
+        .get("saved")
+        .and_then(|item| item.as_table())
+        .ok_or("banners.toml is missing saved")?;
+    if saved.get("max_keys").is_none() {
+        return Err("banners.toml is missing saved.max_keys".into());
+    }
+    if value.get("item").and_then(|row| row.as_array()).is_none() {
+        return Err("banners.toml is missing item".into());
+    }
+    let banners: Banners = value.try_into().map_err(|err| format!("banners.toml: {err}"))?;
+    validate_banners(&banners)?;
+    Ok(banners)
+}
+
+fn validate_items(banners: &Banners) -> Result<(), String> {
+    if banners.items.is_empty() {
+        return Err("banners.toml is missing item".into());
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for item in &banners.items {
+        if item.id.is_empty() || !seen.insert(item.id.clone()) {
+            return Err(format!("banners.toml item id \"{}\" is missing or repeated", item.id));
+        }
+        if item.name.is_empty() {
+            return Err(format!("banners.toml item \"{}\" is missing name", item.id));
+        }
+        require_font(&item.name, &format!("banners.toml item \"{}\"", item.id))?;
+        if !matches!(item.rarity.as_str(), "common" | "rare" | "epic" | "legendary") {
+            return Err(format!("banners.toml item \"{}\" has unknown rarity {}", item.id, item.rarity));
+        }
+        if item.ink.is_empty() || item.ink.starts_with("rarity_") {
+            return Err(format!("banners.toml item \"{}\" ink must be set and must not be a rarity color", item.id));
+        }
+        if item.icon.is_empty() {
+            return Err(format!("banners.toml item \"{}\" is missing icon", item.id));
+        }
+        let width = item.icon[0].chars().count();
+        if width == 0 {
+            return Err(format!("banners.toml item \"{}\" icon is empty", item.id));
+        }
+        let mut inked = false;
+        for row in &item.icon {
+            if row.chars().count() != width {
+                return Err(format!("banners.toml item \"{}\" icon rows differ in width", item.id));
+            }
+            for ch in row.chars() {
+                match ch {
+                    '#' => inked = true,
+                    '.' => {}
+                    other => return Err(format!("banners.toml item \"{}\" icon has '{other}'", item.id)),
+                }
+            }
+        }
+        if !inked {
+            return Err(format!("banners.toml item \"{}\" icon has no ink", item.id));
+        }
+    }
+    for rarity in ["common", "rare", "epic", "legendary"] {
+        if !banners.items.iter().any(|item| item.rarity == rarity) {
+            return Err(format!("banners.toml has no item of rarity {rarity}"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_item_inks(banners: &Banners, palette: &Palette, reveal: &CrateReveal) -> Result<(), String> {
+    for item in &banners.items {
+        if palette.hex(&item.ink).is_none() {
+            return Err(format!("banners.toml item \"{}\" ink \"{}\" is not a palette key", item.id, item.ink));
+        }
+    }
+    let glyph = reveal.layout.title_glyph_px.max(1) as f32;
+    let longest = banners.items.iter().map(|item| item.name.chars().count()).max().unwrap_or(1) as f32;
+    let scale = reveal.layout.title_scale_min.max(1) as f32;
+    let grid = &reveal.grid;
+    let band = (reveal.layout.border_px as f32) * 2.0;
+    let face = grid.card_w - band;
+    if longest * glyph * scale > face {
+        return Err(format!("banners.toml item names do not fit a {}px card", grid.card_w));
+    }
+    Ok(())
+}
+
 fn validate_banners(banners: &Banners) -> Result<(), String> {
     if banners.id.is_empty() {
         return Err("banners.toml id must be set".into());
     }
-    if banners.cost.single == 0 || banners.cost.ten_pull == 0 {
+    if banners.cost.single == 0 || banners.cost.pods == 0 || banners.cost.ten_pull_cost == 0 {
         return Err("banners.toml costs must be > 0".into());
     }
+    if banners.saved.max_keys == 0 {
+        return Err("banners.toml saved.max_keys must be > 0".into());
+    }
+    validate_items(banners)?;
     let grant = banners.dev.starting_credits;
-    if !(grant.is_finite() && grant + 1e-3 >= banners.cost.ten_pull as f32) {
-        return Err("banners.toml dev.starting_credits must cover cost.ten_pull".into());
+    if !(grant.is_finite() && grant + 1e-3 >= banners.cost.ten_pull_cost as f32) {
+        return Err("banners.toml dev.starting_credits must cover cost.ten_pull_cost".into());
+    }
+    Ok(())
+}
+
+fn validate_ten_grid(reveal: &CrateReveal, banners: &Banners, ui: &Ui, audio: &AudioTable, palette: &Palette) -> Result<(), String> {
+    let multi = &reveal.multi_pull;
+    if !(multi.pod_interval > 0.0) {
+        return Err("crate_reveal.toml multi_pull.pod_interval must be > 0".into());
+    }
+    if multi.full_sequence_for != "highest_rarity" {
+        return Err("crate_reveal.toml multi_pull.full_sequence_for must be highest_rarity".into());
+    }
+    if !multi.summary_grid {
+        return Err("crate_reveal.toml multi_pull.summary_grid must be true".into());
+    }
+    let ranks = [
+        ("common", reveal.common.rank),
+        ("rare", reveal.rare.rank),
+        ("epic", reveal.epic.rank),
+        ("legendary", reveal.legendary.rank),
+    ];
+    let mut previous = 0u32;
+    for (index, (name, rank)) in ranks.iter().enumerate() {
+        if *rank == 0 {
+            return Err(format!("crate_reveal.toml {name}.rank must be > 0"));
+        }
+        if index > 0 && *rank <= previous {
+            return Err(format!("crate_reveal.toml {name}.rank must be above the previous tier"));
+        }
+        previous = *rank;
+    }
+    let grid = &reveal.grid;
+    if !(grid.fast_flip > 0.0) {
+        return Err("crate_reveal.toml grid.fast_flip must be > 0".into());
+    }
+    if grid.columns == 0 || grid.rows == 0 {
+        return Err("crate_reveal.toml grid columns and rows must be > 0".into());
+    }
+    let cells = grid
+        .columns
+        .checked_mul(grid.rows)
+        .ok_or("crate_reveal.toml grid columns * rows overflows")?;
+    if cells != banners.cost.pods {
+        return Err(format!(
+            "crate_reveal.toml grid is {cells} cards and banners.toml cost.pods is {}",
+            banners.cost.pods
+        ));
+    }
+    if !(grid.gap >= 0.0) || !(grid.card_w > 0.0) || !(grid.card_h > 0.0) {
+        return Err("crate_reveal.toml grid card size must be positive and gap must be >= 0".into());
+    }
+    if !(grid.refund_w > 0.0) || !(grid.refund_h > 0.0) {
+        return Err("crate_reveal.toml grid refund panel must be positive".into());
+    }
+    if grid.refund_message.is_empty() {
+        return Err("crate_reveal.toml grid.refund_message must be set".into());
+    }
+    validate_item_inks(banners, palette, reveal)?;
+    if grid.display != "roll" {
+        return Err(format!("crate_reveal.toml grid.display {} is not roll", grid.display));
+    }
+    let grid_w = grid.columns as f32 * grid.card_w + (grid.columns - 1) as f32 * grid.gap;
+    let grid_h = grid.rows as f32 * grid.card_h + (grid.rows - 1) as f32 * grid.gap;
+    if grid_w > ui.layout.fit_width || grid_h > ui.layout.fit_height {
+        return Err("crate_reveal.toml grid does not fit the ui fit frame".into());
+    }
+    let border = (reveal.layout.border_px as f32 * grid.card_h / reveal.layout.panel_height).round();
+    if border < 1.0 || border * 2.0 >= grid.card_w || border * 2.0 >= grid.card_h {
+        return Err("crate_reveal.toml grid card border does not leave a face".into());
+    }
+    let face_w = grid.card_w - border * 2.0;
+    let legend = "LEGENDARY".chars().count() as f32 * reveal.layout.title_glyph_px as f32 * reveal.layout.title_scale_min as f32;
+    if face_w <= legend {
+        return Err("crate_reveal.toml grid card is too narrow for LEGENDARY".into());
+    }
+    let refund_border = (reveal.layout.border_px as f32 * grid.refund_h / reveal.layout.panel_height).round();
+    if refund_border < 1.0 || refund_border * 2.0 >= grid.refund_w || refund_border * 2.0 >= grid.refund_h {
+        return Err("crate_reveal.toml grid refund border does not leave a face".into());
+    }
+    let refund_face_w = grid.refund_w - refund_border * 2.0;
+    let message_w = grid.refund_message.chars().count() as f32 * reveal.layout.title_glyph_px as f32 * reveal.layout.title_scale_min as f32;
+    if refund_face_w <= message_w {
+        return Err("crate_reveal.toml grid.refund_message does not fit the refund panel".into());
+    }
+    for (name, key) in [
+        ("back", grid.back.as_str()),
+        ("frame", grid.frame.as_str()),
+        ("face", grid.face.as_str()),
+        ("refund_face", grid.refund_face.as_str()),
+        ("refund_ink", grid.refund_ink.as_str()),
+    ] {
+        if key.starts_with("rarity_") {
+            return Err(format!("crate_reveal.toml grid.{name} must not be a rarity color"));
+        }
+        if palette.hex(key).is_none() {
+            return Err(format!("crate_reveal.toml grid.{name} color \"{key}\" does not resolve"));
+        }
+    }
+    let flip = audio
+        .sfx
+        .iter()
+        .find(|row| row.id == grid.flip_cue)
+        .ok_or_else(|| format!("crate_reveal.toml grid.flip_cue {} is missing from the mix", grid.flip_cue))?;
+    if !flip.category_ui || !flip.outside_voice_cap || flip.max_instances != 1 {
+        return Err(format!(
+            "audio_mix.toml {} must be a UI bus row, outside_voice_cap, max_instances 1",
+            grid.flip_cue
+        ));
+    }
+    let tick = audio
+        .sfx
+        .iter()
+        .find(|row| row.id == grid.refund_tick)
+        .ok_or_else(|| format!("crate_reveal.toml grid.refund_tick {} is missing from the mix", grid.refund_tick))?;
+    if !tick.category_ui {
+        return Err(format!("audio_mix.toml {} must be a UI sound", grid.refund_tick));
+    }
+    if grid.refund_tick == ui.sounds.bank_chime || grid.refund_tick == grid.flip_cue {
+        return Err("crate_reveal.toml grid.refund_tick must be a neutral UI tick".into());
+    }
+    let failed_cue = audio
+        .sfx
+        .iter()
+        .find(|row| row.id == grid.pull_failed)
+        .ok_or_else(|| format!("crate_reveal.toml grid.pull_failed {} is missing from the mix", grid.pull_failed))?;
+    if !failed_cue.category_ui {
+        return Err(format!("audio_mix.toml {} must be a UI sound", grid.pull_failed));
+    }
+    if grid.pull_failed == ui.sounds.bank_chime
+        || grid.pull_failed == ui.sounds.count_tick
+        || grid.pull_failed == grid.flip_cue
+        || grid.pull_failed == grid.refund_tick
+    {
+        return Err("crate_reveal.toml grid.pull_failed must not be the chime, the flip, or the tick".into());
+    }
+    if grid.failure_ink != reveal.layout.ink_light {
+        return Err("crate_reveal.toml grid.failure_ink must be the paper color".into());
+    }
+    if grid.failure_ink.starts_with("rarity_") || grid.failure_ink == ui.colors.defeat {
+        return Err("crate_reveal.toml grid.failure_ink must not be a rarity or alarm color".into());
+    }
+    if palette.hex(&grid.failure_ink).is_none() {
+        return Err(format!("crate_reveal.toml grid.failure_ink \"{}\" does not resolve", grid.failure_ink));
+    }
+    let icon = &reveal.icon;
+    if icon.width_den == 0 || icon.height_den == 0 || icon.highlight_div == 0 {
+        return Err("crate_reveal.toml icon divisors must be > 0".into());
+    }
+    if icon.width_num == 0 || icon.width_num > icon.width_den || icon.height_num == 0 || icon.height_num > icon.height_den {
+        return Err("crate_reveal.toml icon box must be a positive fraction of the face".into());
+    }
+    if !(icon.highlight_blend > 0.0 && icon.highlight_blend <= 1.0) {
+        return Err("crate_reveal.toml icon.highlight_blend must be in (0, 1]".into());
+    }
+    if audio.sting.iter().any(|row| row.id == grid.refund_tick || row.id == grid.flip_cue || row.id == grid.pull_failed) {
+        return Err("crate_reveal.toml grid cues must not be crate stings".into());
+    }
+    let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets");
+    if assets.is_dir() {
+        for row in [flip, tick, failed_cue] {
+            if !assets.join(&row.path).is_file() {
+                return Err(format!("{} file {} is missing", row.id, row.path));
+            }
+        }
     }
     Ok(())
 }
@@ -5660,7 +6018,10 @@ fn validate_ui(
         &ui.copy.host,
         &ui.copy.join,
         &ui.copy.crates_pull,
+        &ui.copy.crates_ten,
         &ui.copy.crates_open,
+        &ui.copy.crates_continue,
+        &ui.copy.crates_pull_again,
         &ui.copy.on,
         &ui.copy.off,
     ];
@@ -5838,6 +6199,100 @@ mod cast_look_tests {
         let wide = text.replacen("hit_surface_gap = 0.05", "hit_surface_gap = 1.0", 1);
         let err = load_cast_look(&wide, &palette).expect_err("a meter-wide gap must fail");
         assert!(err.contains("hit_surface_gap"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod ten_pull_keys {
+    use super::{embedded_sources, Content};
+
+    #[test]
+    fn ten_pull_price_follows_the_key_and_missing_keys_fail() {
+        let src = embedded_sources();
+        let stripped = src.banners.replace("ten_pull_cost = 1000\n", "");
+        assert_ne!(stripped, src.banners);
+        let mut sources = embedded_sources();
+        sources.banners = &stripped;
+        let err = Content::parse(&sources).expect_err("ten_pull_cost is required");
+        assert!(err.contains("ten_pull_cost"), "{err}");
+
+        let bumped = src.banners.replace("ten_pull_cost = 1000", "ten_pull_cost = 1100");
+        sources.banners = &bumped;
+        let content = Content::parse(&sources).expect("an explicit ten_pull_cost is the price");
+        let product = content.banners.cost.single * content.banners.cost.pods;
+        assert_eq!(content.banners.cost.ten_pull_cost, product + content.banners.cost.single);
+        assert_ne!(content.banners.cost.ten_pull_cost, product);
+        assert_eq!(content.banners.saved.max_keys, 32);
+
+        let missing_cap = src.banners.replace("max_keys = 32\n", "");
+        sources.banners = &missing_cap;
+        let err = Content::parse(&sources).expect_err("max_keys is required");
+        assert!(err.contains("max_keys"), "{err}");
+
+        let missing_pods = src.banners.replace("pods = 10\n", "");
+        sources.banners = &missing_pods;
+        let err = Content::parse(&sources).expect_err("pods is required");
+        assert!(err.contains("pods"), "{err}");
+
+        sources.banners = src.banners;
+        let missing_flip = src.crate_reveal.replace("fast_flip = 0.125\n", "");
+        assert_ne!(missing_flip, src.crate_reveal);
+        sources.crate_reveal = &missing_flip;
+        let err = Content::parse(&sources).expect_err("fast_flip is required");
+        assert!(err.contains("fast_flip"), "{err}");
+
+        let missing_rank = src.crate_reveal.replacen("rank = 1\n", "", 1);
+        assert_ne!(missing_rank, src.crate_reveal);
+        sources.crate_reveal = &missing_rank;
+        let err = Content::parse(&sources).expect_err("rank is required");
+        assert!(err.contains("rank"), "{err}");
+
+        let missing_icon = src.crate_reveal.replace("highlight_blend = 0.45\n", "");
+        assert_ne!(missing_icon, src.crate_reveal);
+        sources.crate_reveal = &missing_icon;
+        let err = Content::parse(&sources).expect_err("highlight_blend is required");
+        assert!(err.contains("highlight_blend"), "{err}");
+
+        let missing_cue = src.crate_reveal.replace("pull_failed = \"ui_pull_failed\"\n", "");
+        assert_ne!(missing_cue, src.crate_reveal);
+        sources.crate_reveal = &missing_cue;
+        let err = Content::parse(&sources).expect_err("pull_failed is required");
+        assert!(err.contains("pull_failed"), "{err}");
+
+        let missing_ink = src.crate_reveal.replace("failure_ink = \"reveal_paper\"\n", "");
+        assert_ne!(missing_ink, src.crate_reveal);
+        sources.crate_reveal = &missing_ink;
+        let err = Content::parse(&sources).expect_err("failure_ink is required");
+        assert!(err.contains("failure_ink"), "{err}");
+
+        let missing_rule = src.crate_reveal.replace("divider_blend = 0.45\n", "");
+        assert_ne!(missing_rule, src.crate_reveal);
+        sources.crate_reveal = &missing_rule;
+        let err = Content::parse(&sources).expect_err("divider_blend is required");
+        assert!(err.contains("divider_blend"), "{err}");
+
+        let flip_cue = src.crate_reveal.replace("pull_failed = \"ui_pull_failed\"", "pull_failed = \"crate_flip\"");
+        sources.crate_reveal = &flip_cue;
+        let err = Content::parse(&sources).expect_err("the failure cue is not the flip");
+        assert!(err.contains("chime") && err.contains("flip"), "{err}");
+
+        let rarity_ink = src.crate_reveal.replace("failure_ink = \"reveal_paper\"", "failure_ink = \"rarity_legendary\"");
+        sources.crate_reveal = &rarity_ink;
+        let err = Content::parse(&sources).expect_err("the failure line is not a rarity color");
+        assert!(err.contains("failure_ink"), "{err}");
+
+        sources.crate_reveal = src.crate_reveal;
+        sources.banners = src.banners;
+        let content = Content::parse(&sources).expect("items load");
+        let visor = content.crate_item("visor").expect("visor");
+        let grip = content.crate_item("grip").expect("grip");
+        assert_eq!(visor.rarity, "common");
+        assert_eq!(grip.rarity, "common");
+        assert_ne!(visor.ink, grip.ink);
+        let stripped = src.banners.split("[[item]]").next().unwrap();
+        sources.banners = stripped;
+        let err = Content::parse(&sources).expect_err("items are required");
+        assert!(err.contains("item"), "{err}");
     }
 }
 

@@ -16,12 +16,12 @@ use bevy::window::{CursorGrabMode, CursorOptions};
 use gemini_meshes::{paint_menu_masked, Hit, MenuPaint, MenuShot, PaintPrefs};
 use gemini_proto::{BankFault, CratePullFault, CratePullReply};
 use gemini_sim::bank::{cues_between, shown_earned, BankCue, BankShow};
-use gemini_sim::content::{format_fixed, Content};
-use gemini_sim::reveal::RevealRun;
+use gemini_sim::content::{format_fixed, shortfall_line, Content};
+use gemini_sim::reveal::{GridCard, GridRun, RefundRun, RevealRun};
 use gemini_sim::sim::Phase;
 
 use crate::audio;
-use crate::reveal_ui::{self, RevealPlayback};
+use crate::reveal_ui::{self, RevealPlayback, RevealShow};
 use crate::session::{Account, Game, PauseMenu, PendingDifficulty};
 use crate::settings::{self, Loaded, Prefs};
 use crate::AppState;
@@ -65,12 +65,33 @@ pub struct BankClock {
     shown: f32,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct ServerPod {
+    pub rarity: String,
+    pub fakeout: Option<String>,
+    pub item: String,
+}
+
 #[derive(Resource, Clone, Debug, Default)]
 pub struct ServerCrate {
     pub rarity: Option<String>,
     pub fakeout: Option<String>,
     pub failed: bool,
     pub reason: String,
+    pub pods: Vec<ServerPod>,
+    pub ten: bool,
+    /// False when this key was already stored. A replay does not play the reveal.
+    pub fresh: bool,
+    /// Last balance the server reported. None until a pull or a bank answers.
+    pub credits: Option<f32>,
+    /// True after a pull press until the next frame, so a second press in this frame does not send.
+    pub pull_busy: bool,
+    /// Bumps when a new reveal replaces the one on screen. Older voices fade out.
+    pub reveal_gen: u64,
+    /// Keys this client actually sent. Tests read it. A busy or disabled press does not push.
+    pub sent_keys: Vec<String>,
+    /// True once the best card's face is up, or immediately on the refund panel.
+    pub buttons_ready: bool,
 }
 
 #[derive(Resource, Clone, Copy, Debug, Default)]
@@ -86,10 +107,10 @@ pub struct ResetNotice(pub bool);
 pub(crate) struct Dirty(bool);
 
 #[derive(Resource, Default)]
-pub(crate) struct Focus(usize);
+pub(crate) struct Focus(pub(crate) usize);
 
 #[derive(Resource, Default)]
-pub(crate) struct Hits(Vec<Hit>);
+pub(crate) struct Hits(pub(crate) Vec<Hit>);
 
 #[derive(Resource, Default)]
 pub struct PendingAction(pub Option<String>);
@@ -141,7 +162,11 @@ pub fn register(app: &mut App) {
         .add_systems(OnExit(AppState::Menu), despawn_menu)
         .add_systems(OnEnter(AppState::Playing), (enter_match, drop_summary))
         .init_resource::<BankClock>()
-        .add_systems(Update, (navigate, hover, apply, tick_bank, rebuild, debug_hotkeys, crate::audio::flush_ui_cues).chain().run_if(in_state(AppState::Menu)));
+        .add_systems(Update, (release_pull, navigate, hover, apply, tick_bank, rebuild, debug_hotkeys, crate::audio::flush_ui_cues).chain().run_if(in_state(AppState::Menu)));
+}
+
+pub(crate) fn release_pull(mut crate_box: ResMut<ServerCrate>) {
+    crate_box.pull_busy = false;
 }
 
 fn enter_menu(
@@ -303,6 +328,7 @@ pub(crate) fn end_of_match(
     mut next: ResMut<NextState<AppState>>,
     assets: Res<AssetServer>,
     prefs: Res<Prefs>,
+    mut crate_box: ResMut<ServerCrate>,
 ) {
     let Some(game) = game else { return };
     if summary.is_some() {
@@ -317,12 +343,15 @@ pub(crate) fn end_of_match(
         BankShow::Win => game.sim.director.wave,
         BankShow::End | BankShow::Quit | BankShow::Disconnect => game.sim.director.wave.saturating_sub(1),
     };
-    present_bank(&mut commands, &game, show, waves, &assets, &prefs);
+    present_bank(&mut commands, &game, show, waves, &assets, &prefs, &mut crate_box);
     next.set(AppState::Menu);
 }
 
-fn present_bank(commands: &mut Commands, game: &Game, show: BankShow, waves: u32, assets: &AssetServer, prefs: &Prefs) {
+fn present_bank(commands: &mut Commands, game: &Game, show: BankShow, waves: u32, assets: &AssetServer, prefs: &Prefs, crate_box: &mut ServerCrate) {
     let (earned, bonus, balance) = settle_bank(game);
+    if let Some(have) = balance {
+        crate_box.credits = Some(have);
+    }
     commands.insert_resource(MatchSummary {
         show,
         waves,
@@ -517,7 +546,7 @@ pub(crate) fn hover(
     }
 }
 
-fn on_press(activate: On<Activate>, buttons: Query<&HitButton>, mut action: ResMut<PendingAction>, mut focus: ResMut<Focus>, hits: Res<Hits>, mut dirty: ResMut<Dirty>) {
+pub(crate) fn on_press(activate: On<Activate>, buttons: Query<&HitButton>, mut action: ResMut<PendingAction>, mut focus: ResMut<Focus>, hits: Res<Hits>, mut dirty: ResMut<Dirty>) {
     let Ok(hit) = buttons.get(activate.entity) else { return };
     if let Some(index) = hits.0.iter().position(|row| row.id == hit.0) {
         let index = focus_slot(&hits.0, index);
@@ -543,7 +572,7 @@ pub(crate) fn apply(
     mut commands: Commands,
     assets: Res<AssetServer>,
     mut cursor: Query<&mut CursorOptions>,
-    crate_box: Option<Res<ServerCrate>>,
+    mut crate_box: ResMut<ServerCrate>,
     mut rank: ResMut<Account>,
     game: Option<Res<Game>>,
 ) {
@@ -606,7 +635,7 @@ pub(crate) fn apply(
             lock_cursor(&mut cursor, &mut pause, false);
             if let Some(game) = game.as_deref() {
                 let waves = game.sim.director.wave.saturating_sub(1);
-                present_bank(&mut commands, game, BankShow::Quit, waves, &assets, &prefs);
+                present_bank(&mut commands, game, BankShow::Quit, waves, &assets, &prefs, &mut crate_box);
                 *page = Page::Results;
             } else {
                 commands.remove_resource::<MatchSummary>();
@@ -633,18 +662,42 @@ pub(crate) fn apply(
             dirty.0 = true;
             audio::ui_cue(&mut commands, &assets, &content, &prefs, back_cue);
         }
-        "pull" => {
+        "pull" | "ten" => {
+            let ten = id == "ten";
+            let cost = if ten { content.banners.cost.ten_pull_cost } else { content.banners.cost.single } as f32;
+            if crate_box.credits.is_some_and(|have| have + 1e-3 < cost) {
+                dirty.0 = true;
+                return;
+            }
+            let key = pull_key();
+            let credits = crate_box.credits;
+            let kept_keys = crate_box.sent_keys.clone();
+            let kept_busy = crate_box.pull_busy;
+            let kept_gen = crate_box.reveal_gen;
+            let kept_ready = crate_box.buttons_ready;
             dirty.0 = true;
-            match crate::pull_host::round_trip(&content.banners.id) {
+            match crate::pull_host::round_trip(&content.banners.id, &key, ten) {
                 Ok(reply) => {
-                    let (crate_box, pulled_rank) = crate_from_reply(&content, &reply);
+                    let (mut landed, pulled_rank) = crate_from_reply(&content, &reply);
                     if let Some(pulled_rank) = pulled_rank {
                         rank.rank = pulled_rank;
                     }
-                    let failed = crate_box.failed;
-                    commands.insert_resource(crate_box);
-                    let cue = if failed { error } else { confirm };
-                    audio::ui_cue(&mut commands, &assets, &content, &prefs, cue);
+                    let failed = landed.failed;
+                    let refund = matches!(reply.fault, Some(gemini_proto::CratePullFault::Pod { .. } | gemini_proto::CratePullFault::Shards));
+                    let short = matches!(reply.fault, Some(gemini_proto::CratePullFault::Short { .. }));
+                    landed.credits = Some(reply.credits);
+                    keep_session(&mut landed, kept_keys, kept_busy, kept_gen, kept_ready);
+                    *crate_box = landed;
+                    if refund {
+                        commands.insert_resource(RevealPlayback(RevealShow::Refund(RefundRun::start(&content, ten))));
+                        commands.insert_resource(reveal_ui::RevealFrom::Crates);
+                        next.set(AppState::Reveal);
+                    } else if short || (!reply.fresh && !failed) {
+                        // A short click and a replayed receipt do not play a cue.
+                    } else {
+                        let cue = if failed { error } else { confirm };
+                        audio::ui_cue(&mut commands, &assets, &content, &prefs, cue);
+                    }
                 }
                 Err(err) => {
                     eprintln!("crate pull failed: {err}");
@@ -654,39 +707,72 @@ pub(crate) fn apply(
                         }
                         crate::pull_host::PullHostError::Unavailable(_) => content.ui.copy.pull_needs_server.clone(),
                     };
-                    commands.insert_resource(ServerCrate {
+                    *crate_box = ServerCrate {
                         rarity: None,
                         fakeout: None,
                         failed: true,
                         reason,
-                    });
+                        pods: Vec::new(),
+                        ten: false,
+                        fresh: false,
+                        credits,
+                        pull_busy: kept_busy,
+                        reveal_gen: kept_gen,
+                        sent_keys: kept_keys,
+                        buttons_ready: kept_ready,
+                    };
                     audio::ui_cue(&mut commands, &assets, &content, &prefs, error);
                 }
             }
         }
         "open" => {
-            if let Some(crate_box) = crate_box {
-                if let Some(rarity) = crate_box.rarity.clone() {
-                    match RevealRun::start(&content, &rarity, crate_box.fakeout.as_deref()) {
+                if !crate_box.fresh {
+                    return;
+                }
+                if crate_box.ten && !crate_box.failed {
+                    let cards: Vec<GridCard> = crate_box
+                        .pods
+                        .iter()
+                        .map(|pod| GridCard {
+                            rarity: pod.rarity.clone(),
+                            fakeout: pod.fakeout.clone(),
+                            item: pod.item.clone(),
+                        })
+                        .collect();
+                    match GridRun::start(&content, &cards) {
                         Ok(run) => {
-                            commands.insert_resource(RevealPlayback(run));
+                            commands.insert_resource(RevealPlayback(RevealShow::Grid(run)));
                             commands.insert_resource(reveal_ui::RevealFrom::Crates);
                             next.set(AppState::Reveal);
                             audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
                         }
-                        Err(_) => {
-                            commands.insert_resource(ServerCrate {
-                                rarity: None,
-                                fakeout: None,
-                                failed: true,
-                                reason: content.ui.copy.pull_failed.clone(),
-                            });
+                        Err(message) => {
+                            eprintln!("ten pull reveal failed: {message}");
+                            let credits = crate_box.credits;
+                            *crate_box = failed_crate(&content.ui.copy.pull_failed);
+                            crate_box.credits = credits;
+                            dirty.0 = true;
+                            audio::ui_cue(&mut commands, &assets, &content, &prefs, error);
+                        }
+                    }
+                } else if let Some(rarity) = crate_box.rarity.clone() {
+                    match RevealRun::start(&content, &rarity, crate_box.fakeout.as_deref()) {
+                        Ok(run) => {
+                            commands.insert_resource(RevealPlayback(RevealShow::Single(run)));
+                            commands.insert_resource(reveal_ui::RevealFrom::Crates);
+                            next.set(AppState::Reveal);
+                            audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
+                        }
+                        Err(message) => {
+                            eprintln!("crate reveal failed: {message}");
+                            let credits = crate_box.credits;
+                            *crate_box = failed_crate(&content.ui.copy.pull_failed);
+                            crate_box.credits = credits;
                             dirty.0 = true;
                             audio::ui_cue(&mut commands, &assets, &content, &prefs, error);
                         }
                     }
                 }
-            }
         }
         "click" => {}
         other if other.starts_with("hero:") => {
@@ -767,6 +853,142 @@ fn play_again(
     commands.remove_resource::<MatchSummary>();
     next.set(AppState::Playing);
     true
+}
+
+/// CONTINUE and PULL AGAIN on the live grid and the refund panel.
+/// A second PULL AGAIN in this frame sees `pull_busy` and does not send.
+pub(crate) fn reveal_act(
+    mut action: ResMut<PendingAction>,
+    mut page: ResMut<Page>,
+    mut next: ResMut<NextState<AppState>>,
+    mut commands: Commands,
+    mut crate_box: ResMut<ServerCrate>,
+    mut rank: ResMut<Account>,
+    mut playback: Option<ResMut<RevealPlayback>>,
+    assets: Res<AssetServer>,
+    prefs: Res<Prefs>,
+) {
+    let Some(id) = action.0.clone() else { return };
+    if id != "continue" && id != "pull_again" {
+        return;
+    }
+    action.0 = None;
+    let content = Content::embedded();
+    let confirm = &content.ui.sounds.confirm;
+    if id == "continue" {
+        if !crate_box.buttons_ready {
+            return;
+        }
+        commands.remove_resource::<RevealPlayback>();
+        commands.remove_resource::<reveal_ui::RevealFrom>();
+        next.set(AppState::Menu);
+        *page = Page::Crates;
+        audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
+        return;
+    }
+    let cost = content.banners.cost.ten_pull_cost as f32;
+    // Disabled, busy, and short presses spend no key and play no cue.
+    if !crate_box.buttons_ready || crate_box.pull_busy {
+        return;
+    }
+    if crate_box.credits.is_some_and(|have| have + 1e-3 < cost) {
+        return;
+    }
+    // The generation stays put until a fresh grid is on screen. A miss does not fade the sting.
+    crate_box.pull_busy = true;
+    let key = pull_key();
+    crate_box.sent_keys.push(key.clone());
+    audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
+    let kept_keys = crate_box.sent_keys.clone();
+    let kept_gen = crate_box.reveal_gen;
+    let kept_credits = crate_box.credits;
+    let failed_cue = content.crate_reveal.grid.pull_failed.clone();
+    match crate::pull_host::round_trip(&content.banners.id, &key, true) {
+        Ok(reply) => {
+            let (mut landed, pulled_rank) = crate_from_reply(&content, &reply);
+            let refund = matches!(reply.fault, Some(CratePullFault::Pod { .. } | CratePullFault::Shards));
+            let fresh_grid = reply.fresh && reply.ten && !landed.failed && !refund && !reply.pods.is_empty();
+            if refund {
+                if let Some(pulled_rank) = pulled_rank {
+                    rank.rank = pulled_rank;
+                }
+                landed.credits = Some(reply.credits);
+                landed.reason.clear();
+                keep_session(&mut landed, kept_keys, true, kept_gen, true);
+                *crate_box = landed;
+                if let Some(playback) = playback.as_mut() {
+                    playback.0 = RevealShow::Refund(RefundRun::start(&content, true));
+                }
+                return;
+            }
+            if fresh_grid {
+                let cards: Vec<GridCard> = landed
+                    .pods
+                    .iter()
+                    .map(|pod| GridCard {
+                        rarity: pod.rarity.clone(),
+                        fakeout: pod.fakeout.clone(),
+                        item: pod.item.clone(),
+                    })
+                    .collect();
+                match GridRun::start(&content, &cards) {
+                    Ok(run) => {
+                        if let Some(pulled_rank) = pulled_rank {
+                            rank.rank = pulled_rank;
+                        }
+                        landed.credits = Some(reply.credits);
+                        landed.reason.clear();
+                        keep_session(&mut landed, kept_keys, true, kept_gen + 1, false);
+                        *crate_box = landed;
+                        if let Some(playback) = playback.as_mut() {
+                            playback.0 = RevealShow::Grid(run);
+                        }
+                    }
+                    Err(message) => {
+                        eprintln!("ten pull reveal failed: {message}");
+                        crate_box.credits = Some(reply.credits);
+                        crate_box.reason = content.ui.copy.pull_failed.clone();
+                        crate_box.buttons_ready = true;
+                        crate_box.pull_busy = true;
+                        crate_box.sent_keys = kept_keys;
+                        crate_box.reveal_gen = kept_gen;
+                        audio::ui_cue(&mut commands, &assets, &content, &prefs, &failed_cue);
+                    }
+                }
+                return;
+            }
+            let reason = if landed.reason.is_empty() { content.ui.copy.pull_failed.clone() } else { landed.reason };
+            crate_box.reason = reason;
+            crate_box.buttons_ready = true;
+            crate_box.pull_busy = true;
+            crate_box.sent_keys = kept_keys;
+            crate_box.reveal_gen = kept_gen;
+            crate_box.credits = kept_credits;
+            if landed.failed {
+                audio::ui_cue(&mut commands, &assets, &content, &prefs, &failed_cue);
+            }
+        }
+        Err(err) => {
+            eprintln!("crate pull failed: {err}");
+            crate_box.reason = match &err {
+                crate::pull_host::PullHostError::Corrupt(_) | crate::pull_host::PullHostError::Unreadable(_) => content.ui.copy.pull_failed.clone(),
+                crate::pull_host::PullHostError::Unavailable(_) => content.ui.copy.pull_needs_server.clone(),
+            };
+            crate_box.buttons_ready = true;
+            crate_box.pull_busy = true;
+            crate_box.sent_keys = kept_keys;
+            crate_box.reveal_gen = kept_gen;
+            crate_box.credits = kept_credits;
+            audio::ui_cue(&mut commands, &assets, &content, &prefs, &failed_cue);
+        }
+    }
+}
+
+fn keep_session(landed: &mut ServerCrate, keys: Vec<String>, busy: bool, gen: u64, ready: bool) {
+    landed.sent_keys = keys;
+    landed.pull_busy = busy;
+    landed.reveal_gen = gen;
+    landed.buttons_ready = ready;
 }
 
 fn go_back(page: &mut Page, pause: &mut PauseMenu, focus: &mut Focus) {
@@ -992,7 +1214,7 @@ fn shot_for(
             focus,
             rarity: crate_box.and_then(|row| row.rarity.clone()),
             failed: crate_box.is_some_and(|row| row.failed),
-            can_pull: true,
+            credits: crate_box.and_then(|row| row.credits),
             reason: crate_box.map(|row| row.reason.clone()).unwrap_or_default(),
         },
     })
@@ -1010,65 +1232,95 @@ fn paint_prefs(prefs: &Prefs) -> PaintPrefs {
     }
 }
 
+fn failed_crate(reason: &str) -> ServerCrate {
+    ServerCrate {
+        rarity: None,
+        fakeout: None,
+        failed: true,
+        reason: reason.to_string(),
+        pods: Vec::new(),
+        ten: false,
+        fresh: false,
+        credits: None,
+        pull_busy: false,
+        reveal_gen: 0,
+        sent_keys: Vec::new(),
+        buttons_ready: false,
+    }
+}
+
+/// A new 128-bit key for one pull. A later launch does not reuse it.
+pub(crate) fn pull_key() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).expect("os randomness for a pull key");
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(32);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn pods_of(reply: &CratePullReply) -> Vec<ServerPod> {
+    reply
+        .pods
+        .iter()
+        .map(|pod| ServerPod {
+            rarity: pod.rarity.clone(),
+            fakeout: pod.fakeout.clone(),
+            item: pod.item.clone(),
+        })
+        .collect()
+}
+
 pub(crate) fn crate_from_reply(content: &Content, reply: &CratePullReply) -> (ServerCrate, Option<u32>) {
     let copy = &content.ui.copy;
     let places = content.ui.layout.currency_decimals;
+    let pods = pods_of(reply);
+    let base = |failed: bool, reason: String, rarity: Option<String>, fakeout: Option<String>, pods: Vec<ServerPod>| ServerCrate {
+        rarity,
+        fakeout,
+        failed,
+        reason,
+        pods,
+        ten: reply.ten,
+        fresh: reply.fresh && !failed,
+        credits: Some(reply.credits),
+        pull_busy: false,
+        reveal_gen: 0,
+        sent_keys: Vec::new(),
+        buttons_ready: false,
+    };
     match &reply.fault {
         None => {
-            let failed = reply.rarity.is_none();
+            let failed = if reply.ten { reply.pods.is_empty() } else { reply.rarity.is_none() };
+            let reason = if failed { copy.pull_failed.clone() } else { String::new() };
+            let rank = (!failed).then_some(reply.rank);
+            (base(failed, reason, reply.rarity.clone(), reply.fakeout.clone(), pods), rank)
+        }
+        Some(CratePullFault::Short { cost, have }) => {
+            let missing = (cost - have).max(0.0);
             (
-                ServerCrate {
-                    rarity: reply.rarity.clone(),
-                    fakeout: reply.fakeout.clone(),
-                    failed,
-                    reason: if failed { copy.pull_failed.clone() } else { String::new() },
-                },
-                (!failed).then_some(reply.rank),
+                base(
+                    false,
+                    shortfall_line(copy, places, missing),
+                    None,
+                    None,
+                    Vec::new(),
+                ),
+                None,
             )
         }
-        Some(CratePullFault::Short { cost, have }) => (
-            ServerCrate {
-                rarity: None,
-                fakeout: None,
-                failed: true,
-                reason: format!(
-                    "{} {} {} {} {}",
-                    copy.pull_need,
-                    format_fixed(*cost, places),
-                    copy.pull_credits,
-                    copy.pull_have,
-                    format_fixed(*have, places)
-                ),
-            },
-            None,
-        ),
-        Some(CratePullFault::Banner) => (
-            ServerCrate {
-                rarity: None,
-                fakeout: None,
-                failed: true,
-                reason: copy.pull_failed.clone(),
-            },
-            None,
-        ),
-        Some(CratePullFault::Unavailable) => (
-            ServerCrate {
-                rarity: None,
-                fakeout: None,
-                failed: true,
-                reason: copy.pull_needs_server.clone(),
-            },
-            None,
-        ),
-        Some(CratePullFault::Shards) => (
-            ServerCrate {
-                rarity: None,
-                fakeout: None,
-                failed: true,
-                reason: copy.pull_no_shards.clone(),
-            },
-            None,
-        ),
+        Some(CratePullFault::Banner)
+        | Some(CratePullFault::Pod { .. })
+        | Some(CratePullFault::Key)
+        | Some(CratePullFault::Mismatch)
+        | Some(CratePullFault::Item) => {
+            (base(true, copy.pull_failed.clone(), None, None, Vec::new()), None)
+        }
+        Some(CratePullFault::Unavailable) => (base(true, copy.pull_needs_server.clone(), None, None, Vec::new()), None),
+        Some(CratePullFault::Shards) => (base(true, copy.pull_no_shards.clone(), None, None, Vec::new()), None),
     }
 }
 
