@@ -94,6 +94,7 @@ fn install_match(app: &mut App) {
         .add_systems(
             Update,
             (session::autoplay, audio::menu_levels, audio::ramp_reveal_duck, audio::sync_gains, audio::attach_duck)
+                .chain()
                 .run_if(in_state(AppState::Menu)),
         )
         .add_systems(OnEnter(AppState::Reveal), reveal_ui::enter)
