@@ -894,6 +894,7 @@ pub struct Banners {
     pub pity: BannerPity,
     pub published: BannerPublished,
     pub cost: BannerCost,
+    pub saved: BannerSaved,
     pub dev: BannerDev,
 }
 
@@ -929,7 +930,13 @@ pub struct BannerPublished {
 pub struct BannerCost {
     pub single: u32,
     pub pods: u32,
-    pub ten_pull: u32,
+    pub ten_pull_cost: u32,
+}
+
+/// How many pull receipts a save keeps. Older keys are dropped.
+#[derive(Clone, Debug, Deserialize)]
+pub struct BannerSaved {
+    pub max_keys: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -4729,6 +4736,7 @@ pub struct CrateGrid {
     pub card_h: f32,
     pub back: String,
     pub frame: String,
+    pub face: String,
     pub refund_message: String,
     pub refund_w: f32,
     pub refund_h: f32,
@@ -5249,6 +5257,8 @@ pub struct UiCopy {
     pub crates_pull: String,
     pub crates_ten: String,
     pub crates_open: String,
+    pub crates_continue: String,
+    pub crates_pull_again: String,
     pub pull_failed: String,
     pub pull_need: String,
     pub pull_have: String,
@@ -5442,39 +5452,34 @@ fn load_banners(text: &str) -> Result<Banners, String> {
     if cost.get("pods").is_none() {
         return Err("banners.toml is missing cost.pods".into());
     }
-    if cost.get("ten_pull").is_none() {
-        let single = toml_u32(cost.get("single").unwrap(), "cost.single")?;
-        let pods = toml_u32(cost.get("pods").unwrap(), "cost.pods")?;
-        let product = single
-            .checked_mul(pods)
-            .ok_or("banners.toml cost.pods * cost.single overflows")?;
-        cost.insert("ten_pull".into(), toml::Value::Integer(i64::from(product)));
+    if cost.get("ten_pull_cost").is_none() {
+        return Err("banners.toml is missing cost.ten_pull_cost".into());
+    }
+    let saved = value
+        .get("saved")
+        .and_then(|item| item.as_table())
+        .ok_or("banners.toml is missing saved")?;
+    if saved.get("max_keys").is_none() {
+        return Err("banners.toml is missing saved.max_keys".into());
     }
     let banners: Banners = value.try_into().map_err(|err| format!("banners.toml: {err}"))?;
     validate_banners(&banners)?;
     Ok(banners)
 }
 
-fn toml_u32(value: &toml::Value, key: &str) -> Result<u32, String> {
-    let Some(number) = value.as_integer() else {
-        return Err(format!("banners.toml {key} is not an integer"));
-    };
-    if number <= 0 || number > i64::from(u32::MAX) {
-        return Err(format!("banners.toml {key} must be > 0"));
-    }
-    Ok(number as u32)
-}
-
 fn validate_banners(banners: &Banners) -> Result<(), String> {
     if banners.id.is_empty() {
         return Err("banners.toml id must be set".into());
     }
-    if banners.cost.single == 0 || banners.cost.pods == 0 || banners.cost.ten_pull == 0 {
+    if banners.cost.single == 0 || banners.cost.pods == 0 || banners.cost.ten_pull_cost == 0 {
         return Err("banners.toml costs must be > 0".into());
     }
+    if banners.saved.max_keys == 0 {
+        return Err("banners.toml saved.max_keys must be > 0".into());
+    }
     let grant = banners.dev.starting_credits;
-    if !(grant.is_finite() && grant + 1e-3 >= banners.cost.ten_pull as f32) {
-        return Err("banners.toml dev.starting_credits must cover cost.ten_pull".into());
+    if !(grant.is_finite() && grant + 1e-3 >= banners.cost.ten_pull_cost as f32) {
+        return Err("banners.toml dev.starting_credits must cover cost.ten_pull_cost".into());
     }
     Ok(())
 }
@@ -5561,6 +5566,7 @@ fn validate_ten_grid(reveal: &CrateReveal, banners: &Banners, ui: &Ui, audio: &A
     for (name, key) in [
         ("back", grid.back.as_str()),
         ("frame", grid.frame.as_str()),
+        ("face", grid.face.as_str()),
         ("refund_face", grid.refund_face.as_str()),
         ("refund_ink", grid.refund_ink.as_str()),
     ] {
@@ -5849,6 +5855,8 @@ fn validate_ui(
         &ui.copy.crates_pull,
         &ui.copy.crates_ten,
         &ui.copy.crates_open,
+        &ui.copy.crates_continue,
+        &ui.copy.crates_pull_again,
         &ui.copy.on,
         &ui.copy.off,
     ];
@@ -6036,19 +6044,25 @@ mod ten_pull_keys {
     #[test]
     fn ten_pull_price_follows_the_key_and_missing_keys_fail() {
         let src = embedded_sources();
-        let stripped = src.banners.replace("ten_pull = 1000\n", "");
+        let stripped = src.banners.replace("ten_pull_cost = 1000\n", "");
         assert_ne!(stripped, src.banners);
         let mut sources = embedded_sources();
         sources.banners = &stripped;
-        let content = Content::parse(&sources).expect("omitting ten_pull uses pods * single");
-        assert_eq!(content.banners.cost.ten_pull, content.banners.cost.single * content.banners.cost.pods);
+        let err = Content::parse(&sources).expect_err("ten_pull_cost is required");
+        assert!(err.contains("ten_pull_cost"), "{err}");
 
-        let bumped = src.banners.replace("ten_pull = 1000", "ten_pull = 1100");
+        let bumped = src.banners.replace("ten_pull_cost = 1000", "ten_pull_cost = 1100");
         sources.banners = &bumped;
-        let content = Content::parse(&sources).expect("an explicit ten_pull is the price");
+        let content = Content::parse(&sources).expect("an explicit ten_pull_cost is the price");
         let product = content.banners.cost.single * content.banners.cost.pods;
-        assert_eq!(content.banners.cost.ten_pull, product + content.banners.cost.single);
-        assert_ne!(content.banners.cost.ten_pull, product);
+        assert_eq!(content.banners.cost.ten_pull_cost, product + content.banners.cost.single);
+        assert_ne!(content.banners.cost.ten_pull_cost, product);
+        assert_eq!(content.banners.saved.max_keys, 32);
+
+        let missing_cap = src.banners.replace("max_keys = 32\n", "");
+        sources.banners = &missing_cap;
+        let err = Content::parse(&sources).expect_err("max_keys is required");
+        assert!(err.contains("max_keys"), "{err}");
 
         let missing_pods = src.banners.replace("pods = 10\n", "");
         sources.banners = &missing_pods;

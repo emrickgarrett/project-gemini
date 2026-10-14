@@ -346,15 +346,17 @@ impl GridRun {
 #[derive(Clone, Debug)]
 pub struct RefundRun {
     pub message: String,
+    pub ten: bool,
     tick: String,
     pub time: f32,
     played: bool,
 }
 
 impl RefundRun {
-    pub fn start(content: &Content) -> Self {
+    pub fn start(content: &Content, ten: bool) -> Self {
         Self {
             message: content.crate_reveal.grid.refund_message.clone(),
+            ten,
             tick: content.crate_reveal.grid.refund_tick.clone(),
             time: 0.0,
             played: false,
@@ -604,13 +606,13 @@ mod tests {
     #[test]
     fn refund_plays_one_neutral_tick_and_no_sting() {
         let content = Content::embedded();
-        let mut refund = RefundRun::start(&content);
+        let mut refund = RefundRun::start(&content, true);
         let tick = content.crate_reveal.grid.refund_tick.clone();
         assert_ne!(tick, content.ui.sounds.bank_chime);
         let cues = refund.advance(content.crate_reveal.grid.fast_flip);
         assert_eq!(cues, vec![tick]);
         assert!(refund.advance(content.crate_reveal.grid.fast_flip).is_empty());
-        let mut skipped = RefundRun::start(&content);
+        let mut skipped = RefundRun::start(&content, true);
         assert!(skipped.skip().is_empty());
         assert!(skipped.advance(content.crate_reveal.grid.fast_flip).is_empty());
     }

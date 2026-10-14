@@ -477,12 +477,15 @@ mod tests {
             pods: Vec::new(),
             fresh: false,
             ten: false,
+            credits: 0.0,
         };
         let (failed, _) = flow::crate_from_reply(&content, &short);
-        assert!(failed.failed);
+        assert!(!failed.failed, "a short wallet is not a refund");
         assert!(failed.rarity.is_none());
         assert!(failed.reason.starts_with(&content.ui.copy.pull_need), "{}", failed.reason);
-        assert!(failed.reason.contains(&content.ui.copy.pull_have), "{}", failed.reason);
+        assert!(failed.reason.contains(&content.ui.copy.pull_credits), "{}", failed.reason);
+        assert!(!failed.reason.contains(&content.ui.copy.pull_have), "{}", failed.reason);
+        assert_eq!(failed.credits, Some(0.0));
         app.insert_resource(failed);
         choose(&mut app, "open");
         assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Menu));
@@ -497,6 +500,7 @@ mod tests {
             pods: Vec::new(),
             fresh: false,
             ten: false,
+            credits: content.banners.dev.starting_credits,
         };
         let (missing, _) = flow::crate_from_reply(&content, &shards);
         assert!(missing.failed);
@@ -512,6 +516,7 @@ mod tests {
             pods: vec![gemini_proto::CratePod { rarity: "rare".into(), fakeout: Some("epic".into()) }],
             fresh: true,
             ten: false,
+            credits: content.banners.dev.starting_credits,
         };
         let (filled, rank) = flow::crate_from_reply(&content, &reply);
         assert!(!filled.failed);
@@ -524,6 +529,37 @@ mod tests {
             panic!("a single pull opens a single reveal");
         };
         assert_eq!(run.plan.rarity, "rare");
+
+        let replay = gemini_proto::CratePullReply { fresh: false, ..reply };
+        let (again, _) = flow::crate_from_reply(&content, &replay);
+        assert!(!again.fresh);
+        let mut quiet = menu_app();
+        quiet.update();
+        choose(&mut quiet, "crates");
+        quiet.insert_resource(again);
+        choose(&mut quiet, "open");
+        assert!(quiet.world().get_resource::<reveal_ui::RevealPlayback>().is_none(), "a replay does not play the reveal again");
+    }
+
+    #[test]
+    fn pull_keys_are_unique_and_a_short_click_sends_nothing() {
+        let _guard = settings_lock();
+        let first = flow::pull_key();
+        let second = flow::pull_key();
+        assert_ne!(first, second);
+        assert_ne!(first, "0");
+        assert_eq!(first.len(), 32);
+        assert!(first.chars().all(|ch| ch.is_ascii_hexdigit()));
+
+        let mut app = menu_app();
+        app.update();
+        choose(&mut app, "crates");
+        app.world_mut().resource_mut::<flow::ServerCrate>().credits = Some(0.0);
+        choose(&mut app, "pull");
+        let stayed = app.world().resource::<flow::ServerCrate>();
+        assert!(!stayed.failed);
+        assert!(stayed.reason.is_empty(), "a disabled pull does not ask the server");
+        assert_eq!(stayed.credits, Some(0.0));
     }
 
     #[test]

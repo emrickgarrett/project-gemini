@@ -66,7 +66,7 @@ pub fn require_readable_at(path: &Path) -> Result<(), ExchangeError> {
         return Ok(());
     }
     let bytes = fs::read(path).map_err(|err| unreadable(path, err))?;
-    Account::from_bytes(&bytes).map(|_| ()).map_err(|err| corrupt(path, err))
+    Account::from_bytes(&bytes, &Content::embedded()).map(|_| ()).map_err(|err| corrupt(path, err))
 }
 
 /// One proto round trip against the on-disk account.
@@ -82,7 +82,7 @@ fn exchange_with(path: &Path, content: &Content, request: &[u8]) -> Result<Vec<u
     let packet = Packet::decode(request).map_err(|err| ExchangeError::Failed(format!("host request is not a proto packet: {err}")))?;
     let mut account = load_or_create(path, content)?;
     let reply = answer(&mut account, content, &packet)?;
-    write_account(path, &account)?;
+    write_account(path, &account, content)?;
     reply.encode().map_err(|err| ExchangeError::Failed(format!("could not encode the host reply: {err}")))
 }
 
@@ -161,6 +161,7 @@ fn answer_pull(account: &mut Account, content: &Content, request: &gemini_proto:
         Err(PullError::Shards) => pull_reply(account, request.ten, None, None, Vec::new(), false, Some(CratePullFault::Shards)),
         Err(PullError::Pod { pod }) => pull_reply(account, request.ten, None, None, Vec::new(), false, Some(CratePullFault::Pod { pod })),
         Err(PullError::Key) => pull_reply(account, request.ten, None, None, Vec::new(), false, Some(CratePullFault::Key)),
+        Err(PullError::Mismatch) => pull_reply(account, request.ten, None, None, Vec::new(), false, Some(CratePullFault::Mismatch)),
     };
     Ok(Packet::CratePullReply(reply))
 }
@@ -183,6 +184,7 @@ fn pull_reply(
         pods,
         fresh,
         ten,
+        credits: account.credits(),
     }
 }
 
@@ -232,13 +234,13 @@ fn account_rank(account: &Account) -> u32 {
 fn load_or_create(path: &Path, content: &Content) -> Result<Account, ExchangeError> {
     if path.exists() {
         let bytes = fs::read(path).map_err(|err| unreadable(path, err))?;
-        return Account::from_bytes(&bytes).map_err(|err| corrupt(path, err));
+        return Account::from_bytes(&bytes, content).map_err(|err| corrupt(path, err));
     }
     let partial = partial_path(path);
     if partial.exists() {
         let bytes = fs::read(&partial).map_err(|err| unreadable(&partial, err))?;
-        let account = Account::from_bytes(&bytes).map_err(|err| corrupt(&partial, err))?;
-        write_account(path, &account)?;
+        let account = Account::from_bytes(&bytes, content).map_err(|err| corrupt(&partial, err))?;
+        write_account(path, &account, content)?;
         return Ok(account);
     }
     if let Some(parent) = path.parent() {
@@ -247,7 +249,7 @@ fn load_or_create(path: &Path, content: &Content) -> Result<Account, ExchangeErr
         }
     }
     let account = Account::open(content);
-    write_account(path, &account)?;
+    write_account(path, &account, content)?;
     Ok(account)
 }
 
@@ -265,8 +267,8 @@ fn partial_path(path: &Path) -> PathBuf {
     PathBuf::from(partial)
 }
 
-fn write_account(path: &Path, account: &Account) -> Result<(), ExchangeError> {
-    let bytes = account.to_bytes().map_err(|err| ExchangeError::Failed(format!("could not encode the dev account: {err}")))?;
+fn write_account(path: &Path, account: &Account, content: &Content) -> Result<(), ExchangeError> {
+    let bytes = account.to_bytes(content).map_err(|err| ExchangeError::Failed(format!("could not encode the dev account: {err}")))?;
     let partial = partial_path(path);
     {
         let mut file = fs::File::create(&partial).map_err(|err| ExchangeError::Failed(format!("could not write {}: {err}", partial.display())))?;
@@ -274,7 +276,7 @@ fn write_account(path: &Path, account: &Account) -> Result<(), ExchangeError> {
         file.sync_all().ok();
     }
     let written = fs::read(&partial).map_err(|err| unreadable(&partial, err))?;
-    Account::from_bytes(&written).map_err(|err| corrupt(&partial, err))?;
+    Account::from_bytes(&written, content).map_err(|err| corrupt(&partial, err))?;
     if path.exists() {
         fs::remove_file(path).map_err(|err| ExchangeError::Failed(format!("could not replace {}: {err}", path.display())))?;
     }
@@ -324,7 +326,7 @@ mod tests {
         assert!(reply.fault.is_none(), "{reply:?}");
         let rarity = reply.rarity.expect("a funded pull returns a tier");
         assert!(["common", "rare", "epic", "legendary"].contains(&rarity.as_str()));
-        let saved = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        let saved = Account::from_bytes(&fs::read(&path).unwrap(), &content).unwrap();
         assert_eq!(saved.credits(), content.banners.dev.starting_credits - cost);
         assert!(saved.since_legendary(&banner) <= 1);
         assert_eq!(saved.audit.len(), 1);
@@ -332,14 +334,14 @@ mod tests {
         let second = Packet::decode(&exchange_at(&path, &request(&banner, "two")).unwrap()).unwrap();
         let Packet::CratePullReply(again) = second else { panic!("reply") };
         assert!(again.fault.is_none(), "{again:?}");
-        let reloaded = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        let reloaded = Account::from_bytes(&fs::read(&path).unwrap(), &content).unwrap();
         assert_eq!(reloaded.credits(), content.banners.dev.starting_credits - cost * 2.0);
         assert_eq!(reloaded.audit.len(), 2);
         let replay = Packet::decode(&exchange_at(&path, &bytes).unwrap()).unwrap();
         let Packet::CratePullReply(replay) = replay else { panic!("reply") };
         assert!(!replay.fresh, "the same idempotency key must not charge again");
         assert_eq!(replay.rarity.as_deref(), Some(rarity.as_str()));
-        let once = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        let once = Account::from_bytes(&fs::read(&path).unwrap(), &content).unwrap();
         assert_eq!(once.credits(), reloaded.credits());
         assert_eq!(once.audit.len(), 2);
         assert_ne!(reloaded.credits(), content.banners.dev.starting_credits, "a launch must not grant again");
@@ -361,7 +363,7 @@ mod tests {
         let banner = content.banners.id.as_str();
         exchange_at(&path, &request(banner, "one")).unwrap();
         exchange_at(&path, &request(banner, "two")).unwrap();
-        let spent = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        let spent = Account::from_bytes(&fs::read(&path).unwrap(), &content).unwrap();
         let cost = content.banners.cost.single as f32;
         assert_eq!(spent.credits(), content.banners.dev.starting_credits - cost * 2.0);
         assert_eq!(spent.audit.len(), 2);
@@ -375,7 +377,7 @@ mod tests {
         reset_at(&path).unwrap();
         assert!(!path.exists());
         exchange_at(&path, &request(banner, "fresh")).unwrap();
-        let fresh = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        let fresh = Account::from_bytes(&fs::read(&path).unwrap(), &content).unwrap();
         let cost = content.banners.cost.single as f32;
         assert_eq!(fresh.credits(), content.banners.dev.starting_credits - cost);
         assert_eq!(fresh.audit.len(), 1, "reset drops the old audit with the old pity");
@@ -392,13 +394,13 @@ mod tests {
         let mut account = Account::open(&content);
         account.pull(&content, banner).unwrap();
         while account.pull(&content, banner).is_ok() {}
-        write_account(&path, &account).unwrap();
+        write_account(&path, &account, &content).unwrap();
         let have = account.credits();
         let reply = Packet::decode(&exchange_at(&path, &request(banner, "short")).unwrap()).unwrap();
         let Packet::CratePullReply(reply) = reply else { panic!("reply") };
         assert!(matches!(reply.fault, Some(CratePullFault::Short { have: got, .. }) if (got - have).abs() < 1e-3));
         assert!(reply.rarity.is_none());
-        let still = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        let still = Account::from_bytes(&fs::read(&path).unwrap(), &content).unwrap();
         assert!((still.credits() - have).abs() < 1e-3);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -411,7 +413,7 @@ mod tests {
         content.cosmetics.forget_shard_row("common").unwrap();
         let mut account = Account::open(&content);
         account.rank = content.duplicate.max_rank;
-        write_account(&path, &account).unwrap();
+        write_account(&path, &account, &content).unwrap();
         let credits = account.credits();
         let pity = account.since_legendary(&content.banners.id);
         let audit = account.audit.len();
@@ -421,7 +423,7 @@ mod tests {
         let Packet::CratePullReply(reply) = reply else { panic!("reply") };
         assert!(matches!(reply.fault, Some(CratePullFault::Shards)), "{reply:?}");
         assert!(reply.rarity.is_none());
-        let saved = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        let saved = Account::from_bytes(&fs::read(&path).unwrap(), &content).unwrap();
         assert!((saved.credits() - credits).abs() < 1e-3);
         assert_eq!(saved.since_legendary(&banner), pity);
         assert_eq!(saved.audit.len(), audit);
@@ -430,7 +432,7 @@ mod tests {
         let Packet::CratePullReply(again) = again else { panic!("reply") };
         assert!(matches!(again.fault, Some(CratePullFault::Shards)), "{again:?}");
         assert!(!again.fresh);
-        let still = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        let still = Account::from_bytes(&fs::read(&path).unwrap(), &content).unwrap();
         assert!((still.credits() - credits).abs() < 1e-3);
         assert_eq!(still.audit.len(), audit);
         let _ = fs::remove_dir_all(&dir);
@@ -442,25 +444,25 @@ mod tests {
         let path = dir.join("account.bin");
         let content = Content::embedded();
         let banner = content.banners.id.clone();
-        let price = content.banners.cost.ten_pull as f32;
+        let price = content.banners.cost.ten_pull_cost as f32;
         let bytes = request_ten(&banner, "ten-a", true);
         let first = Packet::decode(&exchange_at(&path, &bytes).unwrap()).unwrap();
         let Packet::CratePullReply(first) = first else { panic!("reply") };
         assert!(first.fault.is_none() && first.fresh && first.ten, "{first:?}");
         assert!(first.rarity.is_none());
         assert_eq!(first.pods.len(), content.banners.cost.pods as usize);
-        let saved = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        let saved = Account::from_bytes(&fs::read(&path).unwrap(), &content).unwrap();
         assert!((saved.credits() - (content.banners.dev.starting_credits - price)).abs() < 1e-3);
         let replay = Packet::decode(&exchange_at(&path, &bytes).unwrap()).unwrap();
         let Packet::CratePullReply(replay) = replay else { panic!("reply") };
         assert!(!replay.fresh);
         assert_eq!(replay.pods, first.pods);
-        let still = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        let still = Account::from_bytes(&fs::read(&path).unwrap(), &content).unwrap();
         assert!((still.credits() - saved.credits()).abs() < 1e-3);
         let second = Packet::decode(&exchange_at(&path, &request_ten(&banner, "ten-b", true)).unwrap()).unwrap();
         let Packet::CratePullReply(second) = second else { panic!("reply") };
         assert!(second.fresh);
-        let twice = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        let twice = Account::from_bytes(&fs::read(&path).unwrap(), &content).unwrap();
         assert!((twice.credits() - (content.banners.dev.starting_credits - price * 2.0)).abs() < 1e-3);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -484,7 +486,7 @@ mod tests {
         assert!(first.fresh);
         assert_eq!(first.earned, 0.0, "an open wave is not a deposit");
         assert_eq!(first.earned, sim.currency_gain[&player]);
-        let saved = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        let saved = Account::from_bytes(&fs::read(&path).unwrap(), &content).unwrap();
         assert!((saved.credits() - first.balance).abs() < 1e-3);
         assert!(!partial_path(&path).exists(), "the wallet and the match key land in the one renamed save");
         let second = Packet::decode(&exchange_at(&path, &bytes).unwrap()).unwrap();
@@ -496,7 +498,7 @@ mod tests {
         let unknown = Packet::decode(&exchange_at(&path, &Packet::Bank(missing).encode().unwrap()).unwrap()).unwrap();
         let Packet::BankReply(unknown) = unknown else { panic!("bank reply") };
         assert_eq!(unknown.fault, Some(BankFault::Unknown));
-        let still = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        let still = Account::from_bytes(&fs::read(&path).unwrap(), &content).unwrap();
         assert!((still.credits() - first.balance).abs() < 1e-3);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -529,7 +531,7 @@ mod tests {
         let Packet::BankReply(first) = first else { panic!("bank reply") };
         assert!(first.fresh && first.fault.is_none(), "{first:?}");
         assert!((first.earned - earned).abs() < 1e-3);
-        let saved = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        let saved = Account::from_bytes(&fs::read(&path).unwrap(), &content).unwrap();
         assert!((saved.credits() - first.balance).abs() < 1e-3);
         assert!(!partial_path(&path).exists(), "one rename replaces the save");
         let second = Packet::decode(&exchange_at(&path, &request).unwrap()).unwrap();
@@ -537,7 +539,7 @@ mod tests {
         assert!(!second.fresh, "the match key was in the same save as the balance");
         assert!((second.earned - first.earned).abs() < 1e-3);
         assert!((second.balance - first.balance).abs() < 1e-3);
-        let still = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        let still = Account::from_bytes(&fs::read(&path).unwrap(), &content).unwrap();
         assert!((still.credits() - first.balance).abs() < 1e-3);
         let _ = fs::remove_dir_all(&dir);
     }

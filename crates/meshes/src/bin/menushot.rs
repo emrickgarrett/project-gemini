@@ -55,14 +55,14 @@ fn main() {
             "results_defeat",
             MenuShot::Results { focus: 0, show: BankShow::End, waves: 3, kills: 18, seconds: 201.0, earned: 40.0, bonus: 0.0, balance: Some(40.0) },
         ),
-        ("crates", MenuShot::Crates { focus: 0, rarity: None, failed: false, can_pull: true, reason: String::new() }),
+        ("crates", MenuShot::Crates { focus: 0, rarity: None, failed: false, credits: None, reason: String::new() }),
         (
             "crates_short",
             MenuShot::Crates {
                 focus: 0,
                 rarity: None,
                 failed: true,
-                can_pull: true,
+                credits: None,
                 reason: "NEED 100 CREDITS HAVE 0".into(),
             },
         ),

@@ -81,6 +81,8 @@ pub enum CratePullFault {
     Pod { pod: u32 },
     /// The pull had no idempotency key.
     Key,
+    /// The key was saved for a different banner or pull kind.
+    Mismatch,
 }
 
 /// The host's answer to [`CratePullRequest`]. A later server sends the same bytes.
@@ -95,6 +97,8 @@ pub struct CratePullReply {
     pub pods: Vec<CratePod>,
     pub fresh: bool,
     pub ten: bool,
+    /// Wallet after this answer. The client uses it to disable a pull it cannot afford.
+    pub credits: f32,
 }
 
 /// Ask the host to deposit the gain it already recorded for this match and player.

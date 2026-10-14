@@ -79,8 +79,10 @@ pub struct ServerCrate {
     pub reason: String,
     pub pods: Vec<ServerPod>,
     pub ten: bool,
-    /// Next idempotency key. A pull click spends one and the server stores that result.
-    pub next_key: u64,
+    /// False when this key was already stored. A replay does not play the reveal.
+    pub fresh: bool,
+    /// Last balance the server reported. None until a pull or a bank answers.
+    pub credits: Option<f32>,
 }
 
 #[derive(Resource, Clone, Copy, Debug, Default)]
@@ -313,6 +315,7 @@ pub(crate) fn end_of_match(
     mut next: ResMut<NextState<AppState>>,
     assets: Res<AssetServer>,
     prefs: Res<Prefs>,
+    mut crate_box: ResMut<ServerCrate>,
 ) {
     let Some(game) = game else { return };
     if summary.is_some() {
@@ -327,12 +330,15 @@ pub(crate) fn end_of_match(
         BankShow::Win => game.sim.director.wave,
         BankShow::End | BankShow::Quit | BankShow::Disconnect => game.sim.director.wave.saturating_sub(1),
     };
-    present_bank(&mut commands, &game, show, waves, &assets, &prefs);
+    present_bank(&mut commands, &game, show, waves, &assets, &prefs, &mut crate_box);
     next.set(AppState::Menu);
 }
 
-fn present_bank(commands: &mut Commands, game: &Game, show: BankShow, waves: u32, assets: &AssetServer, prefs: &Prefs) {
+fn present_bank(commands: &mut Commands, game: &Game, show: BankShow, waves: u32, assets: &AssetServer, prefs: &Prefs, crate_box: &mut ServerCrate) {
     let (earned, bonus, balance) = settle_bank(game);
+    if let Some(have) = balance {
+        crate_box.credits = Some(have);
+    }
     commands.insert_resource(MatchSummary {
         show,
         waves,
@@ -616,7 +622,7 @@ pub(crate) fn apply(
             lock_cursor(&mut cursor, &mut pause, false);
             if let Some(game) = game.as_deref() {
                 let waves = game.sim.director.wave.saturating_sub(1);
-                present_bank(&mut commands, game, BankShow::Quit, waves, &assets, &prefs);
+                present_bank(&mut commands, game, BankShow::Quit, waves, &assets, &prefs, &mut crate_box);
                 *page = Page::Results;
             } else {
                 commands.remove_resource::<MatchSummary>();
@@ -645,8 +651,13 @@ pub(crate) fn apply(
         }
         "pull" | "ten" => {
             let ten = id == "ten";
-            let next_key = crate_box.next_key.saturating_add(1);
-            let key = crate_box.next_key.to_string();
+            let cost = if ten { content.banners.cost.ten_pull_cost } else { content.banners.cost.single } as f32;
+            if crate_box.credits.is_some_and(|have| have + 1e-3 < cost) {
+                dirty.0 = true;
+                return;
+            }
+            let key = pull_key();
+            let credits = crate_box.credits;
             dirty.0 = true;
             match crate::pull_host::round_trip(&content.banners.id, &key, ten) {
                 Ok(reply) => {
@@ -655,13 +666,16 @@ pub(crate) fn apply(
                         rank.rank = pulled_rank;
                     }
                     let failed = landed.failed;
-                    let refund = failed && landed.ten;
-                    landed.next_key = next_key;
+                    let refund = matches!(reply.fault, Some(gemini_proto::CratePullFault::Pod { .. } | gemini_proto::CratePullFault::Shards));
+                    let short = matches!(reply.fault, Some(gemini_proto::CratePullFault::Short { .. }));
+                    landed.credits = Some(reply.credits);
                     *crate_box = landed;
                     if refund {
-                        commands.insert_resource(RevealPlayback(RevealShow::Refund(RefundRun::start(&content))));
+                        commands.insert_resource(RevealPlayback(RevealShow::Refund(RefundRun::start(&content, ten))));
                         commands.insert_resource(reveal_ui::RevealFrom::Crates);
                         next.set(AppState::Reveal);
+                    } else if short || (!reply.fresh && !failed) {
+                        // A short click and a replayed receipt do not play a cue.
                     } else {
                         let cue = if failed { error } else { confirm };
                         audio::ui_cue(&mut commands, &assets, &content, &prefs, cue);
@@ -682,13 +696,17 @@ pub(crate) fn apply(
                         reason,
                         pods: Vec::new(),
                         ten: false,
-                        next_key,
+                        fresh: false,
+                        credits,
                     };
                     audio::ui_cue(&mut commands, &assets, &content, &prefs, error);
                 }
             }
         }
         "open" => {
+                if !crate_box.fresh {
+                    return;
+                }
                 if crate_box.ten && !crate_box.failed {
                     let cards: Vec<GridCard> = crate_box
                         .pods
@@ -707,9 +725,9 @@ pub(crate) fn apply(
                         }
                         Err(message) => {
                             eprintln!("ten pull reveal failed: {message}");
-                            let next_key = crate_box.next_key;
+                            let credits = crate_box.credits;
                             *crate_box = failed_crate(&content.ui.copy.pull_failed);
-                            crate_box.next_key = next_key;
+                            crate_box.credits = credits;
                             dirty.0 = true;
                             audio::ui_cue(&mut commands, &assets, &content, &prefs, error);
                         }
@@ -724,9 +742,9 @@ pub(crate) fn apply(
                         }
                         Err(message) => {
                             eprintln!("crate reveal failed: {message}");
-                            let next_key = crate_box.next_key;
+                            let credits = crate_box.credits;
                             *crate_box = failed_crate(&content.ui.copy.pull_failed);
-                            crate_box.next_key = next_key;
+                            crate_box.credits = credits;
                             dirty.0 = true;
                             audio::ui_cue(&mut commands, &assets, &content, &prefs, error);
                         }
@@ -1037,7 +1055,7 @@ fn shot_for(
             focus,
             rarity: crate_box.and_then(|row| row.rarity.clone()),
             failed: crate_box.is_some_and(|row| row.failed),
-            can_pull: true,
+            credits: crate_box.and_then(|row| row.credits),
             reason: crate_box.map(|row| row.reason.clone()).unwrap_or_default(),
         },
     })
@@ -1063,8 +1081,22 @@ fn failed_crate(reason: &str) -> ServerCrate {
         reason: reason.to_string(),
         pods: Vec::new(),
         ten: false,
-        next_key: 0,
+        fresh: false,
+        credits: None,
     }
+}
+
+/// A new 128-bit key for one pull. A later launch does not reuse it.
+pub(crate) fn pull_key() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).expect("os randomness for a pull key");
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(32);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 fn pods_of(reply: &CratePullReply) -> Vec<ServerPod> {
@@ -1082,89 +1114,41 @@ pub(crate) fn crate_from_reply(content: &Content, reply: &CratePullReply) -> (Se
     let copy = &content.ui.copy;
     let places = content.ui.layout.currency_decimals;
     let pods = pods_of(reply);
+    let base = |failed: bool, reason: String, rarity: Option<String>, fakeout: Option<String>, pods: Vec<ServerPod>| ServerCrate {
+        rarity,
+        fakeout,
+        failed,
+        reason,
+        pods,
+        ten: reply.ten,
+        fresh: reply.fresh && !failed,
+        credits: Some(reply.credits),
+    };
     match &reply.fault {
         None => {
             let failed = if reply.ten { reply.pods.is_empty() } else { reply.rarity.is_none() };
+            let reason = if failed { copy.pull_failed.clone() } else { String::new() };
+            let rank = (!failed).then_some(reply.rank);
+            (base(failed, reason, reply.rarity.clone(), reply.fakeout.clone(), pods), rank)
+        }
+        Some(CratePullFault::Short { cost, have }) => {
+            let missing = (cost - have).max(0.0);
             (
-                ServerCrate {
-                    rarity: reply.rarity.clone(),
-                    fakeout: reply.fakeout.clone(),
-                    failed,
-                    reason: if failed { copy.pull_failed.clone() } else { String::new() },
-                    pods,
-                    ten: reply.ten,
-                    next_key: 0,
-                },
-                (!failed).then_some(reply.rank),
+                base(
+                    false,
+                    format!("{} {} {}", copy.pull_need, format_fixed(missing, places), copy.pull_credits),
+                    None,
+                    None,
+                    Vec::new(),
+                ),
+                None,
             )
         }
-        Some(CratePullFault::Short { cost, have }) => (
-            ServerCrate {
-                rarity: None,
-                fakeout: None,
-                failed: true,
-                reason: format!(
-                    "{} {} {} {} {}",
-                    copy.pull_need,
-                    format_fixed(*cost, places),
-                    copy.pull_credits,
-                    copy.pull_have,
-                    format_fixed(*have, places)
-                ),
-                pods: Vec::new(),
-                ten: reply.ten,
-                    next_key: 0,
-            },
-            None,
-        ),
-        Some(CratePullFault::Banner) => (
-            ServerCrate {
-                rarity: None,
-                fakeout: None,
-                failed: true,
-                reason: copy.pull_failed.clone(),
-                pods: Vec::new(),
-                ten: reply.ten,
-                    next_key: 0,
-            },
-            None,
-        ),
-        Some(CratePullFault::Unavailable) => (
-            ServerCrate {
-                rarity: None,
-                fakeout: None,
-                failed: true,
-                reason: copy.pull_needs_server.clone(),
-                pods: Vec::new(),
-                ten: reply.ten,
-                    next_key: 0,
-            },
-            None,
-        ),
-        Some(CratePullFault::Shards) => (
-            ServerCrate {
-                rarity: None,
-                fakeout: None,
-                failed: true,
-                reason: copy.pull_no_shards.clone(),
-                pods: Vec::new(),
-                ten: reply.ten,
-                    next_key: 0,
-            },
-            None,
-        ),
-        Some(CratePullFault::Pod { .. }) | Some(CratePullFault::Key) => (
-            ServerCrate {
-                rarity: None,
-                fakeout: None,
-                failed: true,
-                reason: copy.pull_failed.clone(),
-                pods: Vec::new(),
-                ten: reply.ten,
-                    next_key: 0,
-            },
-            None,
-        ),
+        Some(CratePullFault::Banner) | Some(CratePullFault::Pod { .. }) | Some(CratePullFault::Key) | Some(CratePullFault::Mismatch) => {
+            (base(true, copy.pull_failed.clone(), None, None, Vec::new()), None)
+        }
+        Some(CratePullFault::Unavailable) => (base(true, copy.pull_needs_server.clone(), None, None, Vec::new()), None),
+        Some(CratePullFault::Shards) => (base(true, copy.pull_no_shards.clone(), None, None, Vec::new()), None),
     }
 }
 

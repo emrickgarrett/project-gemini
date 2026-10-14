@@ -176,7 +176,8 @@ fn paint_grid(commands: &mut Commands, content: &Content, run: &GridRun) {
     let grid = &content.crate_reveal.grid;
     let stage = content.palette.key(&layout.stage);
     let back = content.palette.key(&grid.back);
-    let frame = content.palette.key(&grid.frame);
+    let frame_key = content.palette.key(&grid.frame);
+    let face = content.palette.key(&grid.face);
     let fit_w = content.ui.layout.fit_width;
     let fit_h = content.ui.layout.fit_height;
     let grid_w = grid.columns as f32 * grid.card_w + (grid.columns - 1) as f32 * grid.gap;
@@ -194,7 +195,7 @@ fn paint_grid(commands: &mut Commands, content: &Content, run: &GridRun) {
         BackgroundColor(Color::srgb(stage[0], stage[1], stage[2])),
         RevealRoot,
     ));
-    for (index, card) in run.plan.cards.iter().enumerate() {
+    for (index, _card) in run.plan.cards.iter().enumerate() {
         let col = index as u32 % grid.columns;
         let row = index as u32 / grid.columns;
         let x = origin_x + col as f32 * (grid.card_w + grid.gap);
@@ -203,10 +204,13 @@ fn paint_grid(commands: &mut Commands, content: &Content, run: &GridRun) {
         let (fill, edge, label) = match shown {
             Some(rarity) => {
                 let color = content.palette.key(&format!("rarity_{rarity}"));
-                let edge = mix(color, frame, layout.border_mix);
-                (Color::srgb(color[0], color[1], color[2]), edge, Some(rarity.to_uppercase()))
+                (
+                    Color::srgb(face[0], face[1], face[2]),
+                    Color::srgb(color[0], color[1], color[2]),
+                    Some(rarity.to_uppercase()),
+                )
             }
-            None => (Color::srgb(back[0], back[1], back[2]), Color::srgb(frame[0], frame[1], frame[2]), None),
+            None => (Color::srgb(back[0], back[1], back[2]), Color::srgb(frame_key[0], frame_key[1], frame_key[2]), None),
         };
         let mut card_node = commands.spawn((
             Node {
@@ -225,8 +229,7 @@ fn paint_grid(commands: &mut Commands, content: &Content, run: &GridRun) {
             RevealRoot,
         ));
         if let Some(label) = label {
-            let rgb = content.palette.key(&format!("rarity_{}", card.rarity));
-            let luma = rgb[0] * 0.3 + rgb[1] * 0.59 + rgb[2] * 0.11;
+            let luma = face[0] * 0.3 + face[1] * 0.59 + face[2] * 0.11;
             let ink_name = if luma > layout.ink_luma { &layout.ink_dark } else { &layout.ink_light };
             let ink = content.palette.key(ink_name);
             card_node.with_child((
@@ -274,11 +277,28 @@ fn paint_refund(commands: &mut Commands, content: &Content, run: &RefundRun) {
         BackgroundColor(Color::srgb(face[0], face[1], face[2])),
         BorderColor::all(mix(face, ink, layout.border_mix)),
         RevealRoot,
-        children![(
-            Text::new(run.message.clone()),
-            TextFont::from_font_size(layout.title_px * grid.refund_h / layout.panel_height),
-            TextColor(Color::srgb(ink[0], ink[1], ink[2])),
-        )],
+        children![
+            (
+                Text::new(content.banners.id.to_uppercase()),
+                TextFont::from_font_size(layout.title_px),
+                TextColor(Color::srgb(ink[0], ink[1], ink[2])),
+            ),
+            (
+                Text::new(run.message.clone()),
+                TextFont::from_font_size(layout.hint_px),
+                TextColor(Color::srgb(ink[0], ink[1], ink[2])),
+            ),
+            (
+                Text::new(content.ui.copy.crates_continue.clone()),
+                TextFont::from_font_size(layout.hint_px),
+                TextColor(Color::srgb(ink[0], ink[1], ink[2])),
+            ),
+            (
+                Text::new(content.ui.copy.crates_pull_again.clone()),
+                TextFont::from_font_size(layout.hint_px),
+                TextColor(Color::srgb(ink[0], ink[1], ink[2])),
+            ),
+        ],
     ));
     paint_hint(commands, content, "ENTER");
 }

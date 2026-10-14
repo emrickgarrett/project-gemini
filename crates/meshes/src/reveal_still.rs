@@ -605,8 +605,8 @@ pub fn grid_slots(content: &Content, width: u32, height: u32) -> Result<Vec<(u32
     Ok(slots)
 }
 
-/// `faces` is roll order. `None` paints the shared back. A face color comes from `rarity_*` only.
-pub fn paint_grid(content: &Content, faces: &[Option<&str>], width: u32, height: u32) -> Result<Vec<u8>, String> {
+/// `faces` is roll order. `None` paints the shared back. `actions` adds the banner and the result buttons.
+pub fn paint_grid(content: &Content, faces: &[Option<&str>], width: u32, height: u32, actions: bool) -> Result<Vec<u8>, String> {
     let cells = (content.crate_reveal.grid.columns * content.crate_reveal.grid.rows) as usize;
     if faces.len() != cells {
         return Err(format!("grid has {} faces and content says {cells}", faces.len()));
@@ -614,29 +614,26 @@ pub fn paint_grid(content: &Content, faces: &[Option<&str>], width: u32, height:
     let mut rgb = vec![0u8; (width as usize) * (height as usize) * 3];
     paint_stage(&mut rgb, width, height, content, &content.crate_reveal.layout);
     let slots = grid_slots(content, width, height)?;
-    let paper = palette_bytes(content, &content.crate_reveal.grid.frame);
-    let back = palette_bytes(content, &content.crate_reveal.grid.back);
     for (slot, face) in slots.iter().zip(faces) {
         let (x, y, w, h) = *slot;
-        let (fill, label) = match face {
+        match face {
             Some(rarity) => {
                 let key = format!("rarity_{rarity}");
                 if content.palette.hex(&key).is_none() {
                     return Err(format!("unknown rarity {rarity}"));
                 }
-                let color = palette_bytes(content, &key);
-                let ink = face_ink(content, color);
-                (color, Some((rarity.to_uppercase(), ink)))
+                paint_grid_face(&mut rgb, width, height, content, x, y, w, h, &key, rarity)?;
             }
-            None => (back, None),
-        };
-        let frame = blend(fill, paper, content.crate_reveal.layout.border_mix);
-        paint_beveled(&mut rgb, width, height, x, y, w, h, fill, frame, label.as_ref().map(|(text, ink)| (text.as_str(), *ink)), content);
+            None => paint_grid_back(&mut rgb, width, height, content, x, y, w, h),
+        }
+    }
+    if actions {
+        paint_result_chrome(&mut rgb, width, height, content);
     }
     Ok(rgb)
 }
 
-/// Plain refund panel. The face is `refund_face`. No rarity color.
+/// Refund panel in the bank bevel, face `refund_face`, with the banner and the two buttons.
 pub fn paint_refund(content: &Content, width: u32, height: u32) -> Result<Vec<u8>, String> {
     let grid = &content.crate_reveal.grid;
     let fit_w = content.ui.layout.fit_width;
@@ -648,27 +645,194 @@ pub fn paint_refund(content: &Content, width: u32, height: u32) -> Result<Vec<u8
     paint_stage(&mut rgb, width, height, content, &content.crate_reveal.layout);
     let sx = width as f32 / fit_w;
     let sy = height as f32 / fit_h;
-    let panel_w = (grid.refund_w * sx).round().max(1.0) as u32;
-    let panel_h = (grid.refund_h * sy).round().max(1.0) as u32;
-    let x = width.saturating_sub(panel_w) / 2;
-    let y = height.saturating_sub(panel_h) / 2;
+    let panel_w = (grid.refund_w * sx).round().max(1.0) as i32;
+    let panel_h = (grid.refund_h * sy).round().max(1.0) as i32;
+    let x = (width as i32 - panel_w) / 2;
+    let y = (height as i32 - panel_h) / 2;
     let face = palette_bytes(content, &grid.refund_face);
     let ink = palette_bytes(content, &grid.refund_ink);
-    let frame = blend(face, ink, content.crate_reveal.layout.border_mix);
-    paint_beveled(
-        &mut rgb,
+    draw_bevel(&mut rgb, width, height, x, y, panel_w, panel_h, &chunk_bevel(content, panel_h, content.ui.layout.bank_panel_height, ink, face));
+    let layout = &content.crate_reveal.layout;
+    let ui = &content.ui.layout;
+    let scale_y = panel_h as f32 / ui.bank_panel_height;
+    let mut ty = y + (ui.margin_y * scale_y).round() as i32;
+    let banner = content.banners.id.to_uppercase();
+    let title_scale = ((ui.title_scale as f32) * scale_y).round().max(1.0) as u32;
+    blit_centered(&mut rgb, width, height, x, panel_w, ty, &banner, ink, title_scale, layout);
+    ty += (title_scale * layout.glyph_rows) as i32 + (ui.title_gap * scale_y).round() as i32;
+    let body = ((ui.button_scale as f32) * scale_y).round().max(1.0) as u32;
+    blit_centered(&mut rgb, width, height, x, panel_w, ty, &grid.refund_message, ink, body, layout);
+    ty += (body * layout.glyph_rows) as i32 + (ui.title_gap * scale_y).round() as i32;
+    let button_w = (ui.button_width * sx).round() as i32;
+    let button_h = (ui.button_height * sy).round() as i32;
+    let gap = (ui.row_gap * sy).round() as i32;
+    let bx = x + (panel_w - button_w) / 2;
+    paint_text_button(&mut rgb, width, height, content, bx, ty, button_w, button_h, &content.ui.copy.crates_continue, ink);
+    ty += button_h + gap;
+    paint_text_button(&mut rgb, width, height, content, bx, ty, button_w, button_h, &content.ui.copy.crates_pull_again, ink);
+    Ok(rgb)
+}
+
+fn paint_grid_back(rgb: &mut [u8], width: u32, height: u32, content: &Content, x: u32, y: u32, w: u32, h: u32) {
+    let fill = palette_bytes(content, &content.crate_reveal.grid.back);
+    let edge = palette_bytes(content, &content.crate_reveal.grid.frame);
+    let reference = content.crate_reveal.layout.panel_height;
+    draw_bevel(rgb, width, height, x as i32, y as i32, w as i32, h as i32, &chunk_bevel(content, h as i32, reference, edge, fill));
+}
+
+fn paint_grid_face(
+    rgb: &mut [u8],
+    width: u32,
+    height: u32,
+    content: &Content,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    rarity_key: &str,
+    rarity: &str,
+) -> Result<(), String> {
+    let fill = palette_bytes(content, &content.crate_reveal.grid.face);
+    let edge = palette_bytes(content, rarity_key);
+    let reference = content.crate_reveal.layout.panel_height;
+    draw_bevel(rgb, width, height, x as i32, y as i32, w as i32, h as i32, &chunk_bevel(content, h as i32, reference, edge, fill));
+    let face = inner_face(content, x as i32, y as i32, w as i32, h as i32);
+    let layout = &content.crate_reveal.layout;
+    let ink = face_ink(content, fill);
+    let light = palette_bytes(content, &layout.ink_light);
+    let scale = title_scale(face.2 as u32, face.3 as u32, "LEGENDARY".chars().count() as u32, layout, &content.crate_reveal.card);
+    let text_h = layout.glyph_rows.max(1) * scale;
+    let gem_h = ((face.3 as f32) * layout.gem_height).round().max(1.0) as u32;
+    let label = rarity.to_uppercase();
+    let text_w = label.chars().count() as u32 * layout.title_glyph_px.max(1) * scale;
+    let text_x = title_origin(face.0 as u32, face.2 as u32, text_w, content.crate_reveal.card.title_pad.round().max(0.0) as u32);
+    let text_y = (face.1 + face.3).saturating_sub(text_h as i32 + 2).max(face.1) as u32;
+    let gem_top = face.1.max(0) as u32;
+    paint_gem(
+        rgb,
         width,
         height,
-        x,
-        y,
-        panel_w,
-        panel_h,
-        face,
-        frame,
-        Some((grid.refund_message.as_str(), ink)),
-        content,
+        (face.0 + face.2 / 2).max(0) as u32,
+        gem_top,
+        gem_h.min(face.3.max(1) as u32),
+        edge,
+        light,
+        layout.gem_glow,
+        (face.0.max(0) as u32, face.1.max(0) as u32, face.2.max(1) as u32, face.3.max(1) as u32),
     );
-    Ok(rgb)
+    blit_at(rgb, width, height, text_x, text_y, &label, ink, scale);
+    Ok(())
+}
+
+fn paint_result_chrome(rgb: &mut [u8], width: u32, height: u32, content: &Content) {
+    let layout = &content.crate_reveal.layout;
+    let ink = palette_bytes(content, &content.crate_reveal.grid.refund_ink);
+    let ui = &content.ui;
+    let banner = content.banners.id.to_uppercase();
+    blit_centered(rgb, width, height, 0, width as i32, ui.layout.margin_y.round() as i32, &banner, ink, ui.layout.title_scale, layout);
+    let button_w = ui.layout.button_width.round() as i32;
+    let button_h = ui.layout.button_height.round() as i32;
+    let gap = ui.layout.row_gap.round() as i32;
+    let total = button_w * 2 + gap;
+    let x = (width as i32 - total) / 2;
+    let y = height as i32 - button_h - ui.layout.margin_y.round() as i32;
+    paint_text_button(rgb, width, height, content, x, y, button_w, button_h, &ui.copy.crates_continue, ink);
+    paint_text_button(rgb, width, height, content, x + button_w + gap, y, button_w, button_h, &ui.copy.crates_pull_again, ink);
+}
+
+fn paint_text_button(rgb: &mut [u8], width: u32, height: u32, content: &Content, x: i32, y: i32, w: i32, h: i32, label: &str, ink: [u8; 3]) {
+    let face = palette_bytes(content, &content.ui.colors.panel);
+    draw_bevel(rgb, width, height, x, y, w, h, &chunk_bevel(content, h, content.ui.layout.button_height, ink, face));
+    let layout = &content.crate_reveal.layout;
+    let scale = content.ui.layout.button_scale;
+    let text_h = layout.glyph_rows.max(1) * scale;
+    let text_w = label.chars().count() as u32 * layout.title_glyph_px.max(1) * scale;
+    let tx = title_origin(x.max(0) as u32, w.max(0) as u32, text_w, 0);
+    let ty = (y + (h - text_h as i32) / 2).max(0) as u32;
+    blit_at(rgb, width, height, tx, ty, label, ink, scale);
+}
+
+fn blit_centered(rgb: &mut [u8], width: u32, height: u32, origin_x: i32, span: i32, y: i32, text: &str, ink: [u8; 3], scale: u32, layout: &gemini_sim::content::RevealLayout) {
+    let text_w = text.chars().count() as u32 * layout.title_glyph_px.max(1) * scale;
+    let x = title_origin(origin_x.max(0) as u32, span.max(0) as u32, text_w, 0);
+    blit_at(rgb, width, height, x, y.max(0) as u32, text, ink, scale);
+}
+
+struct ChunkBevel {
+    radius: i32,
+    outline: i32,
+    depth: i32,
+    edge: [u8; 3],
+    light: [u8; 3],
+    shadow: [u8; 3],
+    fill: [u8; 3],
+}
+
+fn chunk_bevel(content: &Content, panel_h: i32, reference_h: f32, edge: [u8; 3], fill: [u8; 3]) -> ChunkBevel {
+    let ui = &content.ui.layout;
+    let scale = panel_h as f32 / reference_h.max(1.0);
+    ChunkBevel {
+        radius: (ui.panel_radius * scale).round().max(1.0) as i32,
+        outline: (ui.pause_outline_px * scale).round().max(1.0) as i32,
+        depth: (ui.bevel_px * scale).round().max(1.0) as i32,
+        edge,
+        light: palette_bytes(content, &content.ui.colors.bevel_light),
+        shadow: palette_bytes(content, &content.ui.colors.bevel_shadow),
+        fill,
+    }
+}
+
+fn inner_face(content: &Content, x: i32, y: i32, w: i32, h: i32) -> (i32, i32, i32, i32) {
+    let bevel = chunk_bevel(content, h, content.crate_reveal.layout.panel_height, [0, 0, 0], [0, 0, 0]);
+    let band = bevel.outline.max(1) + bevel.depth.max(1);
+    let face_w = (w - band * 2).max(1);
+    let face_h = (h - band * 2).max(1);
+    (x + band, y + band, face_w, face_h)
+}
+
+fn draw_bevel(rgb: &mut [u8], width: u32, height: u32, x: i32, y: i32, w: i32, h: i32, face: &ChunkBevel) {
+    if w <= 0 || h <= 0 {
+        return;
+    }
+    let outline = face.outline.max(1);
+    let band = outline + face.depth.max(1);
+    for row in 0..h {
+        for col in 0..w {
+            if !inside_round(col, row, w, h, face.radius) {
+                continue;
+            }
+            let color = if !inside_round(col - outline, row - outline, w - outline * 2, h - outline * 2, face.radius - outline) {
+                face.edge
+            } else if !inside_round(col - band, row - band, w - band * 2, h - band * 2, face.radius - band) {
+                if (col as f32) + (row as f32) < (w as f32 + h as f32) * 0.5 { face.light } else { face.shadow }
+            } else {
+                face.fill
+            };
+            put_at(rgb, width, height, x + col, y + row, color);
+        }
+    }
+}
+
+fn inside_round(col: i32, row: i32, w: i32, h: i32, radius: i32) -> bool {
+    if w <= 0 || h <= 0 || col < 0 || row < 0 || col >= w || row >= h {
+        return false;
+    }
+    let r = radius.max(0).min(w / 2).min(h / 2);
+    let px = col as f32 + 0.5;
+    let py = row as f32 + 0.5;
+    let rf = r as f32;
+    let cx = px.clamp(rf, w as f32 - rf);
+    let cy = py.clamp(rf, h as f32 - rf);
+    let dx = px - cx;
+    let dy = py - cy;
+    dx * dx + dy * dy <= rf * rf + 1e-3
+}
+
+fn put_at(rgb: &mut [u8], width: u32, height: u32, x: i32, y: i32, color: [u8; 3]) {
+    if x < 0 || y < 0 || x >= width as i32 || y >= height as i32 {
+        return;
+    }
+    put(rgb, width, x as u32, y as u32, color);
 }
 
 fn face_ink(content: &Content, color: [u8; 3]) -> [u8; 3] {
@@ -676,38 +840,6 @@ fn face_ink(content: &Content, color: [u8; 3]) -> [u8; 3] {
     let luma = (color[0] as f32 * 0.3 + color[1] as f32 * 0.59 + color[2] as f32 * 0.11) / 255.0;
     let name = if luma > layout.ink_luma { &layout.ink_dark } else { &layout.ink_light };
     palette_bytes(content, name)
-}
-
-fn paint_beveled(
-    rgb: &mut [u8],
-    width: u32,
-    height: u32,
-    x: u32,
-    y: u32,
-    panel_w: u32,
-    panel_h: u32,
-    face: [u8; 3],
-    frame: [u8; 3],
-    label: Option<(&str, [u8; 3])>,
-    content: &Content,
-) {
-    let layout = &content.crate_reveal.layout;
-    fill(rgb, width, height, x, y, panel_w, panel_h, frame);
-    let border = (layout.border_px as f32 * panel_h as f32 / layout.panel_height).round().max(1.0) as u32;
-    let border = border.min(panel_w / 2).min(panel_h / 2);
-    let face_x = x + border;
-    let face_y = y + border;
-    let face_w = panel_w.saturating_sub(border * 2);
-    let face_h = panel_h.saturating_sub(border * 2);
-    fill(rgb, width, height, face_x, face_y, face_w, face_h, face);
-    let Some((label, ink)) = label else { return };
-    let scale = title_scale(face_w, face_h, label.chars().count() as u32, layout, &content.crate_reveal.card);
-    let glyph = layout.title_glyph_px.max(1);
-    let text_w = label.chars().count() as u32 * glyph * scale;
-    let text_h = layout.glyph_rows.max(1) * scale;
-    let text_x = title_origin(face_x, face_w, text_w, content.crate_reveal.card.title_pad.round().max(0.0) as u32);
-    let text_y = face_y + face_h.saturating_sub(text_h) / 2;
-    blit_at(rgb, width, height, text_x, text_y, label, ink, scale);
 }
 
 #[cfg(test)]
@@ -843,19 +975,22 @@ mod tests {
         let gold = palette_bytes(&content, "rarity_legendary");
         let common = palette_bytes(&content, "rarity_common");
         let back = palette_bytes(&content, &content.crate_reveal.grid.back);
-        let backs = paint_grid(&content, &vec![None; pods], width, height).unwrap();
-        let first = card_pixels(&backs, width, slots[0]);
-        let second = card_pixels(&backs, width, slots[1]);
+        let backs = paint_grid(&content, &vec![None; pods], width, height, false).unwrap();
+        let first = rounded_card(&backs, width, slots[0], &content);
+        let second = rounded_card(&backs, width, slots[1], &content);
         assert_eq!(first, second, "every back is the same picture");
         assert_eq!(face_swatch(&backs, width, slots[0], &content), back);
         assert!(!first.chunks_exact(3).any(|px| px == gold), "a back has no legendary gold");
 
+        let paper = palette_bytes(&content, &content.crate_reveal.grid.face);
         let mut faces = vec![Some("common"); pods];
         let legendary_at = pods / 2;
         faces[legendary_at] = Some("legendary");
-        let mixed = paint_grid(&content, &faces, width, height).unwrap();
-        assert_eq!(face_swatch(&mixed, width, slots[legendary_at], &content), gold);
-        assert_eq!(face_swatch(&mixed, width, slots[0], &content), common);
+        let mixed = paint_grid(&content, &faces, width, height, true).unwrap();
+        assert_eq!(face_swatch(&mixed, width, slots[legendary_at], &content), paper, "the face is paper, not a rarity flood");
+        assert_eq!(face_swatch(&mixed, width, slots[0], &content), paper);
+        assert_ne!(paper, gold);
+        assert_ne!(paper, common);
         for (index, slot) in slots.iter().enumerate() {
             if index == legendary_at {
                 assert!(card_pixels(&mixed, width, *slot).chunks_exact(3).any(|px| px == gold));
@@ -876,15 +1011,15 @@ mod tests {
         }
         assert!(run.shown_face(legendary_at).is_none());
         let shown: Vec<Option<&str>> = (0..pods).map(|index| run.shown_face(index)).collect();
-        let held = paint_grid(&content, &shown, width, height).unwrap();
+        let held = paint_grid(&content, &shown, width, height, false).unwrap();
         assert_eq!(card_pixels(&held, width, slots[legendary_at]), card_pixels(&backs, width, slots[legendary_at]));
         assert!(card_pixels(&held, width, slots[legendary_at]).chunks_exact(3).all(|px| px != gold));
 
         let refund = paint_refund(&content, width, height).unwrap();
         assert!(refund.chunks_exact(3).all(|px| px != gold), "the refund panel has no rarity gold");
-        let paper = palette_bytes(&content, &content.crate_reveal.grid.refund_face);
+        let refund_paper = palette_bytes(&content, &content.crate_reveal.grid.refund_face);
         let refund_slot = refund_rect(&content, width, height);
-        assert_eq!(face_swatch(&refund, width, refund_slot, &content), paper);
+        assert_eq!(face_swatch(&refund, width, refund_slot, &content), refund_paper);
 
         let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../");
         let flip = std::fs::read(root.join("assets/audio/crate_flip.ogg")).unwrap();
@@ -894,11 +1029,27 @@ mod tests {
             format!("{digest:x}"),
             "50177d7e89c48e7df8438c67dc01aa8f2672d0f02e1df17ec020c837a4b907aa"
         );
+        let broke = crate::paint_menu(
+            &content,
+            &crate::MenuShot::Crates {
+                focus: 0,
+                rarity: None,
+                failed: false,
+                credits: Some(content.banners.cost.single as f32 / 2.0),
+                reason: String::new(),
+            },
+            width,
+            height,
+        );
+        assert!(broke.1.iter().all(|hit| hit.id != "pull" && hit.id != "ten"), "a short wallet sends no pull");
+        assert!(broke.1.iter().any(|hit| hit.id == "back"));
         let stills = [
-            ("all_common.png", paint_grid(&content, &vec![Some("common"); pods], width, height).unwrap()),
+            ("all_backs.png", backs),
+            ("all_common.png", paint_grid(&content, &vec![Some("common"); pods], width, height, true).unwrap()),
             ("one_legendary.png", mixed),
             ("best_face_down.png", held),
             ("refund.png", refund),
+            ("no_credits.png", broke.0),
         ];
         for (name, rgb) in stills {
             let bytes = std::fs::read(root.join("art/ten_pull").join(name)).unwrap();
@@ -906,6 +1057,24 @@ mod tests {
             assert_eq!(image.dimensions(), (width, height), "{name}");
             assert_eq!(image.as_raw(), &rgb, "{name} does not match the painter");
         }
+    }
+
+    fn rounded_card(rgb: &[u8], width: u32, slot: (u32, u32, u32, u32), content: &Content) -> Vec<u8> {
+        let (x, y, w, h) = slot;
+        let radius = chunk_bevel(content, h as i32, content.crate_reveal.layout.panel_height, [0, 0, 0], [0, 0, 0]).radius;
+        let mut out = Vec::new();
+        for row in 0..h {
+            for col in 0..w {
+                if !inside_round(col as i32, row as i32, w as i32, h as i32, radius) {
+                    continue;
+                }
+                let px = x + col;
+                let py = y + row;
+                let i = ((py * width + px) * 3) as usize;
+                out.extend_from_slice(&rgb[i..i + 3]);
+            }
+        }
+        out
     }
 
     fn card_pixels(rgb: &[u8], width: u32, slot: (u32, u32, u32, u32)) -> Vec<u8> {
@@ -919,10 +1088,10 @@ mod tests {
     }
 
     fn face_swatch(rgb: &[u8], width: u32, slot: (u32, u32, u32, u32), content: &Content) -> [u8; 3] {
-        let (x, y, _w, h) = slot;
-        let border = (content.crate_reveal.layout.border_px as f32 * h as f32 / content.crate_reveal.layout.panel_height).round().max(1.0) as u32;
-        let px = x + border + 1;
-        let py = y + border + 1;
+        let (x, y, w, h) = slot;
+        let face = inner_face(content, x as i32, y as i32, w as i32, h as i32);
+        let px = (face.0 + 4).max(0) as u32;
+        let py = (face.1 + face.3 / 2).max(0) as u32;
         let i = ((py * width + px) * 3) as usize;
         [rgb[i], rgb[i + 1], rgb[i + 2]]
     }
