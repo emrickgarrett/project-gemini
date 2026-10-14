@@ -476,8 +476,10 @@ fn paint_crates(
     } else {
         ui.copy.crates_empty.clone()
     };
-    let tw = measure(&line, scale, glyph) as i32;
-    blit(rgb, frame.width, frame.height, (frame.width as i32 - tw) / 2, y, &line, paper, scale, glyph);
+    if !show_last {
+        let tw = measure(&line, scale, glyph) as i32;
+        blit(rgb, frame.width, frame.height, (frame.width as i32 - tw) / 2, y, &line, paper, scale, glyph);
+    }
     y += (scale * rows) as i32 + frame.px(ui.layout.title_gap);
     let places = ui.layout.currency_decimals;
     let short = |cost: u32| credits.filter(|have| *have + 1e-3 < cost as f32).map(|have| (cost as f32 - have).max(0.0));
@@ -1621,6 +1623,26 @@ mod tests {
             }
         }
         assert!(labeled, "the label is the light text key");
+        let (empty_rgb, _) = paint_menu(
+            &content,
+            &MenuShot::Crates { focus: 0, rarity: None, failed: false, credits: Some(10_000.0), reason: String::new(), show_last: false },
+            1280,
+            720,
+        );
+        let band = show.y.max(0) as u32;
+        let mut empty_paper = 0usize;
+        let mut show_paper = 0usize;
+        for y in 0..band {
+            for x in 0..1280u32 {
+                if sample(&empty_rgb, 1280, x as i32, y as i32) == paper {
+                    empty_paper += 1;
+                }
+                if sample(&rgb, 1280, x as i32, y as i32) == paper {
+                    show_paper += 1;
+                }
+            }
+        }
+        assert!(empty_paper > show_paper, "show last pull hides the empty-crate subtitle");
     }
 
     fn bytes(content: &Content, key: &str) -> [u8; 3] {

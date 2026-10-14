@@ -749,6 +749,7 @@ mod tests {
                 focus: 0,
                 shortfall: "",
                 failure: &content.ui.copy.connection_lost,
+                retry: true,
             },
             width,
             height,
@@ -815,6 +816,192 @@ mod tests {
         assert_eq!(grid_faces(&mut app), before);
         app.world_mut().run_system_once(reveal_ui::mark_fades).unwrap();
         assert_eq!(fading_voices(&mut app), 0, "a replay leaves the old voices alone");
+    }
+
+    fn plant_seen_key(app: &mut App, key: &str) {
+        let mut saved = app.world_mut().resource_mut::<settings::Prefs>();
+        saved.pull_key = key.to_string();
+        saved.pull_ten = true;
+        saved.pull_seen_keys = vec![key.to_string()];
+        saved.pull_awaiting = false;
+    }
+
+    fn seen_settle_reply(rank: u32) -> gemini_proto::CratePullReply {
+        gemini_proto::CratePullReply {
+            version: gemini_proto::PROTOCOL_VERSION,
+            rarity: None,
+            fakeout: None,
+            rank,
+            fault: None,
+            pods: vec![gemini_proto::CratePod { rarity: "common".into(), fakeout: None, item: "grip".into() }],
+            fresh: false,
+            ten: true,
+            credits: 1.0,
+        }
+    }
+
+    #[test]
+    fn one_press_settles_the_seen_key_and_sends_one_new_key() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        app.update();
+        let content = gemini_sim::content::Content::embedded();
+        pull_host::clear_scripted_pull();
+        open_grid(&mut app, true);
+        let old_gen = app.world().resource::<flow::ServerCrate>().reveal_gen;
+        let rank = app.world().resource::<session::Account>().rank;
+        let old = "0123456789abcdef0123456789abcdef";
+        plant_seen_key(&mut app, old);
+        let voices_before = reveal_voices(&mut app);
+        let duck_before = app.world().resource::<audio::Music>().duck_gain;
+        let saved_on_send = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let capture = saved_on_send.clone();
+        pull_host::on_next_round_trip(|| {});
+        pull_host::on_next_round_trip(move || {
+            let path = std::env::var("GEMINI_SETTINGS").unwrap();
+            *capture.lock().unwrap() = std::fs::read_to_string(path).unwrap();
+        });
+        pull_host::script_pulls(vec![
+            Ok(seen_settle_reply(rank)),
+            Ok(legendary_reply(&content, true, true, rank.saturating_add(1), content.banners.dev.starting_credits)),
+        ]);
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        let cues = ui_cues(&mut app);
+        let confirm = &content.ui.sounds.confirm;
+        let failed = &content.crate_reveal.grid.pull_failed;
+        let tick = &content.ui.sounds.count_tick;
+        assert_eq!(cues.iter().filter(|id| *id == confirm).count(), 1, "{cues:?}");
+        assert!(cues.iter().all(|id| id != failed && id != tick && id != &content.ui.sounds.bank_chime), "{cues:?}");
+        assert_eq!(reveal_voices(&mut app), voices_before, "the old key settles with no reveal voices");
+        let duck = app.world().resource::<audio::Music>().duck_gain;
+        assert!((duck - duck_before).abs() < 1e-4, "the settle does not duck, gain {duck}");
+        let sent = app.world().resource::<flow::ServerCrate>().sent_keys.clone();
+        assert_eq!(sent.len(), 2, "one settle and one new key: {sent:?}");
+        assert_eq!(sent[0], old);
+        assert_ne!(sent[1], old);
+        assert_eq!(sent[1].len(), 32);
+        assert_eq!(app.world().resource::<settings::Prefs>().pull_key, sent[1]);
+        assert!(app.world().resource::<settings::Prefs>().pull_seen_keys.iter().any(|row| row == old));
+        let on_disk = saved_on_send.lock().unwrap().clone();
+        assert!(on_disk.contains(&format!("pull_key = \"{}\"", sent[1])), "the new key is saved before it is sent: {on_disk}");
+        app.update();
+        assert_eq!(app.world().resource::<reveal_ui::RevealPlayback>().key, sent[1]);
+        assert!(matches!(app.world().resource::<reveal_ui::RevealPlayback>().show, reveal_ui::RevealShow::Grid(_)));
+        assert_eq!(app.world().resource::<flow::ServerCrate>().reveal_gen, old_gen + 1);
+        ramp_for(&mut app, content.presentation.reveal_duck_ramp);
+        let ducked = audio::crate_reveal_duck();
+        let gain = app.world().resource::<audio::Music>().duck_gain;
+        assert!((gain - ducked).abs() < 1e-4, "only the new reveal ducks, gain {gain}");
+        assert!(reveal_voices(&mut app).iter().all(|id| id != failed && id != tick), "the new reveal is not a failure or a tick");
+    }
+
+    #[test]
+    fn a_failed_new_key_save_sends_nothing_after_the_settle() {
+        let _guard = settings_lock();
+        struct StoreLimit;
+        impl Drop for StoreLimit {
+            fn drop(&mut self) {
+                settings::clear_store_limit();
+            }
+        }
+        let _limit = StoreLimit;
+        let mut app = menu_app();
+        app.update();
+        let content = gemini_sim::content::Content::embedded();
+        pull_host::clear_scripted_pull();
+        open_grid(&mut app, true);
+        let old = "0123456789abcdef0123456789abcdef";
+        plant_seen_key(&mut app, old);
+        let duck_before = app.world().resource::<audio::Music>().duck_gain;
+        let rank = app.world().resource::<session::Account>().rank;
+        settings::fail_stores_after(1);
+        pull_host::script_next_pull(Ok(seen_settle_reply(rank)));
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        let cues = ui_cues(&mut app);
+        let failed = &content.crate_reveal.grid.pull_failed;
+        assert_eq!(cues, vec![failed.clone()], "{cues:?}");
+        assert_eq!(app.world().resource::<flow::ServerCrate>().sent_keys, vec![old.to_string()]);
+        assert!(app.world().resource::<settings::Prefs>().pull_key.is_empty(), "the old key stays settled");
+        assert!(app.world().resource::<settings::Prefs>().pull_seen_keys.iter().any(|row| row == old));
+        assert_eq!(app.world().resource::<flow::ServerCrate>().reason, content.ui.copy.pull_failed);
+        assert_ne!(app.world().resource::<flow::ServerCrate>().reason, content.ui.copy.connection_lost);
+        assert_ne!(app.world().resource::<flow::ServerCrate>().reason, content.ui.copy.last_pull_confirmed);
+        let duck = app.world().resource::<audio::Music>().duck_gain;
+        assert!((duck - duck_before).abs() < 1e-4, "a failed save does not duck, gain {duck}");
+        assert!(reveal_voices(&mut app).iter().all(|id| id != &content.crate_reveal.grid.flip_cue));
+        let waiting = pull_host::round_trip("banner", "check", false);
+        assert!(waiting.is_err(), "nothing new was sent");
+    }
+
+    #[test]
+    fn a_short_wallet_settles_the_old_key_and_sends_no_new_key() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        app.update();
+        let content = gemini_sim::content::Content::embedded();
+        assert_eq!(content.ui.copy.last_pull_confirmed, "LAST PULL CONFIRMED");
+        pull_host::clear_scripted_pull();
+        open_grid(&mut app, true);
+        let old = "0123456789abcdef0123456789abcdef";
+        plant_seen_key(&mut app, old);
+        app.world_mut().resource_mut::<flow::ServerCrate>().credits = Some(0.0);
+        let duck_before = app.world().resource::<audio::Music>().duck_gain;
+        let rank = app.world().resource::<session::Account>().rank;
+        let gen = app.world().resource::<flow::ServerCrate>().reveal_gen;
+        pull_host::script_next_pull(Ok(seen_settle_reply(rank)));
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        let cues = ui_cues(&mut app);
+        let confirm = &content.ui.sounds.confirm;
+        let failed = &content.crate_reveal.grid.pull_failed;
+        let tick = &content.ui.sounds.count_tick;
+        assert_eq!(cues, vec![confirm.clone()], "{cues:?}");
+        assert!(cues.iter().all(|id| id != failed && id != tick && id != &content.ui.sounds.bank_chime && id != &content.crate_reveal.grid.flip_cue));
+        assert_eq!(app.world().resource::<flow::ServerCrate>().sent_keys, vec![old.to_string()]);
+        assert!(app.world().resource::<settings::Prefs>().pull_key.is_empty(), "the line appears only after the old key settles");
+        assert!(app.world().resource::<settings::Prefs>().pull_seen_keys.iter().any(|row| row == old));
+        assert_eq!(app.world().resource::<flow::ServerCrate>().reason, content.ui.copy.last_pull_confirmed);
+        assert_eq!(app.world().resource::<flow::ServerCrate>().reveal_gen, gen);
+        assert_eq!(app.world().resource::<reveal_ui::RevealPlayback>().key, "");
+        let duck = app.world().resource::<audio::Music>().duck_gain;
+        assert!((duck - duck_before).abs() < 1e-4, "a short wallet does not duck, gain {duck}");
+        let waiting = pull_host::round_trip("banner", "check", false);
+        assert!(waiting.is_err(), "the settle reply was the only send");
+    }
+
+    #[test]
+    fn a_lost_settle_sends_no_new_key_and_retry_resends_the_old_one() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        app.update();
+        let content = gemini_sim::content::Content::embedded();
+        assert_eq!(content.ui.copy.crates_retry, "RETRY");
+        pull_host::clear_scripted_pull();
+        open_grid(&mut app, true);
+        let old = "0123456789abcdef0123456789abcdef";
+        plant_seen_key(&mut app, old);
+        let rank = app.world().resource::<session::Account>().rank;
+        pull_host::script_next_pull(Err(pull_host::PullHostError::Lost("timed out".into())));
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        let cues = ui_cues(&mut app);
+        assert_eq!(cues.iter().filter(|id| *id == &content.crate_reveal.grid.pull_failed).count(), 1, "{cues:?}");
+        assert_eq!(app.world().resource::<flow::ServerCrate>().sent_keys, vec![old.to_string()]);
+        assert_eq!(app.world().resource::<flow::ServerCrate>().reason, content.ui.copy.connection_lost);
+        assert_ne!(app.world().resource::<flow::ServerCrate>().reason, content.ui.copy.last_pull_confirmed);
+        let prefs = app.world().resource::<settings::Prefs>();
+        assert_eq!(prefs.pull_key, old);
+        assert!(prefs.pull_awaiting, "retry keeps the old key");
+        app.world_mut().run_system_once(flow::release_pull).unwrap();
+        pull_host::script_next_pull(Ok(seen_settle_reply(rank)));
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        let sent = app.world().resource::<flow::ServerCrate>().sent_keys.clone();
+        assert_eq!(sent, vec![old.to_string(), old.to_string()], "retry resends only the old key: {sent:?}");
+        assert!(app.world().resource::<settings::Prefs>().pull_key.is_empty());
+        assert_ne!(app.world().resource::<flow::ServerCrate>().reason, content.ui.copy.last_pull_confirmed);
     }
 
     #[test]
@@ -1496,11 +1683,11 @@ mod tests {
             assert_eq!(run.shown_item(index), Some(pod.item.as_str()));
         }
         let shown: Vec<Option<&str>> = (0..pods).map(|index| run.shown_item(index)).collect();
-        let shot = gemini_meshes::GridStill { items: &shown, ready: true, again: true, focus: 0, shortfall: "", failure: "" };
+        let shot = gemini_meshes::GridStill { items: &shown, ready: true, again: true, focus: 0, shortfall: "", failure: "", retry: false };
         let (rgb, _) = gemini_meshes::paint_grid(&content, &shot, width, height).unwrap();
         let mut swapped = shown.clone();
         swapped[3] = Some("visor");
-        let other_shot = gemini_meshes::GridStill { items: &swapped, ready: true, again: true, focus: 0, shortfall: "", failure: "" };
+        let other_shot = gemini_meshes::GridStill { items: &swapped, ready: true, again: true, focus: 0, shortfall: "", failure: "", retry: false };
         let (other, _) = gemini_meshes::paint_grid(&content, &other_shot, width, height).unwrap();
         assert_ne!(rgb, other, "the painted card is the server item, not a stand-in");
     }
@@ -2114,12 +2301,27 @@ mod tests {
         app.world_mut().run_system_once(flow::apply).unwrap();
     }
 
-    fn settings_lock() -> std::sync::MutexGuard<'static, ()> {
+    struct SettingsGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        prev: Option<String>,
+    }
+
+    impl Drop for SettingsGuard {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(value) => std::env::set_var("GEMINI_SETTINGS", value),
+                None => std::env::remove_var("GEMINI_SETTINGS"),
+            }
+        }
+    }
+
+    fn settings_lock() -> SettingsGuard {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let guard = LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let prev = std::env::var("GEMINI_SETTINGS").ok();
         let path = std::env::temp_dir().join(format!("gemini-ui-test-{}.toml", std::process::id()));
         let _ = std::fs::remove_file(&path);
         std::env::set_var("GEMINI_SETTINGS", &path);
-        guard
+        SettingsGuard { _lock: guard, prev }
     }
 }

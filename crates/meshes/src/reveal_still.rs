@@ -619,6 +619,8 @@ pub struct GridStill<'a> {
     pub shortfall: &'a str,
     /// Shown under the buttons when a pull again failed or replayed. Empty draws nothing.
     pub failure: &'a str,
+    /// A lost key is still saved. The second button reads RETRY.
+    pub retry: bool,
 }
 
 /// Refund column. `again` is false when a ten-pull does not fit in the wallet.
@@ -628,6 +630,8 @@ pub struct RefundStill<'a> {
     pub shortfall: &'a str,
     /// Shown on the stage under the panel. Empty draws nothing.
     pub failure: &'a str,
+    /// A lost key is still saved. The second button reads RETRY.
+    pub retry: bool,
 }
 
 /// The live reveal screen and the stills call this. `None` paints the shared back.
@@ -651,7 +655,7 @@ pub fn paint_grid(content: &Content, shot: &GridStill<'_>, width: u32, height: u
             None => paint_grid_back(&mut rgb, width, height, content, x, y, w, h),
         }
     }
-    let hits = paint_result_chrome(&mut rgb, width, height, content, shot.ready, shot.again, shot.focus, shot.shortfall, shot.failure)?;
+    let hits = paint_result_chrome(&mut rgb, width, height, content, shot.ready, shot.again, shot.focus, shot.shortfall, shot.failure, shot.retry)?;
     Ok((rgb, hits))
 }
 
@@ -673,11 +677,11 @@ pub fn paint_refund(content: &Content, shot: &RefundStill<'_>, width: u32, heigh
     let (x, mut y, panel_w, panel_h, button_w, button_h, gap, margin_x, margin_y) = refund_column(content, width, height, !shot.shortfall.is_empty());
     if !shot.failure.is_empty() {
         let clear = layout.failure_clear.round() as i32;
-        let overflow = y + panel_h + line_h + clear - height as i32;
+        let overflow = y + panel_h + gap + line_h + clear - height as i32;
         if overflow > 0 {
             y -= overflow;
         }
-        if y < 0 || y + panel_h + line_h + clear > height as i32 {
+        if y < 0 || y + panel_h + gap + line_h + clear > height as i32 {
             return Err("refund failure line does not fit under the panel".into());
         }
     }
@@ -701,13 +705,14 @@ pub fn paint_refund(content: &Content, shot: &RefundStill<'_>, width: u32, heigh
     let continue_hit = paint_text_button(&mut rgb, width, height, content, bx, ty, button_w, button_h, &content.ui.copy.crates_continue, true, shot.focus == 0);
     hits.push(crate::menu_still::Hit { id: "continue".into(), ..continue_hit });
     ty += button_h + gap;
-    let again_hit = paint_text_button(&mut rgb, width, height, content, bx, ty, button_w, button_h, &content.ui.copy.crates_pull_again, shot.again, shot.again && shot.focus == 1);
+    let again_label = if shot.retry { &content.ui.copy.crates_retry } else { &content.ui.copy.crates_pull_again };
+    let again_hit = paint_text_button(&mut rgb, width, height, content, bx, ty, button_w, button_h, again_label, shot.again, shot.again && shot.focus == 1);
     if shot.again {
         hits.push(crate::menu_still::Hit { id: "pull_again".into(), ..again_hit });
     }
     if !shot.failure.is_empty() {
-        let failure_y = y + panel_h;
-        if failure_y < 0 || failure_y + line_h > height as i32 {
+        let failure_y = y + panel_h + gap;
+        if failure_y < 0 || failure_y + line_h + layout.failure_clear.round() as i32 > height as i32 {
             return Err("refund failure line does not fit under the panel".into());
         }
         let failure_ink = palette_bytes(content, &grid.failure_ink);
@@ -842,6 +847,7 @@ fn paint_result_chrome(
     focus: usize,
     shortfall: &str,
     failure: &str,
+    retry: bool,
 ) -> Result<Vec<crate::menu_still::Hit>, String> {
     let layout = &content.crate_reveal.layout;
     let paper = palette_bytes(content, &content.ui.colors.text);
@@ -857,7 +863,7 @@ fn paint_result_chrome(
     let clear = layout.failure_clear.round() as i32;
     let mut y = height as i32 - button_h - ui.layout.margin_y.round() as i32;
     if !failure.is_empty() {
-        let overflow = y + button_h + line_h + clear - height as i32;
+        let overflow = y + button_h + gap + line_h + clear - height as i32;
         if overflow > 0 {
             y -= overflow;
         }
@@ -879,12 +885,13 @@ fn paint_result_chrome(
     if continue_on {
         hits.push(crate::menu_still::Hit { id: "continue".into(), ..continue_hit });
     }
-    let again_hit = paint_text_button(rgb, width, height, content, x + button_w + gap, y, button_w, button_h, &ui.copy.crates_pull_again, again_on, again_on && focus == hits.len());
+    let again_label = if retry { &ui.copy.crates_retry } else { &ui.copy.crates_pull_again };
+    let again_hit = paint_text_button(rgb, width, height, content, x + button_w + gap, y, button_w, button_h, again_label, again_on, again_on && focus == hits.len());
     if again_on {
         hits.push(crate::menu_still::Hit { id: "pull_again".into(), ..again_hit });
     }
     if !failure.is_empty() {
-        let failure_y = y + button_h;
+        let failure_y = y + button_h + gap;
         if failure_y < 0 || failure_y + line_h + clear > height as i32 {
             return Err("crate reveal failure line does not fit under the buttons".into());
         }
@@ -1144,7 +1151,7 @@ mod tests {
         let faces = vec![None; pods];
         let lost = paint_grid(
             &content,
-            &GridStill { items: &faces, ready: true, again: true, focus: 0, shortfall: "", failure: &content.ui.copy.connection_lost },
+            &GridStill { items: &faces, ready: true, again: true, focus: 0, shortfall: "", failure: &content.ui.copy.connection_lost, retry: false },
             width,
             height,
         );
@@ -1175,7 +1182,7 @@ mod tests {
         let gold = palette_bytes(&content, "rarity_legendary");
         let common = palette_bytes(&content, "rarity_common");
         let back = palette_bytes(&content, &content.crate_reveal.grid.back);
-        let backs = paint_grid(&content, &GridStill { items: &vec![None; pods], ready: false, again: true, focus: 0, shortfall: "", failure: "" }, width, height).unwrap().0;
+        let backs = paint_grid(&content, &GridStill { items: &vec![None; pods], ready: false, again: true, focus: 0, shortfall: "", failure: "", retry: false }, width, height).unwrap().0;
         let first = rounded_card(&backs, width, slots[0], &content);
         let second = rounded_card(&backs, width, slots[1], &content);
         assert_eq!(first, second, "every back is the same picture");
@@ -1192,7 +1199,7 @@ mod tests {
         let mut faces = vec![Some(visor.id.as_str()); pods];
         let legendary_at = pods / 2;
         faces[legendary_at] = Some(mark.id.as_str());
-        let mixed = paint_grid(&content, &GridStill { items: &faces, ready: true, again: true, focus: 0, shortfall: "", failure: "" }, width, height).unwrap().0;
+        let mixed = paint_grid(&content, &GridStill { items: &faces, ready: true, again: true, focus: 0, shortfall: "", failure: "", retry: false }, width, height).unwrap().0;
         assert_eq!(face_swatch(&mixed, width, slots[legendary_at], &content), paper, "the face is paper, not a rarity flood");
         assert_eq!(face_swatch(&mixed, width, slots[0], &content), paper);
         assert_ne!(paper, gold);
@@ -1220,11 +1227,11 @@ mod tests {
         let shown: Vec<Option<&str>> = (0..pods).map(|index| run.shown_item(index)).collect();
         assert_eq!(shown[legendary_at], None);
         assert_eq!(shown[0], Some(visor.id.as_str()));
-        let held = paint_grid(&content, &GridStill { items: &shown, ready: false, again: true, focus: 0, shortfall: "", failure: "" }, width, height).unwrap().0;
+        let held = paint_grid(&content, &GridStill { items: &shown, ready: false, again: true, focus: 0, shortfall: "", failure: "", retry: false }, width, height).unwrap().0;
         assert_eq!(card_pixels(&held, width, slots[legendary_at]), card_pixels(&backs, width, slots[legendary_at]));
         assert!(card_pixels(&held, width, slots[legendary_at]).chunks_exact(3).all(|px| px != gold));
 
-        let (refund, refund_hits) = paint_refund(&content, &RefundStill { again: true, focus: 0, shortfall: "", failure: "" }, width, height).unwrap();
+        let (refund, refund_hits) = paint_refund(&content, &RefundStill { again: true, focus: 0, shortfall: "", failure: "", retry: false }, width, height).unwrap();
         assert!(refund_hits.iter().any(|hit| hit.id == "continue"));
         assert!(refund_hits.iter().any(|hit| hit.id == "pull_again"));
         assert!(refund.chunks_exact(3).all(|px| px != gold), "the refund panel has no rarity gold");
@@ -1237,14 +1244,14 @@ mod tests {
         assert_ne!(failed_line, lost_line);
         let (failed_paint, failed_hits) = paint_grid(
             &content,
-            &GridStill { items: &faces, ready: true, again: true, focus: 0, shortfall: "", failure: failed_line },
+            &GridStill { items: &faces, ready: true, again: true, focus: 0, shortfall: "", failure: failed_line, retry: false },
             width,
             height,
         )
         .unwrap();
         let (lost_paint, lost_hits) = paint_grid(
             &content,
-            &GridStill { items: &faces, ready: true, again: true, focus: 0, shortfall: "", failure: lost_line },
+            &GridStill { items: &faces, ready: true, again: true, focus: 0, shortfall: "", failure: lost_line, retry: true },
             width,
             height,
         )
@@ -1255,10 +1262,13 @@ mod tests {
         assert_eq!(failure_ink, palette_bytes(&content, &content.crate_reveal.layout.ink_light));
         assert_ne!(failure_ink, palette_bytes(&content, &content.ui.colors.defeat));
         let clear = content.crate_reveal.layout.failure_clear.round() as u32;
+        let gap = content.ui.layout.row_gap.round() as u32;
+        let line_h = content.crate_reveal.layout.glyph_rows * content.ui.layout.button_scale;
         for (name, paint, hits) in [("pull failed", &failed_paint, &failed_hits), ("connection lost", &lost_paint, &lost_hits)] {
             let button_bottom = hits.iter().map(|hit| hit.y + hit.h).max().unwrap() as u32;
             let mut saw_failure = false;
             let mut lowest = 0u32;
+            let mut top = u32::MAX;
             for (index, px) in paint.chunks_exact(3).enumerate() {
                 if px != failure_ink.as_slice() {
                     continue;
@@ -1269,8 +1279,10 @@ mod tests {
                 }
                 saw_failure = true;
                 lowest = lowest.max(y);
+                top = top.min(y);
             }
             assert!(saw_failure, "{name} draws the paper line under the buttons");
+            assert!(top >= button_bottom + gap && top < button_bottom + gap + line_h, "{name} line starts at {top}, buttons end at {button_bottom}");
             assert!(lowest + 1 + clear <= height, "{name} line ends at {lowest} and the frame is {height}");
             for (index, slot) in slots.iter().enumerate() {
                 assert_eq!(card_pixels(&mixed, width, *slot), card_pixels(paint, width, *slot), "{name} card {index} changed");
@@ -1309,22 +1321,22 @@ mod tests {
         assert!(broke.1.iter().all(|hit| hit.id != "pull" && hit.id != "ten"), "a short wallet sends no pull");
         assert!(broke.1.iter().any(|hit| hit.id == "back"));
         let grip_faces = vec![Some(grip.id.as_str()); pods];
-        let grip_paint = paint_grid(&content, &GridStill { items: &grip_faces, ready: true, again: true, focus: 0, shortfall: "", failure: "" }, width, height).unwrap().0;
+        let grip_paint = paint_grid(&content, &GridStill { items: &grip_faces, ready: true, again: true, focus: 0, shortfall: "", failure: "", retry: false }, width, height).unwrap().0;
         let visor_ink = palette_bytes(&content, &visor.ink);
         let grip_ink = palette_bytes(&content, &grip.ink);
         assert!(card_pixels(&grip_paint, width, slots[0]).chunks_exact(3).any(|px| px == grip_ink), "the card draws the server item");
         assert!(card_pixels(&grip_paint, width, slots[0]).chunks_exact(3).all(|px| px != visor_ink), "a grip card does not draw visor");
         assert_ne!(grip_ink, gold);
         let flipped_items: Vec<Option<&str>> = cards.iter().map(|card| Some(card.item.as_str())).collect();
-        let (flipped, flipped_hits) = paint_grid(&content, &GridStill { items: &flipped_items, ready: true, again: true, focus: 0, shortfall: "", failure: "" }, width, height).unwrap();
+        let (flipped, flipped_hits) = paint_grid(&content, &GridStill { items: &flipped_items, ready: true, again: true, focus: 0, shortfall: "", failure: "", retry: false }, width, height).unwrap();
         assert!(flipped_hits.iter().any(|hit| hit.id == "continue") && flipped_hits.iter().any(|hit| hit.id == "pull_again"));
-        let (held_paint, held_hits) = paint_grid(&content, &GridStill { items: &shown, ready: false, again: true, focus: 0, shortfall: "", failure: "" }, width, height).unwrap();
+        let (held_paint, held_hits) = paint_grid(&content, &GridStill { items: &shown, ready: false, again: true, focus: 0, shortfall: "", failure: "", retry: false }, width, height).unwrap();
         assert!(held_hits.is_empty(), "buttons stay dead until the best face is up");
         assert_eq!(held_paint, held);
         let _ = perk;
         let stills = [
             ("all_backs.png", backs),
-            ("all_common.png", paint_grid(&content, &GridStill { items: &vec![Some(visor.id.as_str()); pods], ready: true, again: true, focus: 0, shortfall: "", failure: "" }, width, height).unwrap().0),
+            ("all_common.png", paint_grid(&content, &GridStill { items: &vec![Some(visor.id.as_str()); pods], ready: true, again: true, focus: 0, shortfall: "", failure: "", retry: false }, width, height).unwrap().0),
             ("one_legendary.png", mixed),
             ("best_face_down.png", held),
             ("best_flipped.png", flipped),
@@ -1349,6 +1361,25 @@ mod tests {
             ),
             ("pull_failed.png", failed_paint),
             ("connection_lost.png", lost_paint),
+            (
+                "last_pull_confirmed.png",
+                paint_grid(
+                    &content,
+                    &GridStill {
+                        items: &faces,
+                        ready: true,
+                        again: false,
+                        focus: 0,
+                        shortfall: &gemini_sim::content::shortfall_line(&content.ui.copy, content.ui.layout.currency_decimals, content.banners.cost.ten_pull_cost as f32),
+                        failure: content.ui.copy.last_pull_confirmed.as_str(),
+                        retry: false,
+                    },
+                    width,
+                    height,
+                )
+                .unwrap()
+                .0,
+            ),
         ];
         for (name, rgb) in stills {
             let bytes = std::fs::read(root.join("art/ten_pull").join(name)).unwrap();
