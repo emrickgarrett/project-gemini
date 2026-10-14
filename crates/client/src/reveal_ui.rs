@@ -246,6 +246,7 @@ pub fn paint(
     mut commands: Commands,
     playback: Option<Res<RevealPlayback>>,
     crate_box: Res<flow::ServerCrate>,
+    prefs: Res<Prefs>,
     focus: Res<flow::Focus>,
     mut hits: ResMut<flow::Hits>,
     mut cached: Option<ResMut<PaintKey>>,
@@ -269,7 +270,8 @@ pub fn paint(
         .ok()
         .map(|window| (window.width().max(8.0) as u32, window.height().max(8.0) as u32))
         .unwrap_or((content.ui.layout.fit_width.round() as u32, content.ui.layout.fit_height.round() as u32));
-    let afford = ten_affordable(&content, crate_box.credits);
+    let owed = !prefs.pull_key.is_empty() && prefs.pull_seen_keys.iter().all(|row| row != &prefs.pull_key);
+    let afford = owed || ten_affordable(&content, crate_box.credits);
     let shortfall = if afford { String::new() } else { ten_shortfall(&content, crate_box.credits) };
     let again = afford && !crate_box.pull_busy;
     let failure = crate_box.reason.clone();

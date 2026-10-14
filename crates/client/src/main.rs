@@ -1185,6 +1185,106 @@ mod tests {
     }
 
     #[test]
+    fn a_short_wallet_shows_the_last_pull() {
+        let _guard = settings_lock();
+        let content = gemini_sim::content::Content::embedded();
+        let mut app = menu_app();
+        app.update();
+        choose(&mut app, "crates");
+        let key = "0123456789abcdef0123456789abcdef".to_string();
+        {
+            let mut prefs = app.world_mut().resource_mut::<settings::Prefs>();
+            prefs.pull_key = key.clone();
+            prefs.pull_ten = false;
+            prefs.pull_awaiting = true;
+        }
+        app.world_mut().resource_mut::<flow::ServerCrate>().credits = Some(0.0);
+        app.world_mut().resource_mut::<flow::Dirty>().0 = true;
+        app.update();
+        let ids = reveal_buttons(&mut app);
+        assert!(ids.iter().any(|id| id == "show_last"), "{ids:?}");
+        assert!(ids.iter().all(|id| id != "pull" && id != "ten"), "{ids:?}");
+        pull_host::clear_scripted_pull();
+        pull_host::script_next_pull(Ok(single_reply(&content, false)));
+        press(&mut app, "show_last");
+        let cues = ui_cues(&mut app);
+        let confirm = &content.ui.sounds.confirm;
+        let failed = &content.crate_reveal.grid.pull_failed;
+        let tick = &content.ui.sounds.count_tick;
+        let chime = &content.ui.sounds.bank_chime;
+        assert_eq!(cues.iter().filter(|id| *id == confirm).count(), 1, "{cues:?}");
+        assert!(cues.iter().all(|id| id != failed && id != tick && id != chime), "{cues:?}");
+        assert_eq!(app.world().resource::<flow::ServerCrate>().sent_keys, vec![key.clone()]);
+        app.update();
+        assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Reveal));
+        let playback = app.world().resource::<reveal_ui::RevealPlayback>();
+        assert_eq!(playback.key, key);
+        assert!(matches!(playback.show, reveal_ui::RevealShow::Single(_)));
+        ramp_for(&mut app, content.presentation.reveal_duck_ramp);
+        let gain = app.world().resource::<audio::Music>().duck_gain;
+        let ducked = audio::crate_reveal_duck();
+        assert!((gain - ducked).abs() < 1e-4, "the reveal ducks the music, gain {gain}");
+        assert!(reveal_voices(&mut app).iter().all(|id| id != tick && id != chime), "the reveal is not a refund or a bank count");
+
+        let mut app = menu_app();
+        app.update();
+        choose(&mut app, "crates");
+        {
+            let mut prefs = app.world_mut().resource_mut::<settings::Prefs>();
+            prefs.pull_key = key.clone();
+            prefs.pull_ten = false;
+            prefs.pull_awaiting = true;
+        }
+        app.world_mut().resource_mut::<flow::ServerCrate>().credits = Some(0.0);
+        pull_host::clear_scripted_pull();
+        pull_host::script_next_pull(Err(pull_host::PullHostError::Lost("timed out".into())));
+        press(&mut app, "show_last");
+        let cues = ui_cues(&mut app);
+        assert_eq!(cues.iter().filter(|id| *id == failed).count(), 1, "{cues:?}");
+        assert!(cues.iter().all(|id| id != confirm && id != tick && id != chime && id != &content.crate_reveal.grid.flip_cue), "{cues:?}");
+        app.update();
+        assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Menu));
+        assert!(app.world().get_resource::<reveal_ui::RevealPlayback>().is_none());
+        assert!((app.world().resource::<audio::Music>().duck_gain - 1.0).abs() < 1e-4);
+        assert!(reveal_voices(&mut app).iter().all(|id| id != &content.crate_reveal.grid.flip_cue));
+        assert_eq!(app.world().resource::<settings::Prefs>().pull_key, key);
+    }
+
+    #[test]
+    fn a_failed_key_save_does_not_send() {
+        let _guard = settings_lock();
+        let content = gemini_sim::content::Content::embedded();
+        let mut app = menu_app();
+        app.update();
+        choose(&mut app, "crates");
+        let blocked = std::env::temp_dir().join(format!("gemini-save-block-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&blocked);
+        std::fs::create_dir_all(&blocked).unwrap();
+        std::env::set_var("GEMINI_SETTINGS", &blocked);
+        pull_host::clear_scripted_pull();
+        pull_host::script_next_pull(Ok(single_reply(&content, true)));
+        press(&mut app, "pull");
+        let cues = ui_cues(&mut app);
+        let failed = &content.crate_reveal.grid.pull_failed;
+        let tick = &content.ui.sounds.count_tick;
+        let chime = &content.ui.sounds.bank_chime;
+        assert_eq!(cues, vec![failed.clone()], "{cues:?}");
+        assert!(cues.iter().all(|id| id != tick && id != chime && id != &content.crate_reveal.grid.flip_cue && id != &content.ui.sounds.confirm));
+        assert!(app.world().resource::<flow::ServerCrate>().sent_keys.is_empty(), "a failed save sends no key");
+        assert_eq!(app.world().resource::<flow::ServerCrate>().reason, content.ui.copy.pull_failed);
+        assert_ne!(app.world().resource::<flow::ServerCrate>().reason, content.ui.copy.connection_lost);
+        assert!(app.world().resource::<settings::Prefs>().pull_key.is_empty(), "the key stays off disk and out of memory");
+        app.update();
+        assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Menu));
+        assert!(app.world().get_resource::<reveal_ui::RevealPlayback>().is_none(), "the failure does not open a reveal");
+        assert!((app.world().resource::<audio::Music>().duck_gain - 1.0).abs() < 1e-4, "a failed save does not duck");
+        assert!(reveal_voices(&mut app).is_empty(), "a failed save plays no flip");
+        let waiting = pull_host::round_trip("banner", "check", false);
+        assert!(waiting.is_ok(), "the scripted reply was not sent");
+        let _ = std::fs::remove_dir_all(&blocked);
+    }
+
+    #[test]
     fn three_reveals_keep_the_theme_stems_and_the_duck_reaches_the_sink() {
         let _guard = settings_lock();
         let content = gemini_sim::content::Content::embedded();
@@ -1829,6 +1929,11 @@ mod tests {
     fn ui_cues(app: &mut App) -> Vec<String> {
         let mut query = app.world_mut().query::<&audio::UiRequest>();
         query.iter(app.world()).map(|request| request.0.clone()).collect()
+    }
+
+    fn reveal_voices(app: &mut App) -> Vec<String> {
+        let mut query = app.world_mut().query::<&reveal_ui::RevealVoice>();
+        query.iter(app.world()).map(|voice| voice.id.clone()).collect()
     }
 
     fn grid_faces(app: &mut App) -> Vec<Option<String>> {

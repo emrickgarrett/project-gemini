@@ -73,11 +73,26 @@ fn main() {
             failed: false,
             credits: Some(content.banners.cost.single as f32 / 2.0),
             reason: String::new(),
+            show_last: false,
         },
         width,
         height,
     );
     write(out.join("no_credits.png"), &short, width, height);
+    let (last, _) = paint_menu(
+        &content,
+        &MenuShot::Crates {
+            focus: 0,
+            rarity: None,
+            failed: false,
+            credits: Some(content.banners.cost.single as f32 / 2.0),
+            reason: String::new(),
+            show_last: true,
+        },
+        width,
+        height,
+    );
+    write(out.join("show_last_pull.png"), &last, width, height);
 }
 
 fn write(path: std::path::PathBuf, rgb: &[u8], width: u32, height: u32) {

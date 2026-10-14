@@ -781,12 +781,7 @@ pub fn ramp_reveal_duck(time: Res<Time>, state: Res<State<crate::AppState>>, mut
     let ducked = crate_reveal_duck();
     let target = if *state.get() == crate::AppState::Reveal { ducked } else { 1.0 };
     let ramp = content.presentation.reveal_duck_ramp;
-    let dt = time.delta_secs();
-    if !(ramp.is_finite() && ramp > 0.0) {
-        music.duck_gain = target;
-        return;
-    }
-    let step = (1.0 - ducked).abs() * (dt / ramp);
+    let step = (1.0 - ducked).abs() * (time.delta_secs() / ramp);
     let delta = target - music.duck_gain;
     if delta.abs() <= step {
         music.duck_gain = target;

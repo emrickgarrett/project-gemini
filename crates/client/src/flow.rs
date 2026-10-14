@@ -104,7 +104,7 @@ pub struct Soon(pub bool);
 pub struct ResetNotice(pub bool);
 
 #[derive(Resource, Default)]
-pub(crate) struct Dirty(bool);
+pub(crate) struct Dirty(pub(crate) bool);
 
 #[derive(Resource, Default)]
 pub(crate) struct Focus(pub(crate) usize);
@@ -729,16 +729,33 @@ pub(crate) fn apply(
             dirty.0 = true;
             audio::ui_cue(&mut commands, &assets, &content, &prefs, back_cue);
         }
-        "pull" | "ten" => {
+        "pull" | "ten" | "show_last" => {
             let asked = id == "ten";
             let unseen = !prefs.pull_key.is_empty() && !has_seen(&prefs, &prefs.pull_key);
-            let ten = if unseen { prefs.pull_ten } else { asked };
-            let cost = if ten { content.banners.cost.ten_pull_cost } else { content.banners.cost.single } as f32;
-            if crate_box.credits.is_some_and(|have| have + 1e-3 < cost) {
+            if id == "show_last" && !unseen {
                 dirty.0 = true;
                 return;
             }
-            let (key, ten) = claim_key(&mut prefs, ten);
+            let ten = if unseen { prefs.pull_ten } else { asked };
+            // A saved unseen key was already paid for. SHOW LAST PULL does not check the wallet.
+            if !unseen {
+                let cost = if ten { content.banners.cost.ten_pull_cost } else { content.banners.cost.single } as f32;
+                if crate_box.credits.is_some_and(|have| have + 1e-3 < cost) {
+                    dirty.0 = true;
+                    return;
+                }
+            }
+            let (key, ten) = match claim_key(&mut prefs, ten) {
+                Ok(pair) => pair,
+                Err(err) => {
+                    eprintln!("settings save failed: {err}");
+                    crate_box.failed = true;
+                    crate_box.reason = content.ui.copy.pull_failed.clone();
+                    dirty.0 = true;
+                    audio::ui_cue(&mut commands, &assets, &content, &prefs, &content.crate_reveal.grid.pull_failed);
+                    return;
+                }
+            };
             let credits = crate_box.credits;
             let mut kept_keys = crate_box.sent_keys.clone();
             push_sent(&mut kept_keys, key.clone());
@@ -789,6 +806,9 @@ pub(crate) fn apply(
                                 landed.reveal_gen = kept_gen.saturating_add(1);
                                 landed.buttons_ready = false;
                                 *crate_box = landed;
+                                if id == "show_last" {
+                                    audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
+                                }
                             }
                             Err(message) => {
                                 eprintln!("ten pull reveal failed: {message}");
@@ -982,14 +1002,24 @@ pub(crate) fn reveal_act(
     let ten = if unseen { prefs.pull_ten } else { true };
     let cost = if ten { content.banners.cost.ten_pull_cost } else { content.banners.cost.single } as f32;
     // Disabled, busy, and short presses spend no key and play no cue.
+    // A saved unseen key was already paid for, so the wallet does not block it.
     if !crate_box.buttons_ready || crate_box.pull_busy {
         return;
     }
-    if crate_box.credits.is_some_and(|have| have + 1e-3 < cost) {
+    if !unseen && crate_box.credits.is_some_and(|have| have + 1e-3 < cost) {
         return;
     }
+    let (key, ten) = match claim_key(&mut prefs, ten) {
+        Ok(pair) => pair,
+        Err(err) => {
+            eprintln!("settings save failed: {err}");
+            crate_box.reason = content.ui.copy.pull_failed.clone();
+            crate_box.buttons_ready = true;
+            audio::ui_cue(&mut commands, &assets, &content, &prefs, &content.crate_reveal.grid.pull_failed);
+            return;
+        }
+    };
     crate_box.pull_busy = true;
-    let (key, ten) = claim_key(&mut prefs, ten);
     push_sent(&mut crate_box.sent_keys, key.clone());
     audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
     let kept_keys = crate_box.sent_keys.clone();
@@ -1334,6 +1364,7 @@ fn shot_for(
             failed: crate_box.is_some_and(|row| row.failed),
             credits: crate_box.and_then(|row| row.credits),
             reason: crate_box.map(|row| row.reason.clone()).unwrap_or_default(),
+            show_last: !prefs.pull_key.is_empty() && !has_seen(prefs, &prefs.pull_key),
         },
     })
 }
@@ -1357,18 +1388,19 @@ fn save_settings(prefs: &Prefs) {
 }
 
 /// The key a press will send. An unseen saved key is resent, whichever button was pressed.
-/// A new key is written before the request so a crash still has it.
-fn claim_key(prefs: &mut Prefs, ten: bool) -> (String, bool) {
+/// A new key is written before the request so a crash still has it. A failed write sends nothing.
+fn claim_key(prefs: &mut Prefs, ten: bool) -> Result<(String, bool), String> {
     if !prefs.pull_key.is_empty() && !has_seen(prefs, &prefs.pull_key) {
-        return (prefs.pull_key.clone(), prefs.pull_ten);
+        return Ok((prefs.pull_key.clone(), prefs.pull_ten));
     }
     let key = pull_key();
-    prefs.pull_key = key.clone();
-    prefs.pull_ten = ten;
-    prefs.pull_awaiting = false;
-    // On disk before the request leaves, so a crash during the send still has the key.
-    save_settings(prefs);
-    (key, ten)
+    let mut next = prefs.clone();
+    next.pull_key = key.clone();
+    next.pull_ten = ten;
+    next.pull_awaiting = false;
+    settings::store(&Content::embedded(), &next)?;
+    *prefs = next;
+    Ok((key, ten))
 }
 
 fn mark_lost(prefs: &mut Prefs) {

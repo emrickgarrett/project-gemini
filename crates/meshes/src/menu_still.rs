@@ -60,7 +60,15 @@ pub enum MenuShot {
         bonus: f32,
         balance: Option<f32>,
     },
-    Crates { focus: usize, rarity: Option<String>, failed: bool, credits: Option<f32>, reason: String },
+    Crates {
+        focus: usize,
+        rarity: Option<String>,
+        failed: bool,
+        credits: Option<f32>,
+        reason: String,
+        /// A saved unseen key. PULL and TEN PULL become one SHOW LAST PULL.
+        show_last: bool,
+    },
     ClickToPlay,
 }
 
@@ -149,8 +157,8 @@ pub fn paint_menu_masked(content: &Content, shot: &MenuShot, width: u32, height:
         MenuShot::Results { focus, show, waves, kills, seconds, earned, bonus, balance } => {
             paint_results(&mut rgb, content, frame, *focus, *show, *waves, *kills, *seconds, *earned, *bonus, *balance)
         }
-        MenuShot::Crates { focus, rarity, failed, credits, reason } => {
-            paint_crates(&mut rgb, content, frame, *focus, rarity.as_deref(), *failed, *credits, reason)
+        MenuShot::Crates { focus, rarity, failed, credits, reason, show_last } => {
+            paint_crates(&mut rgb, content, frame, *focus, rarity.as_deref(), *failed, *credits, reason, *show_last)
         }
         MenuShot::ClickToPlay => paint_click(&mut rgb, content, frame),
     };
@@ -441,7 +449,17 @@ fn paint_results(
     hits
 }
 
-fn paint_crates(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, rarity: Option<&str>, failed: bool, credits: Option<f32>, reason: &str) -> Vec<Hit> {
+fn paint_crates(
+    rgb: &mut [u8],
+    content: &Content,
+    frame: Frame,
+    focus: usize,
+    rarity: Option<&str>,
+    failed: bool,
+    credits: Option<f32>,
+    reason: &str,
+    show_last: bool,
+) -> Vec<Hit> {
     let ui = &content.ui;
     draw_title(rgb, content, frame, &ui.copy.crates_title);
     let rows = content.crate_reveal.layout.glyph_rows;
@@ -465,35 +483,50 @@ fn paint_crates(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, r
     let short = |cost: u32| credits.filter(|have| *have + 1e-3 < cost as f32).map(|have| (cost as f32 - have).max(0.0));
     let mut hits = Vec::new();
     let mut index = 0;
+    let button_h = frame.px(ui.layout.button_height);
+    let gap = frame.px(ui.layout.row_gap);
+    if show_last {
+        // One live button, centered in the column PULL and TEN PULL would have filled.
+        let span = button_h + gap + button_h;
+        let show_y = y + (span - button_h) / 2;
+        let hit = crate_button(rgb, content, frame, show_y, &ui.copy.crates_show_last, focus == index);
+        hits.push(Hit { id: "show_last".into(), ..hit });
+        index += 1;
+        y += span + gap;
+    }
     let pull_missing = short(content.banners.cost.single);
     let ten_missing = short(content.banners.cost.ten_pull_cost);
-    let pull_open = pull_missing.is_none();
-    let ten_open = ten_missing.is_none();
+    let pull_open = !show_last && pull_missing.is_none();
+    let ten_open = !show_last && ten_missing.is_none();
     if pull_open {
         let hit = crate_button(rgb, content, frame, y, &ui.copy.crates_pull, focus == index);
         y = hit.y + hit.h + frame.px(ui.layout.row_gap);
         hits.push(Hit { id: "pull".into(), ..hit });
         index += 1;
-    } else if let Some(missing) = pull_missing {
-        let hit = crate_button_dim(rgb, content, frame, y, &ui.copy.crates_pull);
-        y = hit.y + hit.h + frame.px(ui.layout.spacing_block);
-        let text = gemini_sim::content::shortfall_line(&ui.copy, places, missing);
-        let tw = measure(&text, scale, glyph) as i32;
-        blit(rgb, frame.width, frame.height, (frame.width as i32 - tw) / 2, y, &text, paper, scale, glyph);
-        y += (scale * rows) as i32 + frame.px(ui.layout.row_gap);
+    } else if !show_last {
+        if let Some(missing) = pull_missing {
+            let hit = crate_button_dim(rgb, content, frame, y, &ui.copy.crates_pull);
+            y = hit.y + hit.h + frame.px(ui.layout.spacing_block);
+            let text = gemini_sim::content::shortfall_line(&ui.copy, places, missing);
+            let tw = measure(&text, scale, glyph) as i32;
+            blit(rgb, frame.width, frame.height, (frame.width as i32 - tw) / 2, y, &text, paper, scale, glyph);
+            y += (scale * rows) as i32 + frame.px(ui.layout.row_gap);
+        }
     }
     if ten_open {
         let hit = crate_button(rgb, content, frame, y, &ui.copy.crates_ten, focus == index);
         y = hit.y + hit.h + frame.px(ui.layout.row_gap);
         hits.push(Hit { id: "ten".into(), ..hit });
         index += 1;
-    } else if let Some(missing) = ten_missing {
-        let hit = crate_button_dim(rgb, content, frame, y, &ui.copy.crates_ten);
-        y = hit.y + hit.h + frame.px(ui.layout.spacing_block);
-        let text = gemini_sim::content::shortfall_line(&ui.copy, places, missing);
-        let tw = measure(&text, scale, glyph) as i32;
-        blit(rgb, frame.width, frame.height, (frame.width as i32 - tw) / 2, y, &text, paper, scale, glyph);
-        y += (scale * rows) as i32 + frame.px(ui.layout.row_gap);
+    } else if !show_last {
+        if let Some(missing) = ten_missing {
+            let hit = crate_button_dim(rgb, content, frame, y, &ui.copy.crates_ten);
+            y = hit.y + hit.h + frame.px(ui.layout.spacing_block);
+            let text = gemini_sim::content::shortfall_line(&ui.copy, places, missing);
+            let tw = measure(&text, scale, glyph) as i32;
+            blit(rgb, frame.width, frame.height, (frame.width as i32 - tw) / 2, y, &text, paper, scale, glyph);
+            y += (scale * rows) as i32 + frame.px(ui.layout.row_gap);
+        }
     }
     if rarity.is_some() {
         let hit = crate_button(rgb, content, frame, y, &ui.copy.crates_open, focus == index);
@@ -1436,13 +1469,14 @@ mod tests {
                 failed: true,
                 credits: None,
                 reason: "NEED 100 CREDITS HAVE 0".into(),
+                show_last: false,
             },
             1280,
             720,
         );
         let (generic, _) = paint_menu(
             &content,
-            &MenuShot::Crates { focus: 0, rarity: None, failed: true, credits: None, reason: String::new() },
+            &MenuShot::Crates { focus: 0, rarity: None, failed: true, credits: None, reason: String::new(), show_last: false },
             1280,
             720,
         );
@@ -1507,6 +1541,7 @@ mod tests {
                 failed: true,
                 credits: None,
                 reason: "NEED 100 CREDITS HAVE 0".into(),
+                show_last: false,
             },
             1280,
             720,
@@ -1524,6 +1559,68 @@ mod tests {
         assert_ne!(sample(&rgb, 1280, back.x, back.y), dim, "back corner is still a square");
         assert_eq!(sample(&rgb, 1280, back.x + back.w / 2, back.y + 1), dim, "back outline is the dim key");
         assert_eq!(sample(&rgb, 1280, back.x + back.w / 2, back.y + inset), light, "back bevel is the lit key");
+    }
+
+    #[test]
+    fn show_last_pull_is_one_live_button_in_the_pull_column() {
+        let content = Content::embedded();
+        assert_eq!(content.ui.copy.crates_show_last, "SHOW LAST PULL");
+        let wallet = Some(content.banners.cost.single as f32 / 2.0);
+        let (_, open_hits) = paint_menu(
+            &content,
+            &MenuShot::Crates { focus: 0, rarity: None, failed: false, credits: Some(10_000.0), reason: String::new(), show_last: false },
+            1280,
+            720,
+        );
+        let (_, short_hits) = paint_menu(
+            &content,
+            &MenuShot::Crates { focus: 0, rarity: None, failed: false, credits: wallet, reason: String::new(), show_last: false },
+            1280,
+            720,
+        );
+        let (rgb, hits) = paint_menu(
+            &content,
+            &MenuShot::Crates { focus: 0, rarity: None, failed: false, credits: wallet, reason: String::new(), show_last: true },
+            1280,
+            720,
+        );
+        assert!(short_hits.iter().all(|hit| hit.id != "pull" && hit.id != "ten"));
+        assert!(hits.iter().any(|hit| hit.id == "show_last"), "{hits:?}");
+        assert!(hits.iter().all(|hit| hit.id != "pull" && hit.id != "ten"), "{hits:?}");
+        let pull = open_hits.iter().find(|hit| hit.id == "pull").unwrap();
+        let ten = open_hits.iter().find(|hit| hit.id == "ten").unwrap();
+        let show = hits.iter().find(|hit| hit.id == "show_last").unwrap();
+        let back = hits.iter().find(|hit| hit.id == "back").unwrap();
+        let open_back = open_hits.iter().find(|hit| hit.id == "back").unwrap();
+        let span_bottom = ten.y + ten.h;
+        assert_eq!(show.x, pull.x);
+        assert_eq!(show.w, pull.w);
+        assert_eq!(show.h, pull.h);
+        assert_eq!(show.y, pull.y + (span_bottom - pull.y - show.h) / 2);
+        assert_eq!(back.y, open_back.y, "the button sits in the pull column and leaves back where it was");
+        assert!(back.y < short_hits.iter().find(|hit| hit.id == "back").unwrap().y, "a short wallet draws no need line under show last pull");
+        let scale = 720.0 / content.ui.layout.fit_height;
+        let inset = (content.ui.layout.pause_outline_px * scale).round() as i32 + 1;
+        let light = bytes(&content, &content.ui.colors.bevel_light);
+        let focus = bytes(&content, &content.ui.colors.focus_before_hero);
+        let paper = bytes(&content, &content.ui.colors.text);
+        let gold = bytes(&content, "rarity_legendary");
+        let glow = bytes(&content, "spitter_glow");
+        assert_ne!(sample(&rgb, 1280, show.x, show.y), focus);
+        assert_eq!(sample(&rgb, 1280, show.x + show.w / 2, show.y + 1), focus, "the outline is the plain focus key");
+        assert_eq!(sample(&rgb, 1280, show.x + show.w / 2, show.y + inset), light, "the bevel is the lit key");
+        let mut labeled = false;
+        for row in show.y..show.y + show.h {
+            for col in show.x..show.x + show.w {
+                let px = sample(&rgb, 1280, col, row);
+                assert_ne!(px, gold, "show last pull uses no gold");
+                assert_ne!(px, glow, "show last pull uses no glow");
+                if px == paper {
+                    labeled = true;
+                }
+            }
+        }
+        assert!(labeled, "the label is the light text key");
     }
 
     fn bytes(content: &Content, key: &str) -> [u8; 3] {

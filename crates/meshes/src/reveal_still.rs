@@ -1301,6 +1301,7 @@ mod tests {
                 failed: false,
                 credits: Some(content.banners.cost.single as f32 / 2.0),
                 reason: String::new(),
+                show_last: false,
             },
             width,
             height,
@@ -1329,6 +1330,23 @@ mod tests {
             ("best_flipped.png", flipped),
             ("refund.png", refund),
             ("no_credits.png", broke.0),
+            (
+                "show_last_pull.png",
+                crate::paint_menu(
+                    &content,
+                    &crate::MenuShot::Crates {
+                        focus: 0,
+                        rarity: None,
+                        failed: false,
+                        credits: Some(content.banners.cost.single as f32 / 2.0),
+                        reason: String::new(),
+                        show_last: true,
+                    },
+                    width,
+                    height,
+                )
+                .0,
+            ),
             ("pull_failed.png", failed_paint),
             ("connection_lost.png", lost_paint),
         ];

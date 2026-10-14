@@ -5373,6 +5373,7 @@ pub struct UiCopy {
     pub crates_open: String,
     pub crates_continue: String,
     pub crates_pull_again: String,
+    pub crates_show_last: String,
     pub pull_failed: String,
     pub connection_lost: String,
     pub pull_need: String,
@@ -6081,6 +6082,7 @@ fn validate_ui(
         &ui.copy.crates_open,
         &ui.copy.crates_continue,
         &ui.copy.crates_pull_again,
+        &ui.copy.crates_show_last,
         &ui.copy.on,
         &ui.copy.off,
     ];
@@ -6365,6 +6367,13 @@ mod ten_pull_keys {
         sources.ui = &missing_lost;
         let err = Content::parse(&sources).expect_err("connection_lost is required");
         assert!(err.contains("connection_lost"), "{err}");
+        sources.ui = src.ui;
+
+        let missing_show = src.ui.replace("crates_show_last = \"SHOW LAST PULL\"\n", "");
+        assert_ne!(missing_show, src.ui);
+        sources.ui = &missing_show;
+        let err = Content::parse(&sources).expect_err("crates_show_last is required");
+        assert!(err.contains("crates_show_last"), "{err}");
         sources.ui = src.ui;
 
         let missing_duck = src.presentation.replace("reveal_duck_db = -12.0\n", "");
