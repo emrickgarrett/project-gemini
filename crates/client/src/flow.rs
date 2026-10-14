@@ -589,7 +589,7 @@ pub(crate) fn apply(
             audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
         }
         "crates" => {
-            if !prefs.pull_key.is_empty() && !prefs.pull_seen {
+            if !prefs.pull_key.is_empty() && !has_seen(&prefs, &prefs.pull_key) {
                 let key = prefs.pull_key.clone();
                 let ten = prefs.pull_ten;
                 let kept_gen = crate_box.reveal_gen;
@@ -602,7 +602,7 @@ pub(crate) fn apply(
                         }
                         landed.credits = Some(reply.credits);
                         let mut keys = crate_box.sent_keys.clone();
-                        keys.push(key);
+                        push_sent(&mut keys, key);
                         if is_refund(&reply.fault) {
                             clear_pull_memory(&mut prefs);
                             keep_session(&mut landed, keys, false, kept_gen.saturating_add(1), true);
@@ -644,7 +644,7 @@ pub(crate) fn apply(
                         mark_lost(&mut prefs);
                         crate_box.failed = true;
                         crate_box.reason = transport_lost(&err, &content.ui.copy);
-                        crate_box.sent_keys.push(key);
+                        push_sent(&mut crate_box.sent_keys, key);
                         audio::ui_cue(&mut commands, &assets, &content, &prefs, &content.crate_reveal.grid.pull_failed);
                     }
                 }
@@ -737,7 +737,7 @@ pub(crate) fn apply(
             let (key, ten) = claim_key(&mut prefs, ten);
             let credits = crate_box.credits;
             let mut kept_keys = crate_box.sent_keys.clone();
-            kept_keys.push(key.clone());
+            push_sent(&mut kept_keys, key.clone());
             let kept_busy = crate_box.pull_busy;
             let kept_gen = crate_box.reveal_gen;
             let kept_ready = crate_box.buttons_ready;
@@ -768,9 +768,8 @@ pub(crate) fn apply(
                         clear_pull_memory(&mut prefs);
                         *crate_box = landed;
                         audio::ui_cue(&mut commands, &assets, &content, &prefs, &content.crate_reveal.grid.pull_failed);
-                    } else if !reply.fresh && prefs.pull_seen && prefs.pull_key == key {
-                        prefs.pull_awaiting = false;
-                        settings::store(&content, &prefs);
+                    } else if !reply.fresh && has_seen(&prefs, &key) {
+                        settle_success(&mut prefs, &key);
                         landed.reveal_gen = kept_gen;
                         landed.reason.clear();
                         *crate_box = landed;
@@ -820,45 +819,45 @@ pub(crate) fn apply(
             }
         }
         "open" => {
-                if !crate_box.fresh && (prefs.pull_key.is_empty() || prefs.pull_seen) {
-                    return;
-                }
-                if crate_box.ten && !crate_box.failed {
-                    let cards: Vec<GridCard> = crate_box
-                        .pods
-                        .iter()
-                        .map(|pod| GridCard {
-                            rarity: pod.rarity.clone(),
-                            fakeout: pod.fakeout.clone(),
-                            item: pod.item.clone(),
-                        })
-                        .collect();
-                    match GridRun::start(&content, &cards) {
-                        Ok(run) => {
-                            commands.insert_resource(RevealPlayback(RevealShow::Grid(run)));
-                            commands.insert_resource(reveal_ui::RevealFrom::Crates);
-                            next.set(AppState::Reveal);
-                            audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
-                        }
-                        Err(message) => {
-                            eprintln!("ten pull reveal failed: {message}");
-                            dirty.0 = true;
-                        }
+            if !crate_box.fresh && (prefs.pull_key.is_empty() || has_seen(&prefs, &prefs.pull_key)) {
+                return;
+            }
+            if crate_box.ten && !crate_box.failed {
+                let cards: Vec<GridCard> = crate_box
+                    .pods
+                    .iter()
+                    .map(|pod| GridCard {
+                        rarity: pod.rarity.clone(),
+                        fakeout: pod.fakeout.clone(),
+                        item: pod.item.clone(),
+                    })
+                    .collect();
+                match GridRun::start(&content, &cards) {
+                    Ok(run) => {
+                        commands.insert_resource(RevealPlayback(RevealShow::Grid(run)));
+                        commands.insert_resource(reveal_ui::RevealFrom::Crates);
+                        next.set(AppState::Reveal);
+                        audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
                     }
-                } else if let Some(rarity) = crate_box.rarity.clone() {
-                    match RevealRun::start(&content, &rarity, crate_box.fakeout.as_deref()) {
-                        Ok(run) => {
-                            commands.insert_resource(RevealPlayback(RevealShow::Single(run)));
-                            commands.insert_resource(reveal_ui::RevealFrom::Crates);
-                            next.set(AppState::Reveal);
-                            audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
-                        }
-                        Err(message) => {
-                            eprintln!("crate reveal failed: {message}");
-                            dirty.0 = true;
-                        }
+                    Err(message) => {
+                        eprintln!("ten pull reveal failed: {message}");
+                        dirty.0 = true;
                     }
                 }
+            } else if let Some(rarity) = crate_box.rarity.clone() {
+                match RevealRun::start(&content, &rarity, crate_box.fakeout.as_deref()) {
+                    Ok(run) => {
+                        commands.insert_resource(RevealPlayback(RevealShow::Single(run)));
+                        commands.insert_resource(reveal_ui::RevealFrom::Crates);
+                        next.set(AppState::Reveal);
+                        audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
+                    }
+                    Err(message) => {
+                        eprintln!("crate reveal failed: {message}");
+                        dirty.0 = true;
+                    }
+                }
+            }
         }
         "click" => {}
         other if other.starts_with("hero:") => {
@@ -983,7 +982,7 @@ pub(crate) fn reveal_act(
     }
     crate_box.pull_busy = true;
     let (key, ten) = claim_key(&mut prefs, ten);
-    crate_box.sent_keys.push(key.clone());
+    push_sent(&mut crate_box.sent_keys, key.clone());
     audio::ui_cue(&mut commands, &assets, &content, &prefs, confirm);
     let kept_keys = crate_box.sent_keys.clone();
     let kept_gen = crate_box.reveal_gen;
@@ -1007,10 +1006,9 @@ pub(crate) fn reveal_act(
                 clear_pull_memory(&mut prefs);
                 return;
             }
-            let seen_replay = !reply.fresh && prefs.pull_seen && prefs.pull_key == key && !landed.failed;
+            let seen_replay = !reply.fresh && has_seen(&prefs, &key) && !landed.failed;
             if seen_replay {
-                prefs.pull_awaiting = false;
-                settings::store(&content, &prefs);
+                settle_success(&mut prefs, &key);
                 crate_box.buttons_ready = true;
                 crate_box.pull_busy = true;
                 crate_box.sent_keys = kept_keys;
@@ -1023,8 +1021,15 @@ pub(crate) fn reveal_act(
                 && !is_short(&reply.fault)
                 && ((ten && !landed.pods.is_empty()) || (!ten && landed.rarity.is_some()));
             if playable {
-                match show_result(&content, &landed, &mut commands, &mut next) {
-                    Ok(()) => {
+                match reveal_show(&content, &landed) {
+                    Ok(show) => {
+                        if let Some(playback) = playback.as_mut() {
+                            playback.0 = show;
+                        } else {
+                            commands.insert_resource(RevealPlayback(show));
+                        }
+                        commands.insert_resource(reveal_ui::RevealFrom::Crates);
+                        next.set(AppState::Reveal);
                         if let Some(pulled_rank) = pulled_rank {
                             rank.rank = pulled_rank;
                         }
@@ -1034,7 +1039,6 @@ pub(crate) fn reveal_act(
                         *crate_box = landed;
                         prefs.pull_key = key;
                         prefs.pull_ten = ten;
-                        prefs.pull_seen = false;
                         prefs.pull_awaiting = false;
                         settings::store(&content, &prefs);
                     }
@@ -1345,32 +1349,71 @@ fn claim_key(prefs: &mut Prefs, ten: bool) -> (String, bool) {
     let key = pull_key();
     prefs.pull_key = key.clone();
     prefs.pull_ten = ten;
-    prefs.pull_seen = false;
     prefs.pull_awaiting = false;
+    // On disk before the request leaves, so a crash during the send still has the key.
     settings::store(&Content::embedded(), prefs);
     (key, ten)
 }
 
 fn mark_lost(prefs: &mut Prefs) {
     prefs.pull_awaiting = true;
-    prefs.pull_seen = false;
     settings::store(&Content::embedded(), prefs);
 }
 
 fn clear_pull_memory(prefs: &mut Prefs) {
     prefs.pull_key.clear();
     prefs.pull_ten = false;
-    prefs.pull_seen = false;
     prefs.pull_awaiting = false;
     settings::store(&Content::embedded(), prefs);
 }
 
-/// The best card has flipped on this client. Nothing is sent to the server.
-pub(crate) fn mark_pull_seen(prefs: &mut Prefs) {
-    if prefs.pull_key.is_empty() || prefs.pull_seen {
+/// A successful reply for `key` ends the retry. A seen key leaves the unseen slot.
+fn settle_success(prefs: &mut Prefs, key: &str) {
+    prefs.pull_awaiting = false;
+    if prefs.pull_key == key {
+        prefs.pull_key.clear();
+        prefs.pull_ten = false;
+    }
+    settings::store(&Content::embedded(), prefs);
+}
+
+fn has_seen(prefs: &Prefs, key: &str) -> bool {
+    !key.is_empty() && prefs.pull_seen_keys.iter().any(|row| row == key)
+}
+
+/// Remember a key whose best card has flipped. The list stays inside `saved.max_keys`.
+pub(crate) fn note_seen(prefs: &mut Prefs, key: &str) {
+    if key.is_empty() || has_seen(prefs, key) {
         return;
     }
-    prefs.pull_seen = true;
+    let max = Content::embedded().banners.saved.max_keys as usize;
+    prefs.pull_seen_keys.push(key.to_string());
+    if prefs.pull_seen_keys.len() > max {
+        let drop_n = prefs.pull_seen_keys.len() - max;
+        prefs.pull_seen_keys.drain(0..drop_n);
+    }
+}
+
+/// Keys this session sent. The oldest drop once the list passes `saved.max_keys`.
+pub(crate) fn push_sent(keys: &mut Vec<String>, key: String) {
+    keys.push(key);
+    let max = Content::embedded().banners.saved.max_keys as usize;
+    if keys.len() > max {
+        let drop_n = keys.len() - max;
+        keys.drain(0..drop_n);
+    }
+}
+
+/// The best card has flipped on this client. The unseen key leaves the local save immediately.
+/// Nothing is sent to the server.
+pub(crate) fn mark_pull_seen(prefs: &mut Prefs) {
+    if prefs.pull_key.is_empty() {
+        return;
+    }
+    let key = prefs.pull_key.clone();
+    note_seen(prefs, &key);
+    prefs.pull_key.clear();
+    prefs.pull_ten = false;
     prefs.pull_awaiting = false;
     settings::store(&Content::embedded(), prefs);
 }
@@ -1380,7 +1423,7 @@ fn transport_lost(err: &crate::pull_host::PullHostError, copy: &gemini_sim::cont
         crate::pull_host::PullHostError::Corrupt(_)
         | crate::pull_host::PullHostError::Unreadable(_)
         | crate::pull_host::PullHostError::Unavailable(_)
-        | crate::pull_host::PullHostError::Timeout(_) => copy.connection_lost.clone(),
+        | crate::pull_host::PullHostError::Lost(_) => copy.connection_lost.clone(),
     }
 }
 
@@ -1393,6 +1436,13 @@ fn is_short(fault: &Option<CratePullFault>) -> bool {
 }
 
 fn show_result(content: &Content, landed: &ServerCrate, commands: &mut Commands, next: &mut NextState<AppState>) -> Result<(), String> {
+    commands.insert_resource(RevealPlayback(reveal_show(content, landed)?));
+    commands.insert_resource(reveal_ui::RevealFrom::Crates);
+    next.set(AppState::Reveal);
+    Ok(())
+}
+
+fn reveal_show(content: &Content, landed: &ServerCrate) -> Result<RevealShow, String> {
     if landed.ten {
         let cards: Vec<GridCard> = landed
             .pods
@@ -1403,16 +1453,11 @@ fn show_result(content: &Content, landed: &ServerCrate, commands: &mut Commands,
                 item: pod.item.clone(),
             })
             .collect();
-        let run = GridRun::start(content, &cards)?;
-        commands.insert_resource(RevealPlayback(RevealShow::Grid(run)));
+        Ok(RevealShow::Grid(GridRun::start(content, &cards)?))
     } else {
         let rarity = landed.rarity.clone().ok_or_else(|| "single pull has no rarity".to_string())?;
-        let run = RevealRun::start(content, &rarity, landed.fakeout.as_deref())?;
-        commands.insert_resource(RevealPlayback(RevealShow::Single(run)));
+        Ok(RevealShow::Single(RevealRun::start(content, &rarity, landed.fakeout.as_deref())?))
     }
-    commands.insert_resource(reveal_ui::RevealFrom::Crates);
-    next.set(AppState::Reveal);
-    Ok(())
 }
 
 /// A new 128-bit key for one pull. A retry of a lost connection does not call this.

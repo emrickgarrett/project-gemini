@@ -888,8 +888,15 @@ fn paint_result_chrome(
         if failure_y < 0 || failure_y + line_h + clear > height as i32 {
             return Err("crate reveal failure line does not fit under the buttons".into());
         }
+        let scale = ui.layout.button_scale;
+        let text_w = failure.chars().count() as u32 * layout.title_glyph_px.max(1) * scale;
+        let text_x = title_origin(0, width, text_w, 0) as i32;
+        let slots = grid_slots(content, width, height)?;
+        if failure_line_overlaps_grid(&slots, text_x, failure_y, text_w as i32, line_h) {
+            return Err("crate reveal failure line overlaps the grid".into());
+        }
         let ink = palette_bytes(content, &content.crate_reveal.grid.failure_ink);
-        blit_centered(rgb, width, height, 0, width as i32, failure_y, failure, ink, ui.layout.button_scale, layout);
+        blit_centered(rgb, width, height, 0, width as i32, failure_y, failure, ink, scale, layout);
     }
     Ok(hits)
 }
@@ -911,6 +918,19 @@ fn paint_text_button(rgb: &mut [u8], width: u32, height: u32, content: &Content,
     let ty = (y + (h - text_h as i32) / 2).max(0) as u32;
     blit_at(rgb, width, height, tx, ty, label, text, scale);
     crate::menu_still::Hit { id: String::new(), x, y, w, h }
+}
+
+fn failure_line_overlaps_grid(slots: &[(u32, u32, u32, u32)], x: i32, y: i32, w: i32, h: i32) -> bool {
+    if w <= 0 || h <= 0 {
+        return false;
+    }
+    let right = x + w;
+    let bottom = y + h;
+    slots.iter().any(|&(sx, sy, sw, sh)| {
+        let left = sx as i32;
+        let top = sy as i32;
+        x < left + sw as i32 && right > left && y < top + sh as i32 && bottom > top
+    })
 }
 
 fn blit_centered(rgb: &mut [u8], width: u32, height: u32, origin_x: i32, span: i32, y: i32, text: &str, ink: [u8; 3], scale: u32, layout: &gemini_sim::content::RevealLayout) {
@@ -1110,6 +1130,25 @@ mod tests {
         let drop = paint_reveal(&content, &planned, landed, 320, 180);
         let crack = paint_reveal(&content, &planned, crack_mid, 320, 180);
         assert_ne!(drop, crack, "cracks must change the landed pod");
+    }
+
+    #[test]
+    fn a_failure_line_on_a_card_overlaps() {
+        let slot = [(10u32, 20, 40, 30)];
+        assert!(failure_line_overlaps_grid(&slot, 20, 30, 10, 10));
+        assert!(!failure_line_overlaps_grid(&slot, 0, 0, 8, 8));
+        let content = Content::embedded();
+        let width = content.ui.layout.fit_width.round() as u32;
+        let height = content.ui.layout.fit_height.round() as u32;
+        let pods = (content.crate_reveal.grid.columns * content.crate_reveal.grid.rows) as usize;
+        let faces = vec![None; pods];
+        let lost = paint_grid(
+            &content,
+            &GridStill { items: &faces, ready: true, again: true, focus: 0, shortfall: "", failure: &content.ui.copy.connection_lost },
+            width,
+            height,
+        );
+        assert!(lost.is_ok(), "the connection line stays off the cards: {lost:?}");
     }
 
     #[test]

@@ -20,13 +20,14 @@ pub struct Prefs {
     pub character: Option<String>,
     pub difficulty: Option<String>,
     /// Idempotency key of the pull this client has not finished watching. Empty means none.
+    /// The best card flipping clears it. That is the seen state, and it lives only in this file.
     pub pull_key: String,
     /// True when `pull_key` was a ten-pull.
     pub pull_ten: bool,
-    /// True once that pull's best card has flipped on this client. The server never stores this.
-    pub pull_seen: bool,
     /// True when the last send of `pull_key` never got a reply. The next press reuses the key.
     pub pull_awaiting: bool,
+    /// Keys whose best card has already flipped on this client. Capped by `saved.max_keys`.
+    pub pull_seen_keys: Vec<String>,
 }
 
 pub enum Loaded {
@@ -52,14 +53,14 @@ impl Prefs {
             difficulty: None,
             pull_key: String::new(),
             pull_ten: false,
-            pull_seen: false,
             pull_awaiting: false,
+            pull_seen_keys: Vec::new(),
         }
     }
 
     pub fn encode(&self) -> String {
         format!(
-            "sensitivity = {}\nfov = {}\ninvert_y = {}\nview_bob = {}\nmaster = {}\nmusic = {}\neffects = {}\ncharacter = {}\ndifficulty = {}\npull_key = {}\npull_ten = {}\npull_seen = {}\npull_awaiting = {}\n",
+            "sensitivity = {}\nfov = {}\ninvert_y = {}\nview_bob = {}\nmaster = {}\nmusic = {}\neffects = {}\ncharacter = {}\ndifficulty = {}\npull_key = {}\npull_ten = {}\npull_awaiting = {}\npull_seen_keys = {}\n",
             self.sensitivity,
             self.fov,
             self.invert_y,
@@ -71,10 +72,15 @@ impl Prefs {
             quote_opt(self.difficulty.as_deref()),
             quote_opt(Some(self.pull_key.as_str())),
             self.pull_ten,
-            self.pull_seen,
             self.pull_awaiting,
+            quote_list(&self.pull_seen_keys),
         )
     }
+}
+
+fn quote_list(values: &[String]) -> String {
+    let parts: Vec<String> = values.iter().map(|value| format!("\"{}\"", value.replace('"', ""))).collect();
+    format!("[{}]", parts.join(", "))
 }
 
 fn quote_opt(value: Option<&str>) -> String {
@@ -134,9 +140,26 @@ pub fn parse_prefs(text: &str, content: &Content) -> Result<Prefs, String> {
     prefs.difficulty = remembered_tier(table, content)?;
     prefs.pull_key = required_text(table, "pull_key")?;
     prefs.pull_ten = flag(table, "pull_ten")?;
-    prefs.pull_seen = flag(table, "pull_seen")?;
     prefs.pull_awaiting = flag(table, "pull_awaiting")?;
+    prefs.pull_seen_keys = required_list(table, "pull_seen_keys")?;
     Ok(prefs)
+}
+
+fn required_list(table: &toml::map::Map<String, toml::Value>, key: &str) -> Result<Vec<String>, String> {
+    let Some(value) = table.get(key) else {
+        return Err(format!("settings {key} is not a list"));
+    };
+    let Some(items) = value.as_array() else {
+        return Err(format!("settings {key} is not a list"));
+    };
+    let mut out = Vec::new();
+    for item in items {
+        let Some(text) = item.as_str() else {
+            return Err(format!("settings {key} is not a list of strings"));
+        };
+        out.push(text.to_string());
+    }
+    Ok(out)
 }
 
 fn required_text(table: &toml::map::Map<String, toml::Value>, key: &str) -> Result<String, String> {
@@ -265,16 +288,18 @@ mod tests {
         assert!(parse_prefs("fov = 90", &content).is_err(), "missing keys");
         let missing_pull = text.replace("pull_key = \"\"\n", "");
         assert!(parse_prefs(&missing_pull, &content).is_err(), "pull_key is required");
+        let missing_seen = text.replace("pull_seen_keys = []\n", "");
+        assert!(parse_prefs(&missing_seen, &content).is_err(), "pull_seen_keys is required");
         let mut unseen = prefs.clone();
         unseen.pull_key = "0123456789abcdef0123456789abcdef".into();
         unseen.pull_ten = true;
-        unseen.pull_seen = false;
         unseen.pull_awaiting = true;
+        unseen.pull_seen_keys = vec!["older".into()];
         let loaded = parse_prefs(&unseen.encode(), &content).expect("unseen pull round trip");
         assert_eq!(loaded.pull_key, unseen.pull_key);
         assert!(loaded.pull_ten);
-        assert!(!loaded.pull_seen);
         assert!(loaded.pull_awaiting);
+        assert_eq!(loaded.pull_seen_keys, vec!["older".to_string()]);
         assert!(parse_prefs("not toml", &content).is_err());
 
         let unknown_hero = text.replace(&format!("character = \"{}\"", content.hero.id), "character = \"nope\"");

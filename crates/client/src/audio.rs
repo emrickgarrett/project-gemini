@@ -765,8 +765,20 @@ pub fn admit_ui(audio: &gemini_sim::content::AudioTable, playing: &[Heard], aske
 pub fn menu_levels(prefs: Res<Prefs>, mut music: Option<ResMut<Music>>) {
     let Some(music) = music.as_mut() else { return };
     music.user_gain = bus_gain(&prefs, true);
-    music.duck_gain = 1.0;
+    // An unseen pull is about to play its sting. Hold the crate-reveal duck until that key is gone.
+    music.duck_gain = if prefs.pull_key.is_empty() { 1.0 } else { crate_reveal_duck() };
     music.filter.0.set_hz(f32::INFINITY);
+}
+
+/// Music bus gain while a crate reveal is on screen. `presentation.toml` `music_duck_db`.
+pub(crate) fn crate_reveal_duck() -> f32 {
+    db_to_gain(Content::embedded().presentation.hud.away.music_duck_db)
+}
+
+/// The reveal keeps the lobby theme ducked until the screen closes.
+pub fn reveal_duck(mut music: Option<ResMut<Music>>) {
+    let Some(music) = music.as_mut() else { return };
+    music.duck_gain = crate_reveal_duck();
 }
 
 /// Solo pause stops game sounds. Co-op ducks them. UI cues and act-now warnings stay full.
@@ -794,11 +806,28 @@ pub fn hold_loops(hold: Res<PauseMenu>, game: Res<Game>, mut sinks: Query<(&OneS
     }
 }
 
-pub fn menu_theme(mut commands: Commands, assets: Res<AssetServer>) {
+pub fn menu_theme(mut commands: Commands, assets: Res<AssetServer>, prefs: Res<Prefs>) {
     let content = Content::embedded();
     let mut music = Music::default();
+    if !prefs.pull_key.is_empty() {
+        music.duck_gain = crate_reveal_duck();
+    }
     start_track(&mut commands, &assets, &content, &mut music, "theme_main");
     commands.insert_resource(music);
+}
+
+/// Leaving the menu for a reveal keeps the music bus. Every other exit stops it.
+pub fn leave_menu(
+    state: Res<State<crate::AppState>>,
+    commands: Commands,
+    music: Option<ResMut<Music>>,
+    crowd: Option<Res<Crowd>>,
+    shots: Query<Entity, Or<(With<OneShot>, With<CrowdVoice>, With<MusicStem>, With<BedStem>, With<PropLoop>)>>,
+) {
+    if *state.get() == crate::AppState::Reveal {
+        return;
+    }
+    stop_all(commands, music, crowd, shots);
 }
 
 pub fn stop_all(mut commands: Commands, music: Option<ResMut<Music>>, crowd: Option<Res<Crowd>>, shots: Query<Entity, Or<(With<OneShot>, With<CrowdVoice>, With<MusicStem>, With<BedStem>, With<PropLoop>)>>) {
