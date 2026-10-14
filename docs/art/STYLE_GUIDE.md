@@ -51,9 +51,9 @@ Emissive and bloom are used only on: projectiles, weak points, pickups, rarity g
 - Rarity colors as above. Damage numbers stay small and fade fast.
 
 ## 8. Crate reveal
-Storyboard and timings as agreed in chat: drop 0-2s, crack 2-3.5s, burst 3.5s, rise 4-5.5s, card 5.5s, plus a 1s legendary freeze.
+`content/crate_reveal.toml` is the source of truth for the storyboard. Shared beats: drop 0-2s, crack 2-3.5s, burst 3.5s, plus a 1s legendary freeze. Rise ends at the card. Card time is per tier; these figures are a reference only: common 4.2s, rare 5.0s, epic 5.3s, legendary 6.5s.
 - The result is decided before the drop. A fake-out flickers at most one tier up and always settles on the real tier.
-- Skip works at any point. Ten-pulls end on a summary grid.
+- Skip works at any point. Ten-pulls end on a summary grid. In a ten-pull only the best card gets its full tier time; the others flip fast.
 
 ## 9. Telegraph honesty
 - A warning glow (pods, veins, spitter sac) always means the attack or spawn really happens. Spawn telegraphs reserve room under the enemy cap (`reserve_on_telegraph = true` in `bosses.toml`).
