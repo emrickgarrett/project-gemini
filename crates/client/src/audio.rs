@@ -589,8 +589,13 @@ pub fn play(
             !resume
                 .iter()
                 .any(|row| row.id == event.id && row.pos == event.pos)
+                && !arena_audio
+                    .stolen
+                    .iter()
+                    .any(|row| row.id == event.id && row.pos == event.pos)
         })
         .collect();
+    let left = within_new_instance_cap(&game, &playing_after, left);
     if !left.is_empty() {
         let mut ignored = Vec::new();
         let more = select_voices(
@@ -1758,6 +1763,35 @@ fn remember_stolen_at(
         elapsed: loop_position(id, elapsed),
         order,
     });
+}
+
+/// Cold starts must leave room for loops already sounding. `select_voices` does not
+/// count a playing loop toward `max_instances`, because those loops also arrive as events.
+fn within_new_instance_cap(
+    game: &Game,
+    playing: &[LiveVoice],
+    events: Vec<SoundEvent>,
+) -> Vec<SoundEvent> {
+    let mut live: BTreeMap<String, u32> = BTreeMap::new();
+    for voice in playing {
+        *live.entry(voice.id.clone()).or_default() += 1;
+    }
+    let mut spawned: BTreeMap<String, u32> = BTreeMap::new();
+    events
+        .into_iter()
+        .filter(|event| {
+            let Some(def) = game.content.sfx(&event.id) else {
+                return false;
+            };
+            let already = live.get(&event.id).copied().unwrap_or(0);
+            let extra = spawned.entry(event.id.clone()).or_default();
+            if def.max_instances > 0 && already + *extra >= def.max_instances {
+                return false;
+            }
+            *extra += 1;
+            true
+        })
+        .collect()
 }
 
 fn cold_stealable_loops(
