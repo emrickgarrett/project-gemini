@@ -412,10 +412,7 @@ mod tests {
         assert_eq!(summary.show, gemini_sim::bank::BankShow::Quit);
         assert_eq!(summary.bonus, 0.0);
         assert!(summary.balance.is_none(), "a client without a bank host does not invent a wallet");
-        let content = gemini_sim::Content::embedded();
-        let tier = content.tier(&content.ui.settings.default_difficulty).currency;
-        let full = gemini_sim::content::currency_reward(&content.currency, content.waves.wave.iter().map(|wave| wave.n).max().unwrap_or(1), tier, true, 0);
-        assert!(summary.earned < full, "quitting banks the waves cleared so far");
+        assert_eq!(summary.earned, 0.0, "quitting before a wave clears banks nothing");
     }
 
     #[test]

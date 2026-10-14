@@ -1025,19 +1025,23 @@ mod tests {
         let start = account.credits();
         let first = account.bank(book.record(id).unwrap(), player).unwrap();
         assert!(first.fresh);
-        assert_eq!(first.earned, sim.currency_gain[&player]);
-        assert_eq!(first.bonus, sim.currency_bonus[&player]);
-        assert_eq!(account.credits(), start + first.earned);
+        assert_eq!(first.earned, 0.0, "an uncleared wave deposits nothing");
+        assert_eq!(first.bonus, 0.0);
+        assert_eq!(account.credits(), start);
         assert_eq!(account.pity.len(), pity_rows);
         assert_eq!(account.audit.len(), audit_rows);
         assert_eq!(account.rng.get_seed(), seed);
         assert_eq!(account.rng.get_word_pos(), pos);
 
-        sim.phase = gemini_sim::Phase::Breather { left: 0.01 };
+        sim.enemies.clear();
+        sim.pending_vents.clear();
+        sim.director.pool = 0.0;
+        sim.director.queue = 0.0;
+        sim.phase = gemini_sim::Phase::Combat;
         sim.step(&content, gemini_sim::PlayerInput::default());
         let mut later = book.clone();
         later.note(id, &sim).unwrap();
-        assert!(sim.currency_gain[&player] > first.earned, "wave 2 is on the record and must not be deposited");
+        assert!(sim.currency_gain[&player] > first.earned, "a cleared wave is on the record and must not be deposited again");
         let second = account.bank(later.record(id).unwrap(), player).unwrap();
         assert!(!second.fresh);
         assert_eq!(second.earned, first.earned);
@@ -1049,7 +1053,7 @@ mod tests {
     }
 
     #[test]
-    fn a_quit_banks_only_the_open_wave_and_a_win_includes_the_content_bonus() {
+    fn a_quit_on_an_open_wave_banks_zero_and_a_win_adds_the_content_bonus() {
         let content = gemini_sim::Content::embedded();
         let tier = content.tier("normal").currency;
         let sim = gemini_sim::Sim::new(&content, "normal", 1);
@@ -1057,10 +1061,9 @@ mod tests {
         let (book, id) = noted(&sim);
         let mut account = Account::from_seed(5);
         let partial = account.bank(book.record(id).unwrap(), player).unwrap();
-        let full = gemini_sim::content::currency_reward(&content.currency, 10, tier, true, 0);
-        assert!(partial.earned < full, "a quit keeps the open wave, not the win");
+        assert_eq!(partial.earned, 0.0);
         assert_eq!(partial.bonus, 0.0);
-        assert_eq!(partial.earned, gemini_sim::content::wave_payout(&content.currency, 1, tier));
+        assert_eq!(account.credits(), partial.earned);
 
         let mut won = sim.clone();
         won.grant_victory_bonus(&content);
@@ -1069,7 +1072,7 @@ mod tests {
         let receipt = wallet.bank(won_book.record(won_id).unwrap(), player).unwrap();
         let bonus = gemini_sim::content::win_payout(&content.currency, tier);
         assert_eq!(receipt.bonus, bonus);
-        assert_eq!(receipt.earned, partial.earned + bonus);
+        assert_eq!(receipt.earned, bonus);
         assert_eq!(wallet.credits(), receipt.earned);
     }
 

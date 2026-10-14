@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 
 use gemini_meshes::{paint_coop_pause, paint_menu, raster_hero_portrait, MenuShot, PaintPrefs};
 use gemini_sim::bank::BankShow;
-use gemini_sim::content::{currency_reward, milestone_payout, wave_payout, win_payout, Content};
+use gemini_sim::content::{currency_reward, milestone_payout, win_payout, Content};
 
 fn main() {
     let mut out = "art/menu".to_string();
@@ -113,7 +113,7 @@ fn bank_shots(content: &Content) -> Vec<(&'static str, MenuShot)> {
     let end_wave = first_boss.checked_sub(1).expect("a wave before the first boss");
     let end_earned = currency_reward(&content.currency, end_wave, tier, false, 0);
     let open_wave = content.waves.wave.iter().map(|wave| wave.n).min().expect("waves");
-    let quit_earned = wave_payout(&content.currency, open_wave, tier);
+    let quit_earned = 0.0;
     let last = content.waves.wave.iter().map(|wave| wave.n).max().expect("waves");
     let bosses = content.waves.wave.iter().filter(|wave| wave.boss.is_some()).count() as u32;
     let win_earned = currency_reward(&content.currency, last, tier, true, bosses);
@@ -150,7 +150,7 @@ fn bank_shots(content: &Content) -> Vec<(&'static str, MenuShot)> {
                 seconds,
                 earned: quit_earned,
                 bonus: 0.0,
-                balance: Some(have + quit_earned),
+                balance: Some(have),
             },
         ),
         (

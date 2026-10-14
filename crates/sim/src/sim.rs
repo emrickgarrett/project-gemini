@@ -697,7 +697,7 @@ impl Sim {
             self.player_count = connected;
         }
         let wave_n = self.director.wave;
-        self.credit_round(content, wave_n);
+        self.note_presence(content, wave_n);
         let budget = wave_budget(
             &content.waves.budget,
             wave_n,
@@ -920,7 +920,29 @@ impl Sim {
         self.players.remove(index);
     }
 
-    fn credit_round(&mut self, content: &Content, wave: u32) {
+    /// Remember who was connected when the wave opened. The payout waits for the clear.
+    fn note_presence(&mut self, content: &Content, wave: u32) {
+        if content.coop.currency_credit != "per_round_present" {
+            return;
+        }
+        let tokens: Vec<u64> = self
+            .players
+            .iter()
+            .filter(|player| player.connected)
+            .map(|player| player.token)
+            .collect();
+        for token in tokens {
+            let entry = self.credits.entry(token).or_default();
+            if !entry.contains(&wave) {
+                entry.push(wave);
+            }
+            self.currency_gain.entry(token).or_insert(0.0);
+            self.currency_bonus.entry(token).or_insert(0.0);
+        }
+    }
+
+    /// Pay the wave that just cleared. The cue is here so it does not land on `wave_start`.
+    fn pay_cleared_wave(&mut self, content: &Content, wave: u32) {
         if content.coop.currency_credit != "per_round_present" {
             return;
         }
@@ -933,12 +955,18 @@ impl Sim {
             .filter(|player| player.connected)
             .map(|player| player.token)
             .collect();
+        let mut paid = false;
         for token in tokens {
-            let entry = self.credits.entry(token).or_default();
-            if !entry.contains(&wave) {
-                entry.push(wave);
+            let present = self.credits.get(&token).is_some_and(|waves| waves.contains(&wave));
+            if present {
                 self.add_currency(token, earned + bonus, bonus);
+                if earned + bonus > 0.0 {
+                    paid = true;
+                }
             }
+        }
+        if paid {
+            self.sound_at("currency_gain", Vec3::ZERO);
         }
     }
 
@@ -2677,6 +2705,8 @@ impl Sim {
         if self.enemies.iter().any(|e| e.alive) || !self.pending_vents.is_empty() || self.director.pool > 0.0 {
             return;
         }
+        let cleared = self.director.wave;
+        self.pay_cleared_wave(content, cleared);
         let last = content.waves.wave.iter().map(|w| w.n).max().unwrap_or(1);
         if self.director.wave >= last && !self.endless_mode {
             self.phase = Phase::Victory;

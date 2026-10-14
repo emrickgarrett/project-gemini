@@ -1108,7 +1108,7 @@ mod tests {
     fn the_count_up_is_not_legendary_gold_and_a_quit_has_no_bonus_line() {
         let content = Content::embedded();
         let tier = content.tier(&content.ui.settings.default_difficulty).currency;
-        let quit_earned = gemini_sim::content::wave_payout(&content.currency, 1, tier);
+        let quit_earned = 0.0;
         let quit = bank_lines(&content, BankShow::Quit, quit_earned, 0.0, None);
         assert!(quit.bonus.is_none());
         assert_eq!(quit.wallet, content.ui.copy.pull_needs_server);

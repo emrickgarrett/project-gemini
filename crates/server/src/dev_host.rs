@@ -406,6 +406,7 @@ mod tests {
         let Packet::BankReply(first) = first else { panic!("bank reply") };
         assert!(first.fault.is_none(), "{first:?}");
         assert!(first.fresh);
+        assert_eq!(first.earned, 0.0, "an open wave is not a deposit");
         assert_eq!(first.earned, sim.currency_gain[&player]);
         let saved = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
         assert!((saved.credits() - first.balance).abs() < 1e-3);

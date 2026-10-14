@@ -382,18 +382,13 @@ pub(crate) fn tick_bank(
     let count = content.ui.bank.count_secs;
     let prev = clock.elapsed;
     clock.elapsed += time.delta_secs();
-    let cues = match cues_between(summary.show, prev, clock.elapsed, tick, count) {
+    let cues = match cues_between(summary.show, prev, clock.elapsed, tick, count, summary.earned) {
         Ok(cues) => cues,
         Err(err) => panic!("bank count interval: {err}"),
     };
     for cue in cues {
         let id = match cue {
-            BankCue::Tick => {
-                if !(summary.earned > 0.0) {
-                    continue;
-                }
-                content.ui.sounds.count_tick.as_str()
-            }
+            BankCue::Tick => content.ui.sounds.count_tick.as_str(),
             BankCue::Chime => content.ui.sounds.bank_chime.as_str(),
         };
         audio::ui_cue(&mut commands, &assets, &content, &prefs, id);
