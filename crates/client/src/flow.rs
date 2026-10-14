@@ -1135,12 +1135,12 @@ pub(crate) fn reveal_act(
                         crate_box.pull_busy = true;
                         crate_box.sent_keys = kept_keys;
                         crate_box.reveal_gen = kept_gen;
-                        crate_box.credits = kept_credits;
+                        crate_box.credits = Some(reply.credits);
                         audio::ui_cue(&mut commands, &assets, &content, &prefs, &failed_cue);
                         return;
                     }
                 };
-                deliver_new_pull(&content, new_key, &mut commands, &mut next, &mut crate_box, &mut rank, &mut playback, &mut prefs, &assets, kept_gen, kept_credits, kept_keys);
+                deliver_new_pull(&content, new_key, &mut commands, &mut next, &mut crate_box, &mut rank, &mut playback, &mut prefs, &assets, kept_gen, Some(reply.credits), kept_keys);
                 return;
             }
             apply_pull_reply(&content, &key, ten, Ok(reply), &mut commands, &mut next, &mut crate_box, &mut rank, &mut playback, &mut prefs, &assets, kept_gen, kept_credits, kept_keys);
