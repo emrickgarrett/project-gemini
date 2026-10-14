@@ -84,7 +84,10 @@ fn exchange_with(path: &Path, content: &Content, request: &[u8]) -> Result<Vec<u
     let packet = Packet::decode(request).map_err(|err| ExchangeError::Failed(format!("host request is not a proto packet: {err}")))?;
     let mut account = load_or_create(path, content)?;
     let reply = answer(&mut account, content, &packet)?;
-    write_account(path, &account, content)?;
+    let seen_only = matches!(&reply, Packet::CratePullReply(row) if matches!(row.fault, Some(CratePullFault::Seen)));
+    if !seen_only {
+        write_account(path, &account, content)?;
+    }
     encode_saved_reply(&reply)
 }
 
@@ -314,6 +317,8 @@ fn write_account(path: &Path, account: &Account, content: &Content) -> Result<()
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::MetadataExt;
+
     use super::*;
     use gemini_proto::{BankFault, BankRequest, CratePullRequest, Packet};
 
@@ -599,6 +604,11 @@ mod tests {
         assert!(!reply.fresh);
         assert!((reply.credits - first.credits).abs() < 1e-3, "a seen write does not charge");
         assert_eq!(fs::read(&path).unwrap(), before, "a seen write does not touch the save");
+        let inode = fs::metadata(&path).unwrap().ino();
+        let again = Packet::decode(&exchange_at(&path, &seen).unwrap()).unwrap();
+        let Packet::CratePullReply(again) = again else { panic!("reply") };
+        assert!(matches!(again.fault, Some(CratePullFault::Seen)), "{again:?}");
+        assert_eq!(fs::metadata(&path).unwrap().ino(), inode, "a seen request does not rewrite the save");
         let _ = fs::remove_dir_all(&dir);
     }
 

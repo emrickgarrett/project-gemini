@@ -184,6 +184,7 @@ impl Content {
         validate_reveal_cues(&crate_reveal, &audio)?;
         validate_reveal_layout(&crate_reveal)?;
         let presentation: Presentation = parse("presentation.toml", src.presentation)?;
+        validate_reveal_duck(&presentation)?;
         validate_away_hud(&presentation.hud.away)?;
         let ui = load_ui(src.ui)?;
         let controller: Controller = parse("controller.toml", src.controller)?;
@@ -554,6 +555,16 @@ fn validate_host_away_cues(audio: &AudioTable, coop: &CoopRules) -> Result<(), S
         return Err(format!(
             "audio_mix.toml host_back sync_at {sync_at} must match resume_countdown_seconds {countdown} within one sim frame"
         ));
+    }
+    Ok(())
+}
+
+fn validate_reveal_duck(presentation: &Presentation) -> Result<(), String> {
+    if !(presentation.reveal_duck_db <= 0.0 && presentation.reveal_duck_db >= -60.0) {
+        return Err("presentation.toml reveal_duck_db must be in [-60, 0]".into());
+    }
+    if !(presentation.reveal_duck_ramp.is_finite() && presentation.reveal_duck_ramp > 0.0) {
+        return Err("presentation.toml reveal_duck_ramp must be positive".into());
     }
     Ok(())
 }
@@ -4038,6 +4049,10 @@ pub struct Presentation {
     pub view_bob_hz: f32,
     pub pad_magnetism_blend: f32,
     pub pitch_limit_deg: f32,
+    /// Music bus while a crate reveal is on screen, in dB. Not the host-away duck.
+    pub reveal_duck_db: f32,
+    /// Seconds to ramp to `reveal_duck_db` and back to full.
+    pub reveal_duck_ramp: f32,
     pub hud: HudPresentation,
 }
 
@@ -6351,6 +6366,18 @@ mod ten_pull_keys {
         let err = Content::parse(&sources).expect_err("connection_lost is required");
         assert!(err.contains("connection_lost"), "{err}");
         sources.ui = src.ui;
+
+        let missing_duck = src.presentation.replace("reveal_duck_db = -12.0\n", "");
+        assert_ne!(missing_duck, src.presentation);
+        sources.presentation = &missing_duck;
+        let err = Content::parse(&sources).expect_err("reveal_duck_db is required");
+        assert!(err.contains("reveal_duck_db"), "{err}");
+        let missing_ramp = src.presentation.replace("reveal_duck_ramp = 0.25\n", "");
+        assert_ne!(missing_ramp, src.presentation);
+        sources.presentation = &missing_ramp;
+        let err = Content::parse(&sources).expect_err("reveal_duck_ramp is required");
+        assert!(err.contains("reveal_duck_ramp"), "{err}");
+        sources.presentation = src.presentation;
 
         let rarity_ink = src.crate_reveal.replace("failure_ink = \"reveal_paper\"", "failure_ink = \"rarity_legendary\"");
         sources.crate_reveal = &rarity_ink;

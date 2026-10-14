@@ -138,16 +138,35 @@ pub fn parse_prefs(text: &str, content: &Content) -> Result<Prefs, String> {
     prefs.effects = ranged(table, "effects", settings.volume_min, settings.volume_max)?;
     prefs.character = remembered_hero(table, content)?;
     prefs.difficulty = remembered_tier(table, content)?;
-    prefs.pull_key = required_text(table, "pull_key")?;
-    prefs.pull_ten = flag(table, "pull_ten")?;
-    prefs.pull_awaiting = flag(table, "pull_awaiting")?;
-    prefs.pull_seen_keys = required_list(table, "pull_seen_keys")?;
+    // Pull fields arrived after the first settings files. A missing key keeps the old
+    // sliders. A present key of the wrong type still rejects the whole file.
+    prefs.pull_key = optional_text(table, "pull_key")?.unwrap_or_default();
+    prefs.pull_ten = optional_flag(table, "pull_ten")?.unwrap_or(false);
+    prefs.pull_awaiting = optional_flag(table, "pull_awaiting")?.unwrap_or(false);
+    prefs.pull_seen_keys = optional_list(table, "pull_seen_keys")?.unwrap_or_default();
     Ok(prefs)
 }
 
-fn required_list(table: &toml::map::Map<String, toml::Value>, key: &str) -> Result<Vec<String>, String> {
+fn optional_text(table: &toml::map::Map<String, toml::Value>, key: &str) -> Result<Option<String>, String> {
     let Some(value) = table.get(key) else {
-        return Err(format!("settings {key} is not a list"));
+        return Ok(None);
+    };
+    value
+        .as_str()
+        .map(|text| Some(text.to_string()))
+        .ok_or_else(|| format!("settings {key} is not a string"))
+}
+
+fn optional_flag(table: &toml::map::Map<String, toml::Value>, key: &str) -> Result<Option<bool>, String> {
+    let Some(value) = table.get(key) else {
+        return Ok(None);
+    };
+    value.as_bool().map(Some).ok_or_else(|| format!("settings {key} is not a bool"))
+}
+
+fn optional_list(table: &toml::map::Map<String, toml::Value>, key: &str) -> Result<Option<Vec<String>>, String> {
+    let Some(value) = table.get(key) else {
+        return Ok(None);
     };
     let Some(items) = value.as_array() else {
         return Err(format!("settings {key} is not a list"));
@@ -159,15 +178,7 @@ fn required_list(table: &toml::map::Map<String, toml::Value>, key: &str) -> Resu
         };
         out.push(text.to_string());
     }
-    Ok(out)
-}
-
-fn required_text(table: &toml::map::Map<String, toml::Value>, key: &str) -> Result<String, String> {
-    table
-        .get(key)
-        .and_then(|value| value.as_str())
-        .map(|value| value.to_string())
-        .ok_or_else(|| format!("settings {key} is not a string"))
+    Ok(Some(out))
 }
 
 fn ranged(table: &toml::map::Map<String, toml::Value>, key: &str, min: f32, max: f32) -> Result<f32, String> {
@@ -231,16 +242,19 @@ pub fn load_saved(content: &Content) -> Loaded {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn store(content: &Content, prefs: &Prefs) {
+pub fn store(content: &Content, prefs: &Prefs) -> Result<(), String> {
     let key = content.ui.settings.settings_key.as_str();
-    if let Some(storage) = web_sys::window().and_then(|window| window.local_storage().ok().flatten()) {
-        let _ = storage.set_item(key, &prefs.encode());
-    }
+    let storage = web_sys::window()
+        .and_then(|window| window.local_storage().ok().flatten())
+        .ok_or_else(|| "settings storage is missing".to_string())?;
+    storage
+        .set_item(key, &prefs.encode())
+        .map_err(|err| format!("settings save failed: {err:?}"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn store(content: &Content, prefs: &Prefs) {
-    let _ = save_path(&default_path(content), prefs);
+pub fn store(content: &Content, prefs: &Prefs) -> Result<(), String> {
+    save_path(&default_path(content), prefs)
 }
 
 #[cfg(test)]
@@ -286,10 +300,19 @@ mod tests {
         let low = text.replace("master = 0.5", "master = -0.1");
         assert!(parse_prefs(&low, &content).is_err());
         assert!(parse_prefs("fov = 90", &content).is_err(), "missing keys");
-        let missing_pull = text.replace("pull_key = \"\"\n", "");
-        assert!(parse_prefs(&missing_pull, &content).is_err(), "pull_key is required");
-        let missing_seen = text.replace("pull_seen_keys = []\n", "");
-        assert!(parse_prefs(&missing_seen, &content).is_err(), "pull_seen_keys is required");
+        let old = text
+            .replace("pull_key = \"\"\n", "")
+            .replace("pull_ten = false\n", "")
+            .replace("pull_awaiting = false\n", "")
+            .replace("pull_seen_keys = []\n", "");
+        let upgraded = parse_prefs(&old, &content).expect("an old file keeps its sliders");
+        assert_eq!(upgraded.fov, prefs.fov);
+        assert!(upgraded.pull_key.is_empty());
+        assert!(!upgraded.pull_ten);
+        assert!(!upgraded.pull_awaiting);
+        assert!(upgraded.pull_seen_keys.is_empty());
+        let bad_key = text.replace("pull_key = \"\"", "pull_key = 4");
+        assert!(parse_prefs(&bad_key, &content).is_err(), "a mistyped pull key rejects the file");
         let mut unseen = prefs.clone();
         unseen.pull_key = "0123456789abcdef0123456789abcdef".into();
         unseen.pull_ten = true;

@@ -2864,6 +2864,7 @@ dependencies = [
  "gemini-server",
  "gemini-sim",
  "getrandom 0.4.3",
+ "rodio",
  "toml 0.8.23",
  "wasm-bindgen",
  "web-sys",

@@ -85,7 +85,10 @@ pub fn autoplay(mut commands: Commands, launch: Res<Launch>, mut next: ResMut<Ne
         if let Ok(spec) = std::env::var("GEMINI_REVEAL") {
             if let Some(run) = crate::reveal_ui::from_env(&spec) {
                 *opened = true;
-                commands.insert_resource(crate::reveal_ui::RevealPlayback(crate::reveal_ui::RevealShow::Single(run)));
+                commands.insert_resource(crate::reveal_ui::RevealPlayback {
+                    show: crate::reveal_ui::RevealShow::Single(run),
+                    key: String::new(),
+                });
                 next.set(AppState::Reveal);
                 return;
             }

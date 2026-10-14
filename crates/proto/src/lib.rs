@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use gemini_sim::PlayerInput;
 
-pub const PROTOCOL_VERSION: u32 = 2;
+/// 3 adds `CratePullRequest.seen`. A seen write is refused and does not touch the save.
+pub const PROTOCOL_VERSION: u32 = 3;
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
 /// Welcome seat when the joiner is queued for the next breather.
 pub const PENDING_SEAT: u32 = u32::MAX;

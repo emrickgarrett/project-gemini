@@ -29,7 +29,11 @@ pub enum RevealShow {
 }
 
 #[derive(Resource)]
-pub struct RevealPlayback(pub RevealShow);
+pub struct RevealPlayback {
+    pub show: RevealShow,
+    /// Idempotency key this playback is showing. Empty on a refund.
+    pub key: String,
+}
 
 /// Where Enter returns after the card. The crates screen stays on its route.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -109,7 +113,9 @@ pub fn drive(
     let dt = time.delta_secs();
     let bus = crate::audio::bus_gain(&prefs, false);
     let gen = crate_box.reveal_gen;
-    match &mut playback.0 {
+    let showing = playback.key.clone();
+    let in_flight = crate_box.pull_busy;
+    match &mut playback.show {
         RevealShow::Single(run) => {
             let skip = keys.just_pressed(KeyCode::Space) || mouse.just_pressed(MouseButton::Left);
             if skip {
@@ -122,7 +128,7 @@ pub fn drive(
                 play_cue(&mut commands, &assets, &content, &id, bus, gen);
             }
             if run.time >= run.plan.card_at {
-                flow::mark_pull_seen(&mut prefs);
+                flow::mark_pull_seen(&mut prefs, &showing, in_flight);
                 if keys.just_pressed(KeyCode::Enter) {
                     next.set(AppState::Menu);
                     return;
@@ -147,7 +153,7 @@ pub fn drive(
             }
             crate_box.buttons_ready = run.finished();
             if run.finished() {
-                flow::mark_pull_seen(&mut prefs);
+                flow::mark_pull_seen(&mut prefs, &showing, in_flight);
             }
         }
         RevealShow::Refund(run) => {
@@ -254,7 +260,7 @@ pub fn paint(
         commands.remove_resource::<PaintKey>();
         return;
     };
-    if matches!(playback.0, RevealShow::Single(_)) {
+    if matches!(playback.show, RevealShow::Single(_)) {
         return;
     }
     let content = Content::embedded();
@@ -267,7 +273,7 @@ pub fn paint(
     let shortfall = if afford { String::new() } else { ten_shortfall(&content, crate_box.credits) };
     let again = afford && !crate_box.pull_busy;
     let failure = crate_box.reason.clone();
-    let (kind, items, ready) = match &playback.0 {
+    let (kind, items, ready) = match &playback.show {
         RevealShow::Single(_) => return,
         RevealShow::Grid(run) => {
             let shown: Vec<String> = (0..run.plan.cards.len()).map(|index| run.shown_item(index).unwrap_or("").to_string()).collect();
@@ -290,7 +296,7 @@ pub fn paint(
         return;
     }
     clear_roots(&mut commands, &roots);
-    let painted = match &playback.0 {
+    let painted = match &playback.show {
         RevealShow::Single(_) => return,
         RevealShow::Grid(_) => {
             let faces: Vec<Option<&str>> = items.iter().map(|item| if item.is_empty() { None } else { Some(item.as_str()) }).collect();

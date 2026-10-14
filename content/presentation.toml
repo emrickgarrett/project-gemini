@@ -6,6 +6,9 @@ gamepad_look_deg_per_sec = 130.0
 view_bob_hz = 8.5
 pad_magnetism_blend = 0.45
 pitch_limit_deg = 85.0
+# Crate-reveal music duck. This is not the host-away duck above the pause menu.
+reveal_duck_db = -12.0
+reveal_duck_ramp = 0.25
 
 [hud.away]
 slate = "ui_panel_slate"
