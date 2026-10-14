@@ -78,6 +78,35 @@ pub struct CratePullReply {
     pub fault: Option<CratePullFault>,
 }
 
+/// Ask the host to deposit the gain it already recorded for this match and player.
+/// The client does not send an amount.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct BankRequest {
+    pub version: u32,
+    pub match_id: u64,
+    pub player_id: u64,
+}
+
+/// Why the host did not deposit. The client does not invent a wallet total.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub enum BankFault {
+    Player,
+    Amount,
+    Unavailable,
+    Unknown,
+}
+
+/// The host's answer to [`BankRequest`]. `fresh` is false when this key was already stored.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct BankReply {
+    pub version: u32,
+    pub earned: f32,
+    pub bonus: f32,
+    pub balance: f32,
+    pub fresh: bool,
+    pub fault: Option<BankFault>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum Packet {
     Hello(Hello),
@@ -90,6 +119,8 @@ pub enum Packet {
     HostAway { version: u32 },
     CratePull(CratePullRequest),
     CratePullReply(CratePullReply),
+    Bank(BankRequest),
+    BankReply(BankReply),
 }
 
 impl Packet {

@@ -15,6 +15,8 @@ hit_reserve = 3
 # The crowd loop is reserved every frame, whether or not swarmers are near.
 warning_fade = 0.030
 critical = ["spitter_charge", "player_downed", "wave_start", "brood_roar", "tyrant_roar"]
+# UI bus cues. They do not take a voice_cap slot.
+outside_voice_cap = ["ui_count_tick", "ui_bank_chime"]
 
 # Sim event ids that name a file. An id the game can emit must be a row or an alias.
 [alias]
@@ -1496,3 +1498,25 @@ category = "prop"
 priority = 10
 stealable = true
 flat = false
+
+# Match-end count-up. UI bus, outside voice_cap. Not the crate sting.
+[ui_count_tick]
+volume_db = -16.0
+pitch_rand_semitones = 0
+max_instances = 1
+loop = false
+category = "ui"
+priority = 10
+stealable = true
+flat = true
+
+# Short bank chime after the count-up. Quit and disconnect do not play it.
+[ui_bank_chime]
+volume_db = -16.0
+pitch_rand_semitones = 0
+max_instances = 1
+loop = false
+category = "ui"
+priority = 10
+stealable = true
+flat = true

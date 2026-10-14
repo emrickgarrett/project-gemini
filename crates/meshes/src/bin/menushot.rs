@@ -10,20 +10,33 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 
 use gemini_meshes::{paint_coop_pause, paint_menu, raster_hero_portrait, MenuShot, PaintPrefs};
-use gemini_sim::content::Content;
+use gemini_sim::bank::BankShow;
+use gemini_sim::content::{currency_reward, milestone_payout, wave_payout, win_payout, Content};
 
 fn main() {
     let mut out = "art/menu".to_string();
+    let mut bank_dir: Option<String> = None;
     let mut args = env::args().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--out" {
             if let Some(path) = args.next() {
                 out = path;
             }
+        } else if arg == "--bank-dir" {
+            bank_dir = args.next();
         }
     }
-    fs::create_dir_all(&out).expect("create out dir");
     let content = Content::embedded();
+    if let Some(dir) = bank_dir {
+        fs::create_dir_all(&dir).expect("create bank dir");
+        for (name, shot) in bank_shots(&content) {
+            let path = format!("{dir}/{name}_1280x720.png");
+            write_shot(&content, &shot, 1280, 720, &path);
+            println!("wrote {path}");
+        }
+        return;
+    }
+    fs::create_dir_all(&out).expect("create out dir");
     let hero = content.hero.id.clone();
     let prefs = PaintPrefs::defaults(&content);
     let shots = [
@@ -36,11 +49,11 @@ fn main() {
         ("settings", MenuShot::Settings { focus: 0, hero_id: hero.clone(), prefs: prefs.clone(), notice: false }),
         (
             "results_victory",
-            MenuShot::Results { focus: 0, victory: true, waves: 5, kills: 42, seconds: 754.0, currency: 120.0 },
+            MenuShot::Results { focus: 0, show: BankShow::Win, waves: 5, kills: 42, seconds: 754.0, earned: 120.0, bonus: 0.0, balance: Some(120.0) },
         ),
         (
             "results_defeat",
-            MenuShot::Results { focus: 0, victory: false, waves: 3, kills: 18, seconds: 201.0, currency: 40.0 },
+            MenuShot::Results { focus: 0, show: BankShow::End, waves: 3, kills: 18, seconds: 201.0, earned: 40.0, bonus: 0.0, balance: Some(40.0) },
         ),
         ("crates", MenuShot::Crates { focus: 0, rarity: None, failed: false, can_pull: true, reason: String::new() }),
         (
@@ -92,6 +105,68 @@ fn main() {
         write_png(&path, &rgb, big, big);
         println!("wrote {path}");
     }
+}
+
+fn bank_shots(content: &Content) -> Vec<(&'static str, MenuShot)> {
+    let tier = content.tier(&content.ui.settings.default_difficulty).currency;
+    let first_boss = content.waves.wave.iter().find(|wave| wave.boss.is_some()).map(|wave| wave.n).expect("a boss wave");
+    let end_wave = first_boss.checked_sub(1).expect("a wave before the first boss");
+    let end_earned = currency_reward(&content.currency, end_wave, tier, false, 0);
+    let open_wave = content.waves.wave.iter().map(|wave| wave.n).min().expect("waves");
+    let quit_earned = wave_payout(&content.currency, open_wave, tier);
+    let last = content.waves.wave.iter().map(|wave| wave.n).max().expect("waves");
+    let bosses = content.waves.wave.iter().filter(|wave| wave.boss.is_some()).count() as u32;
+    let win_earned = currency_reward(&content.currency, last, tier, true, bosses);
+    let mut bonus = win_payout(&content.currency, tier);
+    let mut wave = 1u32;
+    while wave <= last {
+        bonus += milestone_payout(&content.currency, wave, tier);
+        wave += 1;
+    }
+    let have = content.banners.dev.starting_credits;
+    let seconds = content.waves.budget.breather_seconds;
+    let kills = content.waves.budget.base as u32;
+    vec![
+        (
+            "end",
+            MenuShot::Results {
+                focus: 0,
+                show: BankShow::End,
+                waves: end_wave,
+                kills: kills * end_wave,
+                seconds: seconds * end_wave as f32,
+                earned: end_earned,
+                bonus: 0.0,
+                balance: Some(have + end_earned),
+            },
+        ),
+        (
+            "quit",
+            MenuShot::Results {
+                focus: 0,
+                show: BankShow::Quit,
+                waves: open_wave,
+                kills,
+                seconds,
+                earned: quit_earned,
+                bonus: 0.0,
+                balance: Some(have + quit_earned),
+            },
+        ),
+        (
+            "win",
+            MenuShot::Results {
+                focus: 0,
+                show: BankShow::Win,
+                waves: last,
+                kills: kills * last,
+                seconds: seconds * last as f32,
+                earned: win_earned,
+                bonus,
+                balance: Some(have + win_earned),
+            },
+        ),
+    ]
 }
 
 /// Co-op pause leaves the live frame clear. The still lays the veil over the dimmed solo backdrop.

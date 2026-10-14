@@ -16,6 +16,9 @@ locked_text = "rarity_common"
 bevel_light = "reveal_paper"
 bevel_shadow = "reveal_ink"
 veil = "reveal_ink"
+# Count-up digits. Legendary gold stays on the crate reveal.
+bank_count = "reveal_paper"
+bank_bonus = "reveal_paper"
 
 [copy]
 title = "PROJECT GEMINI"
@@ -65,6 +68,10 @@ pull_have = "HAVE"
 pull_credits = "CREDITS"
 pull_needs_server = "PULLS RUN ON THE SERVER"
 pull_no_shards = "NO SHARD COST"
+bank_earned = "EARNED"
+bank_bonus = "BONUS"
+bank_quit = "LEFT MATCH"
+bank_disconnect = "DISCONNECTED"
 
 [layout]
 title_scale = 6
@@ -135,6 +142,8 @@ inset_y = 6.0
 inset_bar = 8.0
 inset_portrait = 4.0
 inset_min = 1.0
+bank_panel_width = 760.0
+bank_panel_height = 620.0
 
 # Hero-card portrait framing. bg is a palette.toml key. The FOV search starts at
 # max(viewmodel fov, fov_floor) and steps until every vertex is inside that hero's portrait.fit.
@@ -181,3 +190,10 @@ pause_close = "pause_close"
 match_start = "match_start"
 victory = "results_victory"
 defeat = "results_defeat"
+count_tick = "ui_count_tick"
+bank_chime = "ui_bank_chime"
+
+[bank]
+# Count-up length, and the gap between UI ticks. The bank chime plays once at count_secs.
+count_secs = 1.0
+count_tick_secs = 0.05

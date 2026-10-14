@@ -545,6 +545,7 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
                 | "crowd_full_count"
                 | "min_distance"
                 | "critical"
+                | "outside_voice_cap"
                 | "alias"
                 | "sting"
                 | "footstep"
@@ -630,6 +631,7 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
                 flat,
                 priority,
                 category: category.to_string(),
+                outside_voice_cap: false,
             },
         );
     }
@@ -679,6 +681,26 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
     let warning_fade = number("warning_fade")? as f32;
     if !(warning_fade > 0.0) {
         return Err("warning_fade must be > 0".into());
+    }
+    let outside_rows = table
+        .get("outside_voice_cap")
+        .and_then(|value| value.as_array())
+        .ok_or("audio mix is missing outside_voice_cap")?;
+    let mut outside_ids = Vec::new();
+    for value in outside_rows {
+        let id = value
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| "outside_voice_cap entry is not a string".to_string())?;
+        if !sfx.iter().any(|row| row.id == id) {
+            return Err(format!("outside_voice_cap names missing row {id}"));
+        }
+        outside_ids.push(id.to_string());
+    }
+    for row in &mut sfx {
+        if outside_ids.iter().any(|id| id == &row.id || id == &row.row_id) {
+            row.outside_voice_cap = true;
+        }
     }
     let warning_voices = budget_voices(&sfx, |row| row.is_warning)?;
     let crowd_loops = budget_voices(&sfx, |row| row.crowd && row.looped)?;
@@ -1330,6 +1352,7 @@ flat = true
             flat: false,
             priority: 100,
             category: "enemy".into(),
+            outside_voice_cap: false,
         }
     }
 

@@ -66,6 +66,13 @@ pub struct AuditEntry {
     pub pity_epic_before: u32,
 }
 
+/// One deposit. The key is the match id and the player id.
+#[derive(Clone, Copy, Debug)]
+struct Banked {
+    earned: f32,
+    bonus: f32,
+}
+
 /// Account wallet, per-banner pity, and the pull log. RNG state stays here.
 #[derive(Clone, Debug)]
 pub struct Account {
@@ -76,6 +83,93 @@ pub struct Account {
     active_banner: Option<String>,
     rng: ChaCha20Rng,
     pub audit: Vec<AuditEntry>,
+    /// Deposits already written. A repeat key does not pay again.
+    banks: BTreeMap<(u64, u64), Banked>,
+}
+
+/// Why a deposit did not run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BankError {
+    Player,
+    Amount,
+}
+
+/// What the server stored. `fresh` is false when this match and player were already banked.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BankReceipt {
+    pub earned: f32,
+    pub bonus: f32,
+    pub balance: f32,
+    pub fresh: bool,
+}
+
+/// Currency copied off a sim the server is running. Callers do not pass a total.
+#[derive(Clone, Debug)]
+pub struct PlayerGain {
+    pub earned: f32,
+    pub bonus: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct MatchRecord {
+    pub id: u64,
+    gains: BTreeMap<u64, PlayerGain>,
+}
+
+/// Match ids the server minted, and the gain it copied off each sim.
+#[derive(Clone, Debug)]
+pub struct MatchBook {
+    next_id: u64,
+    matches: BTreeMap<u64, MatchRecord>,
+}
+
+impl MatchBook {
+    pub fn new() -> Self {
+        Self { next_id: 1, matches: BTreeMap::new() }
+    }
+
+    pub fn open(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id = self.next_id.checked_add(1).expect("match ids exhausted");
+        self.matches.insert(id, MatchRecord { id, gains: BTreeMap::new() });
+        id
+    }
+
+    pub fn note(&mut self, id: u64, sim: &gemini_sim::Sim) -> Result<(), String> {
+        let record = self.matches.get_mut(&id).ok_or_else(|| format!("no match record {id}"))?;
+        record.note(sim)
+    }
+
+    pub fn record(&self, id: u64) -> Option<&MatchRecord> {
+        self.matches.get(&id)
+    }
+}
+
+impl MatchRecord {
+    /// Copy `currency_gain` off the server's sim. A missing bonus row is an error.
+    pub fn note(&mut self, sim: &gemini_sim::Sim) -> Result<(), String> {
+        let mut gains = BTreeMap::new();
+        for (token, earned) in &sim.currency_gain {
+            if !earned.is_finite() {
+                return Err(format!("player {token} currency_gain is not finite"));
+            }
+            let bonus = sim
+                .currency_bonus
+                .get(token)
+                .copied()
+                .ok_or_else(|| format!("player {token} has currency_gain and no currency_bonus"))?;
+            if !bonus.is_finite() {
+                return Err(format!("player {token} currency_bonus is not finite"));
+            }
+            gains.insert(*token, PlayerGain { earned: *earned, bonus });
+        }
+        self.gains = gains;
+        Ok(())
+    }
+
+    pub fn gain(&self, player_id: u64) -> Option<&PlayerGain> {
+        self.gains.get(&player_id)
+    }
 }
 
 impl Account {
@@ -124,7 +218,36 @@ impl Account {
             active_banner: None,
             rng,
             audit: Vec::new(),
+            banks: BTreeMap::new(),
         }
+    }
+
+    /// Deposit this match's recorded gain. The key and the wallet move together.
+    /// A second call for the same match and player returns the stored amounts.
+    pub fn bank(&mut self, record: &MatchRecord, player_id: u64) -> Result<BankReceipt, BankError> {
+        let key = (record.id, player_id);
+        if let Some(prev) = self.banks.get(&key) {
+            return Ok(BankReceipt {
+                earned: prev.earned,
+                bonus: prev.bonus,
+                balance: self.credits,
+                fresh: false,
+            });
+        }
+        let Some(gain) = record.gain(player_id) else {
+            return Err(BankError::Player);
+        };
+        if !gain.earned.is_finite() || !gain.bonus.is_finite() || gain.earned < 0.0 || gain.bonus < 0.0 {
+            return Err(BankError::Amount);
+        }
+        self.credits += gain.earned;
+        self.banks.insert(key, Banked { earned: gain.earned, bonus: gain.bonus });
+        Ok(BankReceipt {
+            earned: gain.earned,
+            bonus: gain.bonus,
+            balance: self.credits,
+            fresh: true,
+        })
     }
 
     pub fn since_legendary(&self, banner: &str) -> u32 {
@@ -134,7 +257,7 @@ impl Account {
     /// Bytes for the stand-in save. A later host can use the same account fields.
     pub fn to_bytes(&self) -> Result<Vec<u8>, String> {
         let mut out = Vec::new();
-        out.extend(SAVE_MAGIC);
+        out.extend(SAVE_V2);
         write_u32(&mut out, self.rank);
         write_u32(&mut out, self.shards);
         write_f32(&mut out, self.credits)?;
@@ -163,15 +286,28 @@ impl Account {
         let pos = self.rng.get_word_pos();
         out.extend((pos as u64).to_le_bytes());
         out.extend(((pos >> 64) as u64).to_le_bytes());
+        write_u32(&mut out, self.banks.len() as u32);
+        for ((match_id, player_id), row) in &self.banks {
+            out.extend(match_id.to_le_bytes());
+            out.extend(player_id.to_le_bytes());
+            write_f32(&mut out, row.earned)?;
+            write_f32(&mut out, row.bonus)?;
+        }
         Ok(out)
     }
 
     /// Restore a save. Truncation, a bad header, and trailing bytes are errors.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
-        if bytes.len() < SAVE_MAGIC.len() || &bytes[..SAVE_MAGIC.len()] != SAVE_MAGIC {
+        if bytes.len() < SAVE_V1.len() {
             return Err("dev account save header is wrong".into());
         }
-        let mut at = SAVE_MAGIC.len();
+        let magic = &bytes[..SAVE_V1.len()];
+        let version = match magic {
+            SAVE_V1 => 1u32,
+            SAVE_V2 => 2u32,
+            _ => return Err("dev account save header is wrong".into()),
+        };
+        let mut at = SAVE_V1.len();
         let rank = read_u32(bytes, &mut at)?;
         let shards = read_u32(bytes, &mut at)?;
         let credits = read_f32(bytes, &mut at)?;
@@ -222,6 +358,25 @@ impl Account {
         seed.copy_from_slice(seed_bytes);
         let pos_lo = read_u64(bytes, &mut at)?;
         let pos_hi = read_u64(bytes, &mut at)?;
+        let mut banks = BTreeMap::new();
+        if version == 2 {
+            let bank_len = read_u32(bytes, &mut at)? as usize;
+            if bank_len > 1024 {
+                return Err("dev account save has too many bank rows".into());
+            }
+            for _ in 0..bank_len {
+                let match_id = read_u64(bytes, &mut at)?;
+                let player_id = read_u64(bytes, &mut at)?;
+                let earned = read_f32(bytes, &mut at)?;
+                let bonus = read_f32(bytes, &mut at)?;
+                if !earned.is_finite() || !bonus.is_finite() || earned < 0.0 || bonus < 0.0 {
+                    return Err("dev account save has a bad bank amount".into());
+                }
+                if banks.insert((match_id, player_id), Banked { earned, bonus }).is_some() {
+                    return Err("dev account save repeats a bank key".into());
+                }
+            }
+        }
         if at != bytes.len() {
             return Err("dev account save has trailing bytes".into());
         }
@@ -235,6 +390,7 @@ impl Account {
             active_banner,
             rng,
             audit,
+            banks,
         })
     }
 
@@ -419,7 +575,8 @@ fn dev_currency_enabled() -> bool {
     cfg!(debug_assertions)
 }
 
-const SAVE_MAGIC: &[u8] = b"GEMACCT1";
+const SAVE_V1: &[u8] = b"GEMACCT1";
+const SAVE_V2: &[u8] = b"GEMACCT2";
 
 fn write_u32(out: &mut Vec<u8>, value: u32) {
     out.extend(value.to_le_bytes());
@@ -844,5 +1001,119 @@ mod tests {
         };
         assert_eq!(opened.credits(), expected);
         assert_eq!(dev_currency_enabled(), cfg!(debug_assertions));
+    }
+
+    fn noted(sim: &gemini_sim::Sim) -> (MatchBook, u64) {
+        let mut book = MatchBook::new();
+        let id = book.open();
+        book.note(id, sim).unwrap();
+        (book, id)
+    }
+
+    #[test]
+    fn a_match_is_banked_once_and_a_rejoin_does_not_pay_again() {
+        let content = gemini_sim::Content::embedded();
+        let mut sim = gemini_sim::Sim::new(&content, "normal", 1);
+        let player = sim.players[0].token;
+        let (book, id) = noted(&sim);
+        let mut account = Account::from_seed(4);
+        let pity_rows = account.pity.len();
+        let audit_rows = account.audit.len();
+        let seed = account.rng.get_seed();
+        let pos = account.rng.get_word_pos();
+        account.grant_dev_credits(&content);
+        let start = account.credits();
+        let first = account.bank(book.record(id).unwrap(), player).unwrap();
+        assert!(first.fresh);
+        assert_eq!(first.earned, sim.currency_gain[&player]);
+        assert_eq!(first.bonus, sim.currency_bonus[&player]);
+        assert_eq!(account.credits(), start + first.earned);
+        assert_eq!(account.pity.len(), pity_rows);
+        assert_eq!(account.audit.len(), audit_rows);
+        assert_eq!(account.rng.get_seed(), seed);
+        assert_eq!(account.rng.get_word_pos(), pos);
+
+        sim.phase = gemini_sim::Phase::Breather { left: 0.01 };
+        sim.step(&content, gemini_sim::PlayerInput::default());
+        let mut later = book.clone();
+        later.note(id, &sim).unwrap();
+        assert!(sim.currency_gain[&player] > first.earned, "wave 2 is on the record and must not be deposited");
+        let second = account.bank(later.record(id).unwrap(), player).unwrap();
+        assert!(!second.fresh);
+        assert_eq!(second.earned, first.earned);
+        assert_eq!(second.bonus, first.bonus);
+        assert_eq!(account.credits(), start + first.earned);
+        assert_eq!(account.pity.len(), pity_rows);
+        assert_eq!(account.rng.get_seed(), seed);
+        assert_eq!(account.rng.get_word_pos(), pos);
+    }
+
+    #[test]
+    fn a_quit_banks_only_the_open_wave_and_a_win_includes_the_content_bonus() {
+        let content = gemini_sim::Content::embedded();
+        let tier = content.tier("normal").currency;
+        let sim = gemini_sim::Sim::new(&content, "normal", 1);
+        let player = sim.players[0].token;
+        let (book, id) = noted(&sim);
+        let mut account = Account::from_seed(5);
+        let partial = account.bank(book.record(id).unwrap(), player).unwrap();
+        let full = gemini_sim::content::currency_reward(&content.currency, 10, tier, true, 0);
+        assert!(partial.earned < full, "a quit keeps the open wave, not the win");
+        assert_eq!(partial.bonus, 0.0);
+        assert_eq!(partial.earned, gemini_sim::content::wave_payout(&content.currency, 1, tier));
+
+        let mut won = sim.clone();
+        won.grant_victory_bonus(&content);
+        let (won_book, won_id) = noted(&won);
+        let mut wallet = Account::from_seed(6);
+        let receipt = wallet.bank(won_book.record(won_id).unwrap(), player).unwrap();
+        let bonus = gemini_sim::content::win_payout(&content.currency, tier);
+        assert_eq!(receipt.bonus, bonus);
+        assert_eq!(receipt.earned, partial.earned + bonus);
+        assert_eq!(wallet.credits(), receipt.earned);
+    }
+
+    #[test]
+    fn a_bad_amount_is_rejected_and_a_v1_save_loads_with_an_empty_ledger() {
+        let content = gemini_sim::Content::embedded();
+        let mut sim = gemini_sim::Sim::new(&content, "normal", 1);
+        let player = sim.players[0].token;
+        sim.currency_gain.insert(player, -1.0);
+        let (book, id) = noted(&sim);
+        let mut account = Account::from_seed(7);
+        account.grant_dev_credits(&content);
+        let start = account.credits();
+        assert_eq!(account.bank(book.record(id).unwrap(), player).unwrap_err(), BankError::Amount);
+        assert_eq!(account.credits(), start, "a rejected deposit does not change the dev grant");
+        assert_eq!(account.bank(book.record(id).unwrap(), player.wrapping_add(1)).unwrap_err(), BankError::Player);
+
+        let empty = Account::from_seed(8);
+        let v2 = empty.to_bytes().unwrap();
+        assert!(v2.starts_with(SAVE_V2));
+        let mut v1 = v2[..v2.len() - 4].to_vec();
+        v1[..SAVE_V1.len()].copy_from_slice(SAVE_V1);
+        let loaded = Account::from_bytes(&v1).unwrap();
+        assert!(loaded.banks.is_empty());
+        assert_eq!(loaded.credits(), empty.credits());
+        let round = Account::from_bytes(&account.to_bytes().unwrap()).unwrap();
+        assert_eq!(round.credits(), account.credits());
+        assert!(round.banks.is_empty(), "the rejected amount was not stored");
+    }
+
+    #[test]
+    fn a_saved_deposit_round_trips_and_stays_idempotent() {
+        let content = gemini_sim::Content::embedded();
+        let sim = gemini_sim::Sim::new(&content, "normal", 1);
+        let player = sim.players[0].token;
+        let (book, id) = noted(&sim);
+        let mut account = Account::from_seed(9);
+        let first = account.bank(book.record(id).unwrap(), player).unwrap();
+        let loaded = Account::from_bytes(&account.to_bytes().unwrap()).unwrap();
+        assert_eq!(loaded.credits(), first.balance);
+        let mut again = loaded;
+        let second = again.bank(book.record(id).unwrap(), player).unwrap();
+        assert!(!second.fresh);
+        assert_eq!(second.earned, first.earned);
+        assert_eq!(again.credits(), first.balance);
     }
 }

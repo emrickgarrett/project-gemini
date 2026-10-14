@@ -1,6 +1,7 @@
 //! Software frames of the menu screens. Layout, type size, and colors come from `ui.toml`.
 //! The pixel font is the crate-reveal glyph set.
 
+use gemini_sim::bank::BankShow;
 use gemini_sim::content::{format_fixed, Content};
 
 use crate::away_still::paint_arena;
@@ -51,11 +52,13 @@ pub enum MenuShot {
     Settings { focus: usize, hero_id: String, prefs: PaintPrefs, notice: bool },
     Results {
         focus: usize,
-        victory: bool,
+        show: BankShow,
         waves: u32,
         kills: u32,
         seconds: f32,
-        currency: f32,
+        earned: f32,
+        bonus: f32,
+        balance: Option<f32>,
     },
     Crates { focus: usize, rarity: Option<String>, failed: bool, can_pull: bool, reason: String },
     ClickToPlay,
@@ -143,8 +146,8 @@ pub fn paint_menu_masked(content: &Content, shot: &MenuShot, width: u32, height:
         MenuShot::Difficulty { focus, hero_id, notice } => paint_difficulty(&mut rgb, content, frame, *focus, hero_id, *notice),
         MenuShot::Pause { focus, hero_id, .. } => paint_pause(&mut rgb, content, frame, *focus, hero_id),
         MenuShot::Settings { focus, hero_id, prefs, notice } => paint_settings(&mut rgb, content, frame, *focus, hero_id, prefs, *notice),
-        MenuShot::Results { focus, victory, waves, kills, seconds, currency } => {
-            paint_results(&mut rgb, content, frame, *focus, *victory, *waves, *kills, *seconds, *currency)
+        MenuShot::Results { focus, show, waves, kills, seconds, earned, bonus, balance } => {
+            paint_results(&mut rgb, content, frame, *focus, *show, *waves, *kills, *seconds, *earned, *bonus, *balance)
         }
         MenuShot::Crates { focus, rarity, failed, can_pull, reason } => {
             paint_crates(&mut rgb, content, frame, *focus, rarity.as_deref(), *failed, *can_pull, reason)
@@ -340,35 +343,101 @@ fn paint_settings(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize,
     hits
 }
 
-fn paint_results(rgb: &mut [u8], content: &Content, frame: Frame, focus: usize, victory: bool, waves: u32, kills: u32, seconds: f32, currency: f32) -> Vec<Hit> {
+/// Lines on the match-end panel. The bonus row is absent when the match paid none.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BankLines {
+    pub title: String,
+    pub title_key: String,
+    pub earned: String,
+    pub bonus: Option<String>,
+    pub wallet: String,
+}
+
+pub fn bank_lines(content: &Content, show: BankShow, earned: f32, bonus: f32, balance: Option<f32>) -> BankLines {
+    let copy = &content.ui.copy;
+    let colors = &content.ui.colors;
+    let places = content.ui.layout.currency_decimals;
+    let (title, title_key) = match show {
+        BankShow::Win => (copy.victory.clone(), colors.victory.clone()),
+        BankShow::End => (copy.defeat.clone(), colors.defeat.clone()),
+        BankShow::Quit => (copy.bank_quit.clone(), colors.text.clone()),
+        BankShow::Disconnect => (copy.bank_disconnect.clone(), colors.text.clone()),
+    };
+    let earned_line = format!("{} {}", copy.bank_earned, format_fixed(earned, places));
+    let bonus_line = if bonus > 0.0 {
+        Some(format!("{} {}", copy.bank_bonus, format_fixed(bonus, places)))
+    } else {
+        None
+    };
+    let wallet = match balance {
+        Some(have) => format!(
+            "{} {} {} {} {}",
+            copy.pull_need,
+            format_fixed(content.banners.cost.single as f32, places),
+            copy.pull_credits,
+            copy.pull_have,
+            format_fixed(have, places)
+        ),
+        None => copy.pull_needs_server.clone(),
+    };
+    BankLines { title, title_key, earned: earned_line, bonus: bonus_line, wallet }
+}
+
+fn paint_results(
+    rgb: &mut [u8],
+    content: &Content,
+    frame: Frame,
+    focus: usize,
+    show: BankShow,
+    waves: u32,
+    kills: u32,
+    seconds: f32,
+    earned: f32,
+    bonus: f32,
+    balance: Option<f32>,
+) -> Vec<Hit> {
     let ui = &content.ui;
-    let title = if victory { ui.copy.victory.as_str() } else { ui.copy.defeat.as_str() };
-    let color = if victory { &ui.colors.victory } else { &ui.colors.defeat };
-    draw_title_colored(rgb, content, frame, title, palette(content, color));
+    let lines = bank_lines(content, show, earned, bonus, balance);
+    let pw = frame.px(ui.layout.bank_panel_width);
+    let ph = frame.px(ui.layout.bank_panel_height);
+    let x = (frame.width as i32 - pw) / 2;
+    let y = (frame.height as i32 - ph) / 2;
+    let edge = palette(content, &lines.title_key);
+    let panel = bevel_of(content, frame, ui.layout.panel_radius, edge);
+    beveled(rgb, frame.width, frame.height, x, y, pw, ph, &panel);
     let rows = content.crate_reveal.layout.glyph_rows;
+    let glyph = content.crate_reveal.layout.title_glyph_px;
+    let mut ty = y + frame.px(ui.layout.margin_y);
+    draw_title_at(rgb, content, frame, &lines.title, ty, edge);
+    ty += (frame.text(ui.layout.title_scale) * rows) as i32 + frame.px(ui.layout.title_gap);
     let scale = frame.text(ui.layout.button_scale);
-    let mut y = frame.px(ui.layout.margin_y) + (frame.text(ui.layout.title_scale) * rows) as i32 + frame.px(ui.layout.title_gap);
     let mins = (seconds.max(0.0) as u32) / 60;
     let secs = (seconds.max(0.0) as u32) % 60;
-    let lines = [
-        format!("{} {}", ui.copy.waves, waves),
-        format!("{} {}", ui.copy.kills, kills),
-        format!("{} {}:{:02}", ui.copy.time, mins, secs),
-        format!("{} {}", ui.copy.currency, format_fixed(currency, ui.layout.currency_decimals)),
+    let mut rows_drawn = vec![
+        (format!("{} {}", ui.copy.waves, waves), ui.colors.text.clone()),
+        (format!("{} {}", ui.copy.kills, kills), ui.colors.text.clone()),
+        (format!("{} {}:{:02}", ui.copy.time, mins, secs), ui.colors.text.clone()),
+        (lines.earned.clone(), ui.colors.bank_count.clone()),
     ];
-    let glyph = content.crate_reveal.layout.title_glyph_px;
-    let paper = palette(content, &ui.colors.text);
-    for line in &lines {
-        let tw = measure(line, scale, glyph) as i32;
-        blit(rgb, frame.width, frame.height, (frame.width as i32 - tw) / 2, y, line, paper, scale, glyph);
-        y += (scale * rows) as i32 + frame.px(ui.layout.spacing_block);
+    if let Some(bonus_line) = &lines.bonus {
+        rows_drawn.push((bonus_line.clone(), ui.colors.bank_bonus.clone()));
     }
-    y += frame.px(ui.layout.row_gap);
+    rows_drawn.push((lines.wallet.clone(), ui.colors.text.clone()));
+    for (line, key) in &rows_drawn {
+        let tw = measure(line, scale, glyph) as i32;
+        blit(rgb, frame.width, frame.height, x + (pw - tw) / 2, ty, line, palette(content, key), scale, glyph);
+        ty += (scale * rows) as i32 + frame.px(ui.layout.spacing_block);
+    }
+    ty += frame.px(ui.layout.row_gap);
+    let button_w = frame.px(ui.layout.button_width);
+    let bx = x + (pw - button_w) / 2;
     let mut hits = Vec::new();
-    let again = button(rgb, content, frame, y, &ui.copy.play_again, focus == 0, None);
-    y = again.y + again.h + frame.px(ui.layout.row_gap);
+    let again_edge = if focus == 0 { edge } else { palette(content, &ui.colors.dim) };
+    let again = pause_button(rgb, content, frame, bx, ty, &ui.copy.play_again, again_edge);
+    ty = again.y + again.h + frame.px(ui.layout.row_gap);
     hits.push(Hit { id: "play_again".into(), ..again });
-    hits.push(Hit { id: "main_menu".into(), ..button(rgb, content, frame, y, &ui.copy.main_menu, focus == 1, None) });
+    let menu_edge = if focus == 1 { edge } else { palette(content, &ui.colors.dim) };
+    hits.push(Hit { id: "main_menu".into(), ..pause_button(rgb, content, frame, bx, ty, &ui.copy.main_menu, menu_edge) });
     hits
 }
 
@@ -1011,11 +1080,15 @@ mod tests {
         assert!(hits.iter().any(|hit| hit.id == "quit"));
     }
 
+    fn results(show: BankShow, earned: f32, bonus: f32, balance: Option<f32>) -> MenuShot {
+        MenuShot::Results { focus: 0, show, waves: 2, kills: 6, seconds: 40.0, earned, bonus, balance }
+    }
+
     #[test]
     fn results_title_uses_the_outcome_color() {
         let content = Content::embedded();
-        let victory = MenuShot::Results { focus: 0, victory: true, waves: 4, kills: 12, seconds: 90.0, currency: 40.0 };
-        let defeat = MenuShot::Results { focus: 0, victory: false, waves: 2, kills: 6, seconds: 40.0, currency: 10.0 };
+        let victory = MenuShot::Results { focus: 0, show: BankShow::Win, waves: 4, kills: 12, seconds: 90.0, earned: 40.0, bonus: 0.0, balance: Some(40.0) };
+        let defeat = MenuShot::Results { focus: 0, show: BankShow::End, waves: 2, kills: 6, seconds: 40.0, earned: 10.0, bonus: 0.0, balance: Some(10.0) };
         let (won, hits) = paint_menu(&content, &victory, 1280, 720);
         let (lost, _) = paint_menu(&content, &defeat, 1280, 720);
         assert_ne!(won, lost);
@@ -1024,11 +1097,46 @@ mod tests {
         let defeat_color = bytes(&content, &content.ui.colors.defeat);
         assert_eq!(defeat_color, bytes(&content, "spitter_glow"));
         assert!(lost.chunks(3).any(|px| px == defeat_color), "defeat title uses spitter_glow");
-        let whole = paint_menu(&content, &MenuShot::Results { focus: 0, victory: false, waves: 2, kills: 6, seconds: 40.0, currency: 40.0 }, 1280, 720).0;
-        let rounded = paint_menu(&content, &MenuShot::Results { focus: 0, victory: false, waves: 2, kills: 6, seconds: 40.0, currency: 40.4 }, 1280, 720).0;
-        let next = paint_menu(&content, &MenuShot::Results { focus: 0, victory: false, waves: 2, kills: 6, seconds: 40.0, currency: 41.0 }, 1280, 720).0;
+        let whole = paint_menu(&content, &results(BankShow::End, 40.0, 0.0, Some(40.0)), 1280, 720).0;
+        let rounded = paint_menu(&content, &results(BankShow::End, 40.4, 0.0, Some(40.0)), 1280, 720).0;
+        let next = paint_menu(&content, &results(BankShow::End, 41.0, 0.0, Some(40.0)), 1280, 720).0;
         assert_eq!(whole, rounded, "currency_decimals 0 drops the fraction");
         assert_ne!(whole, next);
+    }
+
+    #[test]
+    fn the_count_up_is_not_legendary_gold_and_a_quit_has_no_bonus_line() {
+        let content = Content::embedded();
+        let tier = content.tier(&content.ui.settings.default_difficulty).currency;
+        let quit_earned = gemini_sim::content::wave_payout(&content.currency, 1, tier);
+        let quit = bank_lines(&content, BankShow::Quit, quit_earned, 0.0, None);
+        assert!(quit.bonus.is_none());
+        assert_eq!(quit.wallet, content.ui.copy.pull_needs_server);
+        assert_eq!(quit.title, content.ui.copy.bank_quit);
+        let dropped = bank_lines(&content, BankShow::Disconnect, quit_earned, 0.0, None);
+        assert!(dropped.bonus.is_none());
+        assert_eq!(dropped.title, content.ui.copy.bank_disconnect);
+        let bonus = gemini_sim::content::win_payout(&content.currency, tier);
+        let won = bank_lines(&content, BankShow::Win, quit_earned + bonus, bonus, Some(content.banners.dev.starting_credits + quit_earned + bonus));
+        let bonus_line = won.bonus.expect("a win shows the bonus line");
+        assert!(bonus_line.starts_with(&content.ui.copy.bank_bonus));
+        assert!(won.wallet.contains(&content.ui.copy.pull_need));
+        assert!(won.wallet.contains(&content.ui.copy.pull_have));
+        let low = paint_menu(&content, &results(BankShow::End, 40.0, 0.0, Some(40.0)), 1280, 720).0;
+        let high = paint_menu(&content, &results(BankShow::End, 41.0, 0.0, Some(40.0)), 1280, 720).0;
+        let gold = bytes(&content, "rarity_legendary");
+        let count = bytes(&content, &content.ui.colors.bank_count);
+        assert_ne!(count, gold);
+        let mut saw_count = false;
+        for (before, after) in low.chunks(3).zip(high.chunks(3)) {
+            if before != after {
+                assert_ne!(after, gold, "the count-up does not use legendary gold");
+                if after == count {
+                    saw_count = true;
+                }
+            }
+        }
+        assert!(saw_count, "the counted digits use the bank count color");
     }
 
     #[test]
