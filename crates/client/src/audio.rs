@@ -765,8 +765,31 @@ pub fn admit_ui(audio: &gemini_sim::content::AudioTable, playing: &[Heard], aske
 pub fn menu_levels(prefs: Res<Prefs>, mut music: Option<ResMut<Music>>) {
     let Some(music) = music.as_mut() else { return };
     music.user_gain = bus_gain(&prefs, true);
-    music.duck_gain = 1.0;
     music.filter.0.set_hz(f32::INFINITY);
+}
+
+/// Linear music-bus gain while a crate reveal is on screen. `presentation.toml` `reveal_duck_db`.
+pub(crate) fn crate_reveal_duck() -> f32 {
+    db_to_gain(Content::embedded().presentation.reveal_duck_db)
+}
+
+/// Ease the music bus toward the reveal duck while a reveal is up, and back to full after it closes.
+/// A saved pull key does not duck the lobby. The ramp length is `reveal_duck_ramp`.
+pub fn ramp_reveal_duck(time: Res<Time>, state: Res<State<crate::AppState>>, mut music: Option<ResMut<Music>>) {
+    let Some(music) = music.as_mut() else { return };
+    let content = Content::embedded();
+    let ducked = crate_reveal_duck();
+    let target = if *state.get() == crate::AppState::Reveal { ducked } else { 1.0 };
+    let ramp = content.presentation.reveal_duck_ramp;
+    let step = (1.0 - ducked).abs() * (time.delta_secs() / ramp);
+    let delta = target - music.duck_gain;
+    if delta.abs() <= step {
+        music.duck_gain = target;
+    } else if delta > 0.0 {
+        music.duck_gain += step;
+    } else {
+        music.duck_gain -= step;
+    }
 }
 
 /// Solo pause stops game sounds. Co-op ducks them. UI cues and act-now warnings stay full.
@@ -794,11 +817,33 @@ pub fn hold_loops(hold: Res<PauseMenu>, game: Res<Game>, mut sinks: Query<(&OneS
     }
 }
 
-pub fn menu_theme(mut commands: Commands, assets: Res<AssetServer>) {
+pub fn menu_theme(mut commands: Commands, assets: Res<AssetServer>, existing: Option<ResMut<Music>>) {
+    if existing.as_ref().is_some_and(|music| music.track == "theme_main" && !music.entities.is_empty()) {
+        // The reveal left these stems running. Keep their playhead.
+        return;
+    }
     let content = Content::embedded();
-    let mut music = Music::default();
-    start_track(&mut commands, &assets, &content, &mut music, "theme_main");
-    commands.insert_resource(music);
+    if let Some(mut music) = existing {
+        start_track(&mut commands, &assets, &content, &mut music, "theme_main");
+    } else {
+        let mut music = Music::default();
+        start_track(&mut commands, &assets, &content, &mut music, "theme_main");
+        commands.insert_resource(music);
+    }
+}
+
+/// Leaving the menu for a reveal keeps the music bus. Every other exit stops it.
+pub fn leave_menu(
+    state: Res<State<crate::AppState>>,
+    commands: Commands,
+    music: Option<ResMut<Music>>,
+    crowd: Option<Res<Crowd>>,
+    shots: Query<Entity, Or<(With<OneShot>, With<CrowdVoice>, With<MusicStem>, With<BedStem>, With<PropLoop>)>>,
+) {
+    if *state.get() == crate::AppState::Reveal {
+        return;
+    }
+    stop_all(commands, music, crowd, shots);
 }
 
 pub fn stop_all(mut commands: Commands, music: Option<ResMut<Music>>, crowd: Option<Res<Crowd>>, shots: Query<Entity, Or<(With<OneShot>, With<CrowdVoice>, With<MusicStem>, With<BedStem>, With<PropLoop>)>>) {

@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use gemini_sim::PlayerInput;
 
-pub const PROTOCOL_VERSION: u32 = 2;
+/// 3 adds `CratePullRequest.seen`. A seen write is refused and does not touch the save.
+pub const PROTOCOL_VERSION: u32 = 3;
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
 /// Welcome seat when the joiner is queued for the next breather.
 pub const PENDING_SEAT: u32 = u32::MAX;
@@ -59,6 +60,8 @@ pub struct CratePullRequest {
     pub idempotency_key: String,
     /// Ten pods in one transaction. False is one pod.
     pub ten: bool,
+    /// A client must send false. True is a seen write, and the server rejects it.
+    pub seen: bool,
 }
 
 /// One pod the client renders. Roll order is the order of [`CratePullReply::pods`].
@@ -87,6 +90,8 @@ pub enum CratePullFault {
     Mismatch,
     /// The rolled rarity has no item in the catalog.
     Item,
+    /// The client tried to mark a pull seen. The server stores nothing.
+    Seen,
 }
 
 /// The host's answer to [`CratePullRequest`]. A later server sends the same bytes.

@@ -55,6 +55,7 @@ pub fn bits(ch: char) -> [u8; 7] {
         ',' => [0b00000, 0b00000, 0b00000, 0b00000, 0b00100, 0b00100, 0b01000],
         '/' => [0b00001, 0b00010, 0b00010, 0b00100, 0b01000, 0b01000, 0b10000],
         ';' => [0b00000, 0b00100, 0b00100, 0b00000, 0b00100, 0b00100, 0b01000],
+        '·' => [0b00000, 0b00000, 0b01100, 0b01100, 0b00000, 0b00000, 0b00000],
         _ => [0; 7],
     }
 }
@@ -69,6 +70,8 @@ mod tests {
             let ch = char::from_u32(code).unwrap();
             assert_eq!(covers(ch), gemini_sim::content::font_covers(ch), "{ch:?}");
         }
+        assert!(covers('·'));
+        assert_eq!(covers('·'), gemini_sim::content::font_covers('·'));
     }
 }
 

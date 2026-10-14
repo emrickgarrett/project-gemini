@@ -23,12 +23,14 @@ pub enum ExchangeError {
     Corrupt(String),
     Unreadable(String),
     Failed(String),
+    /// The account was written and the reply did not make it back. The client retries the same key.
+    Lost(String),
 }
 
 impl std::fmt::Display for ExchangeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Corrupt(message) | Self::Unreadable(message) | Self::Failed(message) => f.write_str(message),
+            Self::Corrupt(message) | Self::Unreadable(message) | Self::Failed(message) | Self::Lost(message) => f.write_str(message),
         }
     }
 }
@@ -82,8 +84,25 @@ fn exchange_with(path: &Path, content: &Content, request: &[u8]) -> Result<Vec<u
     let packet = Packet::decode(request).map_err(|err| ExchangeError::Failed(format!("host request is not a proto packet: {err}")))?;
     let mut account = load_or_create(path, content)?;
     let reply = answer(&mut account, content, &packet)?;
-    write_account(path, &account, content)?;
-    reply.encode().map_err(|err| ExchangeError::Failed(format!("could not encode the host reply: {err}")))
+    let seen_only = matches!(&reply, Packet::CratePullReply(row) if matches!(row.fault, Some(CratePullFault::Seen)));
+    if !seen_only {
+        write_account(path, &account, content)?;
+    }
+    encode_saved_reply(&reply)
+}
+
+/// The account is already on disk. An encode failure here is `Lost`, not a clean refusal.
+fn encode_saved_reply(reply: &Packet) -> Result<Vec<u8>, ExchangeError> {
+    #[cfg(test)]
+    if FAIL_REPLY_ENCODE.with(|flag| flag.replace(false)) {
+        return Err(ExchangeError::Lost("could not encode the host reply after the account was saved".into()));
+    }
+    reply.encode().map_err(|err| ExchangeError::Lost(format!("could not encode the host reply: {err}")))
+}
+
+#[cfg(test)]
+thread_local! {
+    static FAIL_REPLY_ENCODE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 fn books() -> Result<MutexGuard<'static, MatchBook>, ExchangeError> {
@@ -125,6 +144,17 @@ pub fn answer(account: &mut Account, content: &Content, packet: &Packet) -> Resu
 }
 
 fn answer_pull(account: &mut Account, content: &Content, request: &gemini_proto::CratePullRequest) -> Result<Packet, ExchangeError> {
+    if request.seen {
+        return Ok(Packet::CratePullReply(pull_reply(
+            account,
+            request.ten,
+            None,
+            None,
+            Vec::new(),
+            false,
+            Some(CratePullFault::Seen),
+        )));
+    }
     if request.version != PROTOCOL_VERSION {
         return Err(ExchangeError::Failed(format!(
             "crate pull version {} does not match {PROTOCOL_VERSION}",
@@ -287,6 +317,8 @@ fn write_account(path: &Path, account: &Account, content: &Content) -> Result<()
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::fs::MetadataExt;
+
     use super::*;
     use gemini_proto::{BankFault, BankRequest, CratePullRequest, Packet};
 
@@ -307,6 +339,7 @@ mod tests {
             banner: banner.to_string(),
             idempotency_key: key.to_string(),
             ten,
+            seen: false,
         })
         .encode()
         .unwrap()
@@ -542,6 +575,61 @@ mod tests {
         assert!((second.balance - first.balance).abs() < 1e-3);
         let still = Account::from_bytes(&fs::read(&path).unwrap(), &content).unwrap();
         assert!((still.credits() - first.balance).abs() < 1e-3);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_server_rejects_a_seen_write() {
+        let dir = scratch("seen");
+        let path = dir.join("account.bin");
+        let content = Content::embedded();
+        let banner = content.banners.id.clone();
+        let first = Packet::decode(&exchange_at(&path, &request(&banner, "real")).unwrap()).unwrap();
+        let Packet::CratePullReply(first) = first else { panic!("reply") };
+        assert!(first.fault.is_none(), "{first:?}");
+        let before = fs::read(&path).unwrap();
+        let seen = Packet::CratePull(CratePullRequest {
+            version: PROTOCOL_VERSION,
+            banner,
+            idempotency_key: "seen-key".into(),
+            ten: true,
+            seen: true,
+        })
+        .encode()
+        .unwrap();
+        let packet = Packet::decode(&exchange_at(&path, &seen).unwrap()).unwrap();
+        let Packet::CratePullReply(reply) = packet else { panic!("reply") };
+        assert!(matches!(reply.fault, Some(CratePullFault::Seen)), "{reply:?}");
+        assert!(reply.pods.is_empty());
+        assert!(!reply.fresh);
+        assert!((reply.credits - first.credits).abs() < 1e-3, "a seen write does not charge");
+        assert_eq!(fs::read(&path).unwrap(), before, "a seen write does not touch the save");
+        let inode = fs::metadata(&path).unwrap().ino();
+        let again = Packet::decode(&exchange_at(&path, &seen).unwrap()).unwrap();
+        let Packet::CratePullReply(again) = again else { panic!("reply") };
+        assert!(matches!(again.fault, Some(CratePullFault::Seen)), "{again:?}");
+        assert_eq!(fs::metadata(&path).unwrap().ino(), inode, "a seen request does not rewrite the save");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_encode_failure_after_write_account_is_lost_and_the_pull_stays() {
+        let dir = scratch("encode-lost");
+        let path = dir.join("account.bin");
+        let content = Content::embedded();
+        let banner = content.banners.id.clone();
+        let cost = content.banners.cost.single as f32;
+        FAIL_REPLY_ENCODE.with(|flag| flag.set(true));
+        let err = exchange_at(&path, &request(&banner, "saved-key")).unwrap_err();
+        assert!(matches!(err, ExchangeError::Lost(_)), "{err}");
+        let saved = Account::from_bytes(&fs::read(&path).unwrap(), &content).unwrap();
+        let left = content.banners.dev.starting_credits - cost;
+        assert!((saved.credits() - left).abs() < 1e-3, "the pull was saved before the reply encode failed");
+        let replay = Packet::decode(&exchange_at(&path, &request(&banner, "saved-key")).unwrap()).unwrap();
+        let Packet::CratePullReply(replay) = replay else { panic!("reply") };
+        assert!(replay.fault.is_none(), "{replay:?}");
+        assert!(!replay.fresh, "the lost encode still committed the key");
+        assert!((replay.credits - saved.credits()).abs() < 1e-3, "the retry does not charge again");
         let _ = fs::remove_dir_all(&dir);
     }
 }

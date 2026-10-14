@@ -37,6 +37,19 @@ fn main() {
         width,
         height,
     );
+    write(
+        out.join("connection_lost.png"),
+        &paint_grid(
+            &content,
+            &GridStill { items: &one, ready: true, again: true, focus: 0, shortfall: "", failure: &content.ui.copy.connection_lost },
+            width,
+            height,
+        )
+        .expect("connection lost")
+        .0,
+        width,
+        height,
+    );
 
     let mut cards = vec![GridCard { rarity: "common".into(), fakeout: None, item: visor.clone() }; pods];
     cards[pods / 2].rarity = "legendary".into();
@@ -60,11 +73,26 @@ fn main() {
             failed: false,
             credits: Some(content.banners.cost.single as f32 / 2.0),
             reason: String::new(),
+            show_last: false,
         },
         width,
         height,
     );
     write(out.join("no_credits.png"), &short, width, height);
+    let (last, _) = paint_menu(
+        &content,
+        &MenuShot::Crates {
+            focus: 0,
+            rarity: None,
+            failed: false,
+            credits: Some(content.banners.cost.single as f32 / 2.0),
+            reason: String::new(),
+            show_last: true,
+        },
+        width,
+        height,
+    );
+    write(out.join("show_last_pull.png"), &last, width, height);
 }
 
 fn write(path: std::path::PathBuf, rgb: &[u8], width: u32, height: u32) {

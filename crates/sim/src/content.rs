@@ -184,6 +184,7 @@ impl Content {
         validate_reveal_cues(&crate_reveal, &audio)?;
         validate_reveal_layout(&crate_reveal)?;
         let presentation: Presentation = parse("presentation.toml", src.presentation)?;
+        validate_reveal_duck(&presentation)?;
         validate_away_hud(&presentation.hud.away)?;
         let ui = load_ui(src.ui)?;
         let controller: Controller = parse("controller.toml", src.controller)?;
@@ -554,6 +555,16 @@ fn validate_host_away_cues(audio: &AudioTable, coop: &CoopRules) -> Result<(), S
         return Err(format!(
             "audio_mix.toml host_back sync_at {sync_at} must match resume_countdown_seconds {countdown} within one sim frame"
         ));
+    }
+    Ok(())
+}
+
+fn validate_reveal_duck(presentation: &Presentation) -> Result<(), String> {
+    if !(presentation.reveal_duck_db <= 0.0 && presentation.reveal_duck_db >= -60.0) {
+        return Err("presentation.toml reveal_duck_db must be in [-60, 0]".into());
+    }
+    if !(presentation.reveal_duck_ramp.is_finite() && presentation.reveal_duck_ramp > 0.0) {
+        return Err("presentation.toml reveal_duck_ramp must be positive".into());
     }
     Ok(())
 }
@@ -4038,6 +4049,10 @@ pub struct Presentation {
     pub view_bob_hz: f32,
     pub pad_magnetism_blend: f32,
     pub pitch_limit_deg: f32,
+    /// Music bus while a crate reveal is on screen, in dB. Not the host-away duck.
+    pub reveal_duck_db: f32,
+    /// Seconds to ramp to `reveal_duck_db` and back to full.
+    pub reveal_duck_ramp: f32,
     pub hud: HudPresentation,
 }
 
@@ -4612,6 +4627,23 @@ pub struct RevealLayout {
     pub divider_blend: f32,
     pub gem_edge_blend: f32,
     pub crack_glow_blend: f32,
+    /// Card divider width is `face * rule_num / rule_den`.
+    pub rule_num: u32,
+    pub rule_den: u32,
+    /// Dropped crate width is the frame width divided by this.
+    pub crate_w_div: u32,
+    /// Smallest dropped crate, in pixels.
+    pub crate_w_min: u32,
+    /// Crack length as a fraction of the crate width, times the crack amount.
+    pub crack_reach: f32,
+    /// Crack origin as a fraction of the crate height.
+    pub crack_mid: f32,
+    /// Core of a crack, mixed from the tier color toward the light.
+    pub crack_hot_blend: f32,
+    /// `(dx, dy)` pairs. Each ray is drawn both ways from the crate midline.
+    pub crack_rays: Vec<[f32; 2]>,
+    /// Pixels kept between a failure line and the bottom of the frame.
+    pub failure_clear: f32,
     pub stage: String,
     pub ink_dark: String,
     pub ink_light: String,
@@ -4699,6 +4731,32 @@ fn validate_reveal_panel(layout: &RevealLayout) -> Result<(), String> {
     }
     if !(layout.stage_lift_pow > 0.0) || !(layout.stage_vignette_pow > 0.0) {
         return Err("crate_reveal.toml layout stage_lift_pow and stage_vignette_pow must be > 0".into());
+    }
+    if layout.rule_den == 0 || layout.rule_num == 0 || layout.rule_num > layout.rule_den {
+        return Err("crate_reveal.toml layout rule_num / rule_den must be a fraction in (0, 1]".into());
+    }
+    if layout.crate_w_div == 0 || layout.crate_w_min == 0 {
+        return Err("crate_reveal.toml layout crate_w_div and crate_w_min must be > 0".into());
+    }
+    if !(layout.crack_reach > 0.0 && layout.crack_reach <= 1.0) {
+        return Err("crate_reveal.toml layout crack_reach must be in (0, 1]".into());
+    }
+    if !(layout.crack_mid > 0.0 && layout.crack_mid < 1.0) {
+        return Err("crate_reveal.toml layout crack_mid must be in (0, 1)".into());
+    }
+    if !(layout.crack_hot_blend > 0.0 && layout.crack_hot_blend <= 1.0) {
+        return Err("crate_reveal.toml layout crack_hot_blend must be in (0, 1]".into());
+    }
+    if layout.crack_rays.is_empty() {
+        return Err("crate_reveal.toml layout crack_rays is empty".into());
+    }
+    for ray in &layout.crack_rays {
+        if !ray[0].is_finite() || !ray[1].is_finite() {
+            return Err("crate_reveal.toml layout crack_rays must be finite".into());
+        }
+    }
+    if !(layout.failure_clear > 0.0) {
+        return Err("crate_reveal.toml layout failure_clear must be > 0".into());
     }
     Ok(())
 }
@@ -5182,7 +5240,7 @@ pub fn font_covers(ch: char) -> bool {
     };
     matches!(
         ch,
-        ' ' | 'A'..='Z' | '0'..='9' | '+' | '-' | '%' | ':' | '.' | ',' | '/' | ';'
+        ' ' | 'A'..='Z' | '0'..='9' | '+' | '-' | '%' | ':' | '.' | ',' | '/' | ';' | '·'
     )
 }
 
@@ -5315,7 +5373,9 @@ pub struct UiCopy {
     pub crates_open: String,
     pub crates_continue: String,
     pub crates_pull_again: String,
+    pub crates_show_last: String,
     pub pull_failed: String,
+    pub connection_lost: String,
     pub pull_need: String,
     pub pull_more: String,
     pub pull_have: String,
@@ -6022,6 +6082,7 @@ fn validate_ui(
         &ui.copy.crates_open,
         &ui.copy.crates_continue,
         &ui.copy.crates_pull_again,
+        &ui.copy.crates_show_last,
         &ui.copy.on,
         &ui.copy.off,
     ];
@@ -6275,6 +6336,57 @@ mod ten_pull_keys {
         sources.crate_reveal = &flip_cue;
         let err = Content::parse(&sources).expect_err("the failure cue is not the flip");
         assert!(err.contains("chime") && err.contains("flip"), "{err}");
+
+        let missing_rule_num = src.crate_reveal.replace("rule_num = 2\n", "");
+        assert_ne!(missing_rule_num, src.crate_reveal);
+        sources.crate_reveal = &missing_rule_num;
+        let err = Content::parse(&sources).expect_err("rule_num is required");
+        assert!(err.contains("rule_num"), "{err}");
+
+        let missing_crate = src.crate_reveal.replace("crate_w_div = 6\n", "");
+        assert_ne!(missing_crate, src.crate_reveal);
+        sources.crate_reveal = &missing_crate;
+        let err = Content::parse(&sources).expect_err("crate_w_div is required");
+        assert!(err.contains("crate_w_div"), "{err}");
+
+        let missing_rays = src.crate_reveal.replace("crack_reach = 0.62\n", "");
+        assert_ne!(missing_rays, src.crate_reveal);
+        sources.crate_reveal = &missing_rays;
+        let err = Content::parse(&sources).expect_err("crack_reach is required");
+        assert!(err.contains("crack_reach"), "{err}");
+
+        let missing_clear = src.crate_reveal.replace("failure_clear = 28.0\n", "");
+        assert_ne!(missing_clear, src.crate_reveal);
+        sources.crate_reveal = &missing_clear;
+        let err = Content::parse(&sources).expect_err("failure_clear is required");
+        assert!(err.contains("failure_clear"), "{err}");
+
+        let missing_lost = src.ui.replace("connection_lost = \"CONNECTION LOST, RETRY\"\n", "");
+        assert_ne!(missing_lost, src.ui);
+        sources.crate_reveal = src.crate_reveal;
+        sources.ui = &missing_lost;
+        let err = Content::parse(&sources).expect_err("connection_lost is required");
+        assert!(err.contains("connection_lost"), "{err}");
+        sources.ui = src.ui;
+
+        let missing_show = src.ui.replace("crates_show_last = \"SHOW LAST PULL\"\n", "");
+        assert_ne!(missing_show, src.ui);
+        sources.ui = &missing_show;
+        let err = Content::parse(&sources).expect_err("crates_show_last is required");
+        assert!(err.contains("crates_show_last"), "{err}");
+        sources.ui = src.ui;
+
+        let missing_duck = src.presentation.replace("reveal_duck_db = -12.0\n", "");
+        assert_ne!(missing_duck, src.presentation);
+        sources.presentation = &missing_duck;
+        let err = Content::parse(&sources).expect_err("reveal_duck_db is required");
+        assert!(err.contains("reveal_duck_db"), "{err}");
+        let missing_ramp = src.presentation.replace("reveal_duck_ramp = 0.25\n", "");
+        assert_ne!(missing_ramp, src.presentation);
+        sources.presentation = &missing_ramp;
+        let err = Content::parse(&sources).expect_err("reveal_duck_ramp is required");
+        assert!(err.contains("reveal_duck_ramp"), "{err}");
+        sources.presentation = src.presentation;
 
         let rarity_ink = src.crate_reveal.replace("failure_ink = \"reveal_paper\"", "failure_ink = \"rarity_legendary\"");
         sources.crate_reveal = &rarity_ink;

@@ -29,7 +29,11 @@ pub enum RevealShow {
 }
 
 #[derive(Resource)]
-pub struct RevealPlayback(pub RevealShow);
+pub struct RevealPlayback {
+    pub show: RevealShow,
+    /// Idempotency key this playback is showing. Empty on a refund.
+    pub key: String,
+}
 
 /// Where Enter returns after the card. The crates screen stays on its route.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -103,13 +107,15 @@ pub fn drive(
     mut crate_box: ResMut<flow::ServerCrate>,
     voices: Query<Entity, With<RevealVoice>>,
     roots: Query<Entity, With<RevealRoot>>,
-    prefs: Option<Res<Prefs>>,
+    mut prefs: ResMut<Prefs>,
 ) {
     let content = Content::embedded();
     let dt = time.delta_secs();
-    let bus = prefs.as_ref().map(|prefs| crate::audio::bus_gain(prefs, false)).unwrap_or(1.0);
+    let bus = crate::audio::bus_gain(&prefs, false);
     let gen = crate_box.reveal_gen;
-    match &mut playback.0 {
+    let showing = playback.key.clone();
+    let in_flight = crate_box.pull_busy;
+    match &mut playback.show {
         RevealShow::Single(run) => {
             let skip = keys.just_pressed(KeyCode::Space) || mouse.just_pressed(MouseButton::Left);
             if skip {
@@ -121,9 +127,12 @@ pub fn drive(
             for id in cues {
                 play_cue(&mut commands, &assets, &content, &id, bus, gen);
             }
-            if run.time >= run.plan.card_at && keys.just_pressed(KeyCode::Enter) {
-                next.set(AppState::Menu);
-                return;
+            if run.time >= run.plan.card_at {
+                flow::mark_pull_seen(&mut prefs, &showing, in_flight);
+                if keys.just_pressed(KeyCode::Enter) {
+                    next.set(AppState::Menu);
+                    return;
+                }
             }
             for entity in &roots {
                 commands.entity(entity).despawn();
@@ -143,6 +152,9 @@ pub fn drive(
                 play_cue(&mut commands, &assets, &content, &id, bus, gen);
             }
             crate_box.buttons_ready = run.finished();
+            if run.finished() {
+                flow::mark_pull_seen(&mut prefs, &showing, in_flight);
+            }
         }
         RevealShow::Refund(run) => {
             let cues = run.advance(dt);
@@ -234,6 +246,7 @@ pub fn paint(
     mut commands: Commands,
     playback: Option<Res<RevealPlayback>>,
     crate_box: Res<flow::ServerCrate>,
+    prefs: Res<Prefs>,
     focus: Res<flow::Focus>,
     mut hits: ResMut<flow::Hits>,
     mut cached: Option<ResMut<PaintKey>>,
@@ -248,7 +261,7 @@ pub fn paint(
         commands.remove_resource::<PaintKey>();
         return;
     };
-    if matches!(playback.0, RevealShow::Single(_)) {
+    if matches!(playback.show, RevealShow::Single(_)) {
         return;
     }
     let content = Content::embedded();
@@ -257,11 +270,12 @@ pub fn paint(
         .ok()
         .map(|window| (window.width().max(8.0) as u32, window.height().max(8.0) as u32))
         .unwrap_or((content.ui.layout.fit_width.round() as u32, content.ui.layout.fit_height.round() as u32));
-    let afford = ten_affordable(&content, crate_box.credits);
+    let owed = !prefs.pull_key.is_empty() && prefs.pull_seen_keys.iter().all(|row| row != &prefs.pull_key);
+    let afford = owed || ten_affordable(&content, crate_box.credits);
     let shortfall = if afford { String::new() } else { ten_shortfall(&content, crate_box.credits) };
     let again = afford && !crate_box.pull_busy;
     let failure = crate_box.reason.clone();
-    let (kind, items, ready) = match &playback.0 {
+    let (kind, items, ready) = match &playback.show {
         RevealShow::Single(_) => return,
         RevealShow::Grid(run) => {
             let shown: Vec<String> = (0..run.plan.cards.len()).map(|index| run.shown_item(index).unwrap_or("").to_string()).collect();
@@ -284,7 +298,7 @@ pub fn paint(
         return;
     }
     clear_roots(&mut commands, &roots);
-    let painted = match &playback.0 {
+    let painted = match &playback.show {
         RevealShow::Single(_) => return,
         RevealShow::Grid(_) => {
             let faces: Vec<Option<&str>> = items.iter().map(|item| if item.is_empty() { None } else { Some(item.as_str()) }).collect();

@@ -19,6 +19,15 @@ pub struct Prefs {
     pub effects: f32,
     pub character: Option<String>,
     pub difficulty: Option<String>,
+    /// Idempotency key of the pull this client has not finished watching. Empty means none.
+    /// The best card flipping clears it. That is the seen state, and it lives only in this file.
+    pub pull_key: String,
+    /// True when `pull_key` was a ten-pull.
+    pub pull_ten: bool,
+    /// True when the last send of `pull_key` never got a reply. The next press reuses the key.
+    pub pull_awaiting: bool,
+    /// Keys whose best card has already flipped on this client. Capped by `saved.max_keys`.
+    pub pull_seen_keys: Vec<String>,
 }
 
 pub enum Loaded {
@@ -42,12 +51,16 @@ impl Prefs {
             effects: settings.effects,
             character: None,
             difficulty: None,
+            pull_key: String::new(),
+            pull_ten: false,
+            pull_awaiting: false,
+            pull_seen_keys: Vec::new(),
         }
     }
 
     pub fn encode(&self) -> String {
         format!(
-            "sensitivity = {}\nfov = {}\ninvert_y = {}\nview_bob = {}\nmaster = {}\nmusic = {}\neffects = {}\ncharacter = {}\ndifficulty = {}\n",
+            "sensitivity = {}\nfov = {}\ninvert_y = {}\nview_bob = {}\nmaster = {}\nmusic = {}\neffects = {}\ncharacter = {}\ndifficulty = {}\npull_key = {}\npull_ten = {}\npull_awaiting = {}\npull_seen_keys = {}\n",
             self.sensitivity,
             self.fov,
             self.invert_y,
@@ -57,8 +70,17 @@ impl Prefs {
             self.effects,
             quote_opt(self.character.as_deref()),
             quote_opt(self.difficulty.as_deref()),
+            quote_opt(Some(self.pull_key.as_str())),
+            self.pull_ten,
+            self.pull_awaiting,
+            quote_list(&self.pull_seen_keys),
         )
     }
+}
+
+fn quote_list(values: &[String]) -> String {
+    let parts: Vec<String> = values.iter().map(|value| format!("\"{}\"", value.replace('"', ""))).collect();
+    format!("[{}]", parts.join(", "))
 }
 
 fn quote_opt(value: Option<&str>) -> String {
@@ -116,7 +138,47 @@ pub fn parse_prefs(text: &str, content: &Content) -> Result<Prefs, String> {
     prefs.effects = ranged(table, "effects", settings.volume_min, settings.volume_max)?;
     prefs.character = remembered_hero(table, content)?;
     prefs.difficulty = remembered_tier(table, content)?;
+    // Pull fields arrived after the first settings files. A missing key keeps the old
+    // sliders. A present key of the wrong type still rejects the whole file.
+    prefs.pull_key = optional_text(table, "pull_key")?.unwrap_or_default();
+    prefs.pull_ten = optional_flag(table, "pull_ten")?.unwrap_or(false);
+    prefs.pull_awaiting = optional_flag(table, "pull_awaiting")?.unwrap_or(false);
+    prefs.pull_seen_keys = optional_list(table, "pull_seen_keys")?.unwrap_or_default();
     Ok(prefs)
+}
+
+fn optional_text(table: &toml::map::Map<String, toml::Value>, key: &str) -> Result<Option<String>, String> {
+    let Some(value) = table.get(key) else {
+        return Ok(None);
+    };
+    value
+        .as_str()
+        .map(|text| Some(text.to_string()))
+        .ok_or_else(|| format!("settings {key} is not a string"))
+}
+
+fn optional_flag(table: &toml::map::Map<String, toml::Value>, key: &str) -> Result<Option<bool>, String> {
+    let Some(value) = table.get(key) else {
+        return Ok(None);
+    };
+    value.as_bool().map(Some).ok_or_else(|| format!("settings {key} is not a bool"))
+}
+
+fn optional_list(table: &toml::map::Map<String, toml::Value>, key: &str) -> Result<Option<Vec<String>>, String> {
+    let Some(value) = table.get(key) else {
+        return Ok(None);
+    };
+    let Some(items) = value.as_array() else {
+        return Err(format!("settings {key} is not a list"));
+    };
+    let mut out = Vec::new();
+    for item in items {
+        let Some(text) = item.as_str() else {
+            return Err(format!("settings {key} is not a list of strings"));
+        };
+        out.push(text.to_string());
+    }
+    Ok(Some(out))
 }
 
 fn ranged(table: &toml::map::Map<String, toml::Value>, key: &str, min: f32, max: f32) -> Result<f32, String> {
@@ -180,16 +242,19 @@ pub fn load_saved(content: &Content) -> Loaded {
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn store(content: &Content, prefs: &Prefs) {
+pub fn store(content: &Content, prefs: &Prefs) -> Result<(), String> {
     let key = content.ui.settings.settings_key.as_str();
-    if let Some(storage) = web_sys::window().and_then(|window| window.local_storage().ok().flatten()) {
-        let _ = storage.set_item(key, &prefs.encode());
-    }
+    let storage = web_sys::window()
+        .and_then(|window| window.local_storage().ok().flatten())
+        .ok_or_else(|| "settings storage is missing".to_string())?;
+    storage
+        .set_item(key, &prefs.encode())
+        .map_err(|err| format!("settings save failed: {err:?}"))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub fn store(content: &Content, prefs: &Prefs) {
-    let _ = save_path(&default_path(content), prefs);
+pub fn store(content: &Content, prefs: &Prefs) -> Result<(), String> {
+    save_path(&default_path(content), prefs)
 }
 
 #[cfg(test)]
@@ -235,6 +300,29 @@ mod tests {
         let low = text.replace("master = 0.5", "master = -0.1");
         assert!(parse_prefs(&low, &content).is_err());
         assert!(parse_prefs("fov = 90", &content).is_err(), "missing keys");
+        let old = text
+            .replace("pull_key = \"\"\n", "")
+            .replace("pull_ten = false\n", "")
+            .replace("pull_awaiting = false\n", "")
+            .replace("pull_seen_keys = []\n", "");
+        let upgraded = parse_prefs(&old, &content).expect("an old file keeps its sliders");
+        assert_eq!(upgraded.fov, prefs.fov);
+        assert!(upgraded.pull_key.is_empty());
+        assert!(!upgraded.pull_ten);
+        assert!(!upgraded.pull_awaiting);
+        assert!(upgraded.pull_seen_keys.is_empty());
+        let bad_key = text.replace("pull_key = \"\"", "pull_key = 4");
+        assert!(parse_prefs(&bad_key, &content).is_err(), "a mistyped pull key rejects the file");
+        let mut unseen = prefs.clone();
+        unseen.pull_key = "0123456789abcdef0123456789abcdef".into();
+        unseen.pull_ten = true;
+        unseen.pull_awaiting = true;
+        unseen.pull_seen_keys = vec!["older".into()];
+        let loaded = parse_prefs(&unseen.encode(), &content).expect("unseen pull round trip");
+        assert_eq!(loaded.pull_key, unseen.pull_key);
+        assert!(loaded.pull_ten);
+        assert!(loaded.pull_awaiting);
+        assert_eq!(loaded.pull_seen_keys, vec!["older".to_string()]);
         assert!(parse_prefs("not toml", &content).is_err());
 
         let unknown_hero = text.replace(&format!("character = \"{}\"", content.hero.id), "character = \"nope\"");
