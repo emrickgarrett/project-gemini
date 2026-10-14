@@ -12,8 +12,12 @@ hit_reserve = 3
 # stealable voice (then the farthest, then the voice id) and waits the same way.
 # Stealable prop loops count in the live cap and can be taken. The bed and the
 # crowd loop are not stealable, so they are never that voice.
+# A stolen loop waits. The next free voice resumes the loop nearest the listener.
+# Equal distance keeps the lower voice id. Playback seeks to the loop position
+# it had reached and fades in over loop_resume_fade.
 # The crowd loop is reserved every frame, whether or not swarmers are near.
 warning_fade = 0.030
+loop_resume_fade = 0.3
 critical = ["spitter_charge", "player_downed", "wave_start", "brood_roar", "tyrant_roar"]
 # UI bus cues. They do not take a voice_cap slot.
 outside_voice_cap = ["ui_count_tick", "ui_bank_chime"]

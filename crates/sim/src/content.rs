@@ -4758,6 +4758,8 @@ pub struct AudioTable {
     pub hit_reserve: usize,
     /// Seconds a replaced warning voice spends fading out.
     pub warning_fade: f32,
+    /// Seconds a stolen loop fades back in when a voice frees.
+    pub loop_resume_fade: f32,
     pub crowd_radius: f32,
     pub crowd_full_count: u32,
     pub min_distance: f32,
@@ -4807,7 +4809,7 @@ pub struct SfxDef {
     /// True when the mix row's category is `ui`. Menu cues must be this category.
     pub category_ui: bool,
     /// A full voice list may stop this voice to make room.
-    /// UI admission only stops non-looping rows. A warning may take a stealable prop loop.
+    /// The mix row is the only source. A warning may take a stealable prop loop.
     pub stealable: bool,
     /// Telegraphs and other cues that must play out. Loading rejects a warning that is stealable.
     pub is_warning: bool,
