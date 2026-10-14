@@ -34,7 +34,7 @@ pub struct LiveVoice {
     /// Content priority this voice was played at. Teammate steps use `footstep.remote_priority`.
     pub priority: i32,
     /// A fade still holds its slot until it ends. A warning holds its row slot.
-    /// A stolen one-shot holds its place in the voice cap.
+    /// A stolen one-shot or stealable prop loop holds its place in the voice cap.
     pub fading: bool,
 }
 
@@ -126,7 +126,10 @@ pub fn select_voices(
     });
     let sorted = shots;
     let (warnings, mut fade, warning_slots) = admit_warnings(audio, &sorted, playing, listener, waiting);
-    let crowd_slots = voices.iter().filter(|voice| voice.crowd).count();
+    // The crowd loop keeps playing when no swarmer is in range, so the slot is
+    // held every frame. One-shots cannot fill it and overflow when the swarm arrives.
+    let heard_crowd = voices.iter().filter(|voice| voice.crowd).count();
+    let crowd_slots = heard_crowd.max(reserved_crowd_slots(audio));
     let (warnings, warning_slots) = fit_warnings(
         audio,
         listener,
@@ -153,11 +156,17 @@ pub fn select_voices(
             true
         })
         .collect();
+    let (continuing, rest): (Vec<Voice>, Vec<Voice>) = rest.into_iter().partition(|voice| {
+        continues_live_loop(audio, voice, playing, &fade)
+    });
     voices.extend(warnings);
+    // Loops already sounding are kept here and are not taken out of `room` again.
+    voices.extend(continuing);
     // One-shots already sounding are not in `voices`. Warnings are `warning_slots`.
     // A warning that did not fit is waiting on a fade, so it is not in either count.
-    let live_oneshots = playing.iter().filter(|voice| is_live_oneshot(audio, voice)).count();
-    let used = crowd_slots + warning_slots + live_oneshots;
+    // Stealable prop loops already sounding are in `live`, including while they fade.
+    let live = playing.iter().filter(|voice| occupies_voice(audio, voice)).count();
+    let used = crowd_slots + warning_slots + live;
     let room = audio.voice_cap.saturating_sub(used);
     voices.extend(rest.into_iter().take(room));
     // Critical cues that the cap dropped still play. Warning rows stay on their own cap,
@@ -299,8 +308,9 @@ fn admit_warnings(
     (play, fade, slots)
 }
 
-/// Warnings that fit in the voice cap start. The rest take a live stealable one-shot
+/// Warnings that fit in the voice cap start. The rest take a live stealable voice
 /// and wait out its fade, the same way a replacement newcomer waits on its row.
+/// A stealable prop loop is a victim. The bed and the crowd loop are not.
 /// The victim order is the content priority, then the farthest voice, then the id.
 fn fit_warnings(
     audio: &AudioTable,
@@ -315,12 +325,12 @@ fn fit_warnings(
     if warnings.len() > warning_slots {
         panic!("started warnings exceed warning slots");
     }
-    let live_oneshots = playing.iter().filter(|voice| is_live_oneshot(audio, voice)).count();
+    let live = playing.iter().filter(|voice| occupies_voice(audio, voice)).count();
     let already = warning_slots - warnings.len();
-    let mut used = crowd_slots + already + live_oneshots;
+    let mut used = crowd_slots + already + live;
     let mut reserved = playing
         .iter()
-        .filter(|voice| is_stealable_oneshot(audio, voice) && voice.fading)
+        .filter(|voice| is_stealable_voice(audio, voice) && voice.fading)
         .count();
     let mut victims = steal_order(audio, listener, playing);
     let mut started = Vec::new();
@@ -358,7 +368,7 @@ struct StealCandidate {
 fn steal_order(audio: &AudioTable, listener: Vec3, playing: &[LiveVoice]) -> Vec<StealCandidate> {
     let mut victims: Vec<StealCandidate> = playing
         .iter()
-        .filter(|voice| is_stealable_oneshot(audio, voice) && !voice.fading)
+        .filter(|voice| is_stealable_voice(audio, voice) && !voice.fading)
         .map(|voice| StealCandidate {
             distance: distance(voice.pos, listener),
             voice: voice.clone(),
@@ -410,22 +420,51 @@ fn budget_voices(sfx: &[SfxDef], keep: impl Fn(&SfxDef) -> bool) -> Result<u32, 
     Ok(sum)
 }
 
-fn is_live_oneshot(audio: &AudioTable, voice: &LiveVoice) -> bool {
-    let def = audio
-        .sfx
-        .iter()
-        .find(|row| row.id == voice.id)
-        .unwrap_or_else(|| panic!("playing voice {} is not in the mix", voice.id));
-    !def.is_warning && !def.looped
+/// One-shots and stealable loops hold a voice-cap slot. Warnings are counted on
+/// their own. The bed, the crowd loop, and any other non-stealable loop do not.
+fn occupies_voice(audio: &AudioTable, voice: &LiveVoice) -> bool {
+    let def = voice_def(audio, &voice.id);
+    if def.is_warning {
+        return false;
+    }
+    if def.looped {
+        return def.stealable;
+    }
+    true
 }
 
-fn is_stealable_oneshot(audio: &AudioTable, voice: &LiveVoice) -> bool {
-    let def = audio
+fn is_stealable_voice(audio: &AudioTable, voice: &LiveVoice) -> bool {
+    let def = voice_def(audio, &voice.id);
+    def.stealable && !def.is_warning
+}
+
+fn continues_live_loop(audio: &AudioTable, voice: &Voice, playing: &[LiveVoice], fading: &[LiveVoice]) -> bool {
+    let def = voice_def(audio, &voice.id);
+    if !(def.stealable && def.looped && !def.is_warning) {
+        return false;
+    }
+    if fading.iter().any(|gone| gone.id == voice.id && gone.pos == voice.pos) {
+        return false;
+    }
+    playing
+        .iter()
+        .any(|live| !live.fading && live.id == voice.id && live.pos == voice.pos)
+}
+
+fn voice_def<'a>(audio: &'a AudioTable, id: &str) -> &'a SfxDef {
+    audio
         .sfx
         .iter()
-        .find(|row| row.id == voice.id)
-        .unwrap_or_else(|| panic!("playing voice {} is not in the mix", voice.id));
-    def.stealable && !def.looped && !def.is_warning
+        .find(|row| row.id == id)
+        .unwrap_or_else(|| panic!("playing voice {id} is not in the mix"))
+}
+
+/// Crowd-loop instances the mix budget always holds, even when no swarmer is near.
+fn reserved_crowd_slots(audio: &AudioTable) -> usize {
+    match budget_voices(&audio.sfx, |row| row.crowd && row.looped) {
+        Ok(slots) => slots as usize,
+        Err(err) => panic!("{err}"),
+    }
 }
 
 fn is_player_step(audio: &AudioTable, id: &str) -> bool {
@@ -527,7 +566,7 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
             .get("category")
             .and_then(|v| v.as_str())
             .ok_or_else(|| format!("{key} is missing category"))?;
-        let mut stealable = match row.get("stealable") {
+        let stealable = match row.get("stealable") {
             None => return Err(format!("{key} is missing stealable")),
             Some(value) => value
                 .as_bool()
@@ -543,9 +582,6 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
                 .ok_or_else(|| format!("{key} is_warning is not a bool"))?,
             None => false,
         };
-        if looped {
-            stealable = false;
-        }
         if is_warning && stealable {
             return Err(format!("{key} is a warning and must set stealable = false"));
         }
@@ -652,6 +688,7 @@ pub fn load_mix(text: &str) -> Result<AudioTable, String> {
             "warning voices {warning_voices} + crowd loops {crowd_loops} + hit_reserve {hit_reserve} exceed voice_cap {voice_cap}"
         ));
     }
+    // Stealable prop loops stay out of this sum. A warning can take them while they play.
     let blocked = budget_voices(&sfx, |row| {
         row.is_warning || (row.crowd && row.looped) || (!row.is_warning && !row.looped && !row.stealable)
     })?;
@@ -793,23 +830,41 @@ mod tests {
     use super::load_mix;
 
     #[test]
-    fn warnings_and_loops_cannot_be_stolen() {
+    fn warnings_stay_unstealable_and_prop_loops_stay_stealable() {
         let audio = load_mix(include_str!("../../../content/audio_mix.toml")).expect("audio mix");
         assert_eq!(audio.voice_cap, 32);
         let mut warnings = 0;
         for row in &audio.sfx {
-            if row.looped || row.is_warning {
-                assert!(!row.stealable, "{}", row.id);
-            }
             if row.is_warning {
+                assert!(!row.stealable, "{}", row.id);
                 warnings += 1;
+            }
+            if row.looped && row.category != "prop" {
+                assert!(!row.stealable, "{}", row.id);
             }
         }
         assert!(warnings >= 11, "warning rows");
+        for id in ["hive_nest_idle", "relay_tower_hum"] {
+            let row = audio.sfx.iter().find(|row| row.id == id).unwrap_or_else(|| panic!("missing {id}"));
+            assert!(row.looped && row.stealable && row.category == "prop", "{id}");
+        }
+        let bed = audio.sfx.iter().find(|row| row.id == "arena_01_bed").expect("arena_01_bed");
+        assert!(bed.looped && !bed.stealable && bed.category == "music");
         let revive = audio.sfx.iter().find(|row| row.id == "revive_complete").expect("revive_complete");
         assert!(revive.stealable);
         assert!(!revive.is_warning);
         assert!(!revive.looped);
+        let blocked = super::budget_voices(&audio.sfx, |row| {
+            row.is_warning || (row.crowd && row.looped) || (!row.is_warning && !row.looped && !row.stealable)
+        })
+        .expect("blocked");
+        let props = super::budget_voices(&audio.sfx, |row| row.looped && row.stealable).expect("prop loops");
+        assert!(props > 0, "stealable loops");
+        assert!((blocked as usize) < audio.voice_cap, "blocked {blocked}");
+        assert!(
+            blocked as usize + props as usize >= audio.voice_cap,
+            "stealable loops stay out of the non-stealable load budget"
+        );
     }
 
     #[test]
@@ -1054,13 +1109,137 @@ flat = true
             let count = pick.voices.iter().filter(|voice| voice.id == row.id).count();
             assert_eq!(count, row.max_instances as usize, "{}", row.id);
         }
-        let free = audio.voice_cap - pick.voices.len();
-        assert!(free >= audio.hit_reserve, "free {free}");
-        let crowd = super::budget_voices(&audio.sfx, |row| row.crowd && row.looped).expect("crowd loops");
-        assert_eq!(
-            warning_sum as usize + crowd as usize + audio.hit_reserve,
-            audio.voice_cap
-        );
+        let crowd = super::budget_voices(&audio.sfx, |row| row.crowd && row.looped).expect("crowd loops") as usize;
+        assert_eq!(audio.voice_cap - pick.voices.len(), crowd + audio.hit_reserve);
+        assert_eq!(warning_sum as usize + crowd + audio.hit_reserve, audio.voice_cap);
+
+        let nest = audio.sfx.iter().find(|row| row.id == "hive_nest_idle").expect("hive_nest_idle");
+        let tower = audio.sfx.iter().find(|row| row.id == "relay_tower_hum").expect("relay_tower_hum");
+        let bed = audio.sfx.iter().find(|row| row.id == "arena_01_bed").expect("arena_01_bed");
+        let mut playing = Vec::new();
+        for instance in 0..nest.max_instances {
+            playing.push(super::LiveVoice {
+                id: nest.id.clone(),
+                pos: crate::math::Vec3::new((instance + 1) as f32 * 10.0, 0.0, 0.0),
+                priority: nest.priority,
+                fading: false,
+            });
+        }
+        playing.push(super::LiveVoice {
+            id: tower.id.clone(),
+            pos: crate::math::Vec3::new(25.0, 0.0, 0.0),
+            priority: tower.priority,
+            fading: false,
+        });
+        playing.push(super::LiveVoice {
+            id: bed.id.clone(),
+            pos: crate::math::Vec3::new(100.0, 0.0, 0.0),
+            priority: bed.priority,
+            fading: false,
+        });
+        let loops: Vec<_> = playing.iter().filter(|voice| voice.id != bed.id).cloned().collect();
+        let loop_count = loops.len();
+        assert_eq!(loop_count, (nest.max_instances + tower.max_instances) as usize);
+        assert!(loop_count + warning_sum as usize + crowd > audio.voice_cap);
+        let mut with_loops = events.clone();
+        for voice in &loops {
+            with_loops.push(super::SoundEvent {
+                id: voice.id.clone(),
+                pos: voice.pos,
+                owner: 0,
+                priority: None,
+            });
+        }
+        let mut waiting = Vec::new();
+        let crowded = super::select_voices(&audio, &with_loops, crate::math::Vec3::ZERO, &playing, &mut waiting);
+        let overflow = loop_count + warning_sum as usize + crowd - audio.voice_cap;
+        assert_eq!(crowded.fade.len(), overflow);
+        assert_eq!(waiting.len(), overflow);
+        assert!(crowded.fade.iter().all(|voice| voice.id != bed.id));
+        let started = crowded.voices.iter().filter(|voice| voice.is_warning).count();
+        assert_eq!(started + overflow, warning_sum as usize);
+        assert_eq!(loop_count + started + crowd, audio.voice_cap);
+        let mut expected = loops.clone();
+        expected.sort_by(|a, b| {
+            a.priority
+                .cmp(&b.priority)
+                .then_with(|| b.pos.x.total_cmp(&a.pos.x))
+                .then_with(|| a.id.cmp(&b.id))
+                .then_with(|| a.pos.x.total_cmp(&b.pos.x))
+        });
+        for (voice, want) in crowded.fade.iter().zip(expected.iter()) {
+            assert_eq!(voice.id, want.id);
+            assert_eq!(voice.pos, want.pos);
+            assert_eq!(voice.priority, want.priority);
+        }
+        for voice in &loops {
+            let stolen = crowded.fade.iter().any(|faded| faded.id == voice.id && faded.pos == voice.pos);
+            let kept = crowded.voices.iter().any(|kept| kept.id == voice.id && kept.pos == voice.pos);
+            assert_eq!(stolen, !kept, "{}", voice.id);
+        }
+    }
+
+    #[test]
+    fn a_quiet_frame_reserves_the_crowd_slot_for_the_swarm() {
+        let audio = load_mix(include_str!("../../../content/audio_mix.toml")).expect("audio mix");
+        let crowd = super::budget_voices(&audio.sfx, |row| row.crowd && row.looped).expect("crowd loops") as usize;
+        assert!(crowd > 0);
+        let steps: Vec<&str> = audio.footstep.rows.values().flatten().map(|id| id.as_str()).collect();
+        let mut events = Vec::new();
+        let mut n = 0u32;
+        for row in audio.sfx.iter().filter(|row| {
+            row.id == row.row_id
+                && !row.is_warning
+                && !row.looped
+                && !row.critical
+                && !row.crowd
+                && row.max_instances > 0
+                && !steps.contains(&row.id.as_str())
+        }) {
+            for instance in 0..row.max_instances {
+                events.push(super::SoundEvent {
+                    id: row.id.clone(),
+                    pos: crate::math::Vec3::new(n as f32 + 1.0, instance as f32, 0.0),
+                    owner: n,
+                    priority: None,
+                });
+                n += 1;
+                if events.len() > audio.voice_cap {
+                    break;
+                }
+            }
+            if events.len() > audio.voice_cap {
+                break;
+            }
+        }
+        assert!(events.len() > audio.voice_cap, "need more one-shots than the cap");
+        let quiet = super::select_voices(&audio, &events, crate::math::Vec3::ZERO, &[], &mut Vec::new());
+        assert!(quiet.voices.iter().all(|voice| !voice.crowd));
+        let oneshots = quiet.voices.len();
+        assert_eq!(oneshots + crowd, audio.voice_cap);
+        let playing: Vec<super::LiveVoice> = quiet
+            .voices
+            .iter()
+            .map(|voice| super::LiveVoice {
+                id: voice.id.clone(),
+                pos: voice.pos,
+                priority: voice.priority,
+                fading: false,
+            })
+            .collect();
+        let swarm = super::SoundEvent {
+            id: "swarmer_crowd".into(),
+            pos: crate::math::Vec3::new(0.0, 0.0, 1.0),
+            owner: 0,
+            priority: None,
+        };
+        let loud = super::select_voices(&audio, &[swarm], crate::math::Vec3::ZERO, &playing, &mut Vec::new());
+        assert_eq!(loud.voices.iter().filter(|voice| voice.crowd).count(), crowd);
+        assert!(loud.voices.iter().all(|voice| voice.crowd));
+        assert!(loud.fade.is_empty());
+        let total = playing.len() + loud.voices.len();
+        assert!(total <= audio.voice_cap);
+        assert_eq!(total, audio.voice_cap);
     }
 
     #[test]

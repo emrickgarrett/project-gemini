@@ -4800,8 +4800,8 @@ pub struct SfxDef {
     pub sync_at: Option<f32>,
     /// True when the mix row's category is `ui`. Menu cues must be this category.
     pub category_ui: bool,
-    /// A full voice list may stop this one-shot to make room for a UI cue.
-    /// Looping rows are forced off when the mix loads.
+    /// A full voice list may stop this voice to make room.
+    /// UI admission only stops non-looping rows. A warning may take a stealable prop loop.
     pub stealable: bool,
     /// Telegraphs and other cues that must play out. Loading rejects a warning that is stealable.
     pub is_warning: bool,
@@ -4924,8 +4924,10 @@ fn validate_arena_audio(arena: &Arena, audio: &AudioTable) -> Result<(), String>
             .iter()
             .find(|row| row.id == id)
             .ok_or_else(|| format!("{id} is missing"))?;
-        if !row.looped || row.category != "prop" || row.flat || row.max_instances == 0 {
-            return Err(format!("{id} must be a spatial prop loop with max_instances > 0"));
+        if !row.looped || row.category != "prop" || row.flat || row.max_instances == 0 || !row.stealable {
+            return Err(format!(
+                "{id} must be a stealable spatial prop loop with max_instances > 0"
+            ));
         }
     }
     let pulse = audio

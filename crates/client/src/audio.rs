@@ -258,7 +258,7 @@ pub fn play(
     prefs: Res<Prefs>,
     hold: Res<PauseMenu>,
     mut arena_audio: ResMut<ArenaAudio>,
-    mut prop_loops: Query<(Entity, &PropLoop, &mut OneShot)>,
+    mut prop_loops: Query<(Entity, &PropLoop, &mut OneShot, Option<&mut AudioSink>)>,
 ) {
     let hud = &game.content.presentation.hud.away;
     let mix = away_mix(away.view.look, hud.music_duck_db, hud.music_duck_lowpass_hz);
@@ -295,10 +295,24 @@ pub fn play(
             sink.set_volume(Volume::Linear(volume));
         }
     }
+    for (entity, _, mut shot, mut sink) in &mut prop_loops {
+        if !(shot.fade_dur > 0.0) {
+            continue;
+        }
+        shot.fade_left -= dt;
+        if !(shot.fade_left > 0.0) {
+            finished.push(entity);
+            continue;
+        }
+        let volume = warning_fade_gain(shot.gain, shot.fade_left, shot.fade_dur);
+        if let Some(sink) = sink.as_mut() {
+            sink.set_volume(Volume::Linear(volume));
+        }
+    }
     for entity in finished {
         commands.entity(entity).despawn();
     }
-    let playing: Vec<LiveVoice> = shots
+    let mut playing: Vec<LiveVoice> = shots
         .iter()
         .filter_map(|(_, shot, _)| {
             let def = game.content.sfx(&shot.id)?;
@@ -313,11 +327,29 @@ pub fn play(
             })
         })
         .collect();
+    for (_, _, shot, _) in &prop_loops {
+        playing.push(LiveVoice {
+            id: shot.id.clone(),
+            pos: shot.pos,
+            priority: shot.priority,
+            fading: shot.fade_dur > 0.0,
+        });
+    }
     let mut events = fx.sounds.clone();
     events.extend(arena_cues(&mut arena_audio, &game));
     let pick = select_voices(&game.content.audio, &events, listener, &playing, &mut arena_audio.waiting);
     for faded in &pick.fade {
         for (_, mut shot, mut sink) in &mut shots {
+            if shot.fade_dur > 0.0 || shot.id != faded.id || shot.pos != faded.pos {
+                continue;
+            }
+            begin_warning_fade(&mut shot, game.content.audio.warning_fade);
+            if let Some(sink) = sink.as_mut() {
+                sink.set_volume(Volume::Linear(shot.gain));
+            }
+            break;
+        }
+        for (_, _, mut shot, mut sink) in &mut prop_loops {
             if shot.fade_dur > 0.0 || shot.id != faded.id || shot.pos != faded.pos {
                 continue;
             }
@@ -1265,7 +1297,7 @@ fn sync_prop_loops(
     time: f32,
     listener: SimVec,
     selected: &[Voice],
-    existing: &mut Query<(Entity, &PropLoop, &mut OneShot)>,
+    existing: &mut Query<(Entity, &PropLoop, &mut OneShot, Option<&mut AudioSink>)>,
 ) {
     let mut wanted: Vec<Voice> = selected
         .iter()
@@ -1276,7 +1308,7 @@ fn sync_prop_loops(
         })
         .cloned()
         .collect();
-    for (entity, prop, mut shot) in existing.iter_mut() {
+    for (entity, prop, mut shot, _) in existing.iter_mut() {
         let slot = wanted
             .iter()
             .position(|voice| voice.id == prop.id && voice.pos == prop.pos);
@@ -1293,7 +1325,7 @@ fn sync_prop_loops(
             };
             shot.gain = def.volume * atten * bus_gain(prefs, false);
             wanted.remove(index);
-        } else {
+        } else if !(shot.fade_dur > 0.0) {
             commands.entity(entity).despawn();
         }
     }
@@ -1490,7 +1522,7 @@ mod tests {
             assert!(!stolen.stop.contains(index), "protected {}", playing[*index].id);
             let row = content.sfx(&playing[*index].id).unwrap();
             assert!(row.is_warning || row.looped);
-            assert!(!row.stealable);
+            assert!(!row.stealable || row.looped);
         }
         assert_eq!(playing.len() - stolen.stop.len() + stolen.play.len(), voice_cap);
 
