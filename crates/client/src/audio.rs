@@ -563,6 +563,8 @@ struct Occupant {
     id: String,
     loudness: f32,
     stealable: bool,
+    /// Outside the voice cap. It does not take a slot and it is not a steal victim.
+    outside: bool,
     started: f32,
     order: u32,
     /// Index into the `playing` slice. `None` is a cue admitted in this call.
@@ -590,7 +592,8 @@ pub fn admit_ui(audio: &gemini_sim::content::AudioTable, playing: &[Heard], aske
             Occupant {
                 id: heard.id.clone(),
                 loudness: def.map(|row| row.loudness).unwrap_or(f32::MAX),
-                stealable: def.is_some_and(|row| row.stealable && !row.looped && !row.is_warning),
+                stealable: def.is_some_and(|row| row.stealable && !row.looped && !row.is_warning && !row.outside_voice_cap),
+                outside: def.is_some_and(|row| row.outside_voice_cap),
                 started: heard.started,
                 order: heard.order,
                 playing: Some(index),
@@ -609,11 +612,12 @@ pub fn admit_ui(audio: &gemini_sim::content::AudioTable, playing: &[Heard], aske
                 continue;
             }
         }
-        if occupants.len() >= cap {
+        let inside = occupants.iter().filter(|occupant| !occupant.outside).count();
+        if !def.outside_voice_cap && inside >= cap {
             let victim = occupants
                 .iter()
                 .enumerate()
-                .filter(|(_, occupant)| occupant.stealable)
+                .filter(|(_, occupant)| occupant.stealable && !occupant.outside)
                 .min_by(|(_, a), (_, b)| {
                     a.loudness
                         .partial_cmp(&b.loudness)
@@ -632,7 +636,8 @@ pub fn admit_ui(audio: &gemini_sim::content::AudioTable, playing: &[Heard], aske
         occupants.push(Occupant {
             id: def.id.clone(),
             loudness: def.loudness,
-            stealable: def.stealable && !def.looped && !def.is_warning,
+            stealable: def.stealable && !def.looped && !def.is_warning && !def.outside_voice_cap,
+            outside: def.outside_voice_cap,
             started: now,
             order: 0x8000_0000 + born,
             playing: None,
@@ -1551,6 +1556,43 @@ mod tests {
     }
 
     #[test]
+    fn count_ticks_sit_outside_the_voice_cap_and_keep_one_instance() {
+        use gemini_sim::content::Content;
+
+        use super::{admit_ui, Heard};
+
+        let content = Content::embedded();
+        let tick = content.ui.sounds.count_tick.clone();
+        let chime = content.ui.sounds.bank_chime.clone();
+        let row = content.sfx(&tick).expect("count tick");
+        assert!(row.outside_voice_cap);
+        assert_eq!(row.max_instances, 1);
+        assert_eq!(row.priority, 10);
+        assert!(row.category_ui);
+        assert!((row.volume - gemini_sim::audio_mix::db_to_linear(-16.0)).abs() < 1e-4);
+        let chime_row = content.sfx(&chime).expect("bank chime");
+        assert!(chime_row.outside_voice_cap);
+        assert_eq!(chime_row.max_instances, 1);
+        assert_eq!(chime_row.priority, 10);
+        let filler = content
+            .audio
+            .sfx
+            .iter()
+            .find(|row| row.stealable && !row.looped && !row.is_warning && !row.outside_voice_cap)
+            .expect("stealable one-shot");
+        let playing: Vec<Heard> = (0..content.audio.voice_cap)
+            .map(|index| Heard { id: filler.id.clone(), started: index as f32, order: index as u32 })
+            .collect();
+        let admitted = admit_ui(&content.audio, &playing, &[tick.clone()], 0.0);
+        assert_eq!(admitted.play, vec![tick.clone()]);
+        assert!(admitted.stop.is_empty(), "an outside cue does not steal a voice");
+        let held = Heard { id: tick.clone(), started: 0.0, order: 1 };
+        let second = admit_ui(&content.audio, &[held], &[tick, chime.clone()], 1.0);
+        assert_eq!(second.play, vec![chime]);
+        assert!(second.stop.is_empty());
+    }
+
+    #[test]
     fn pause_stops_solo_game_sounds_and_ducks_coop() {
         let content = gemini_sim::content::Content::embedded();
         let duck = content.presentation.hud.away.coop_pause_duck_db;
@@ -1591,6 +1633,7 @@ mod tests {
             token: 0,
             seat: 0,
             pending_pick: None,
+            match_id: None,
         };
         let cycle = (game.sim.time / period).floor() as i64;
         let warn = game.content.sfx("vent_warn").expect("vent_warn");

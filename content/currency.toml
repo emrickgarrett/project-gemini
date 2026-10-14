@@ -1,7 +1,9 @@
 # Backend-computed per round; host claims are checked against this.
-per_wave = 10                 # * min(wave, 20) * difficulty.currency  (flat after wave 20)
-endless_milestone_every = 10  # past wave 20, +150 * difficulty.currency every 10 waves
-match_complete_bonus = 200    # * difficulty.currency
+per_wave = 10                 # added once per credited wave, until flat_after_wave
+flat_after_wave = 20          # waves after this add no per-wave pay
+endless_milestone_every = 10  # past flat_after_wave, every Nth wave
+endless_milestone_bonus = 150 # * difficulty.currency, on those milestone waves
+match_complete_bonus = 200    # * difficulty.currency, win only
 boss_kill_bonus = 50
 per_round_cap_mult = 1.25     # reject claims above 1.25x formula
 

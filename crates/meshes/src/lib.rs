@@ -18,7 +18,7 @@ pub use cast::{
     CastMesh, PaintCam, Placement,
 };
 
-pub use menu_still::{paint_coop_pause, paint_menu, paint_menu_masked, raster_hero_portrait, Hit, MenuPaint, MenuShot, PaintPrefs};
+pub use menu_still::{bank_lines, paint_coop_pause, paint_menu, paint_menu_masked, raster_hero_portrait, BankLines, Hit, MenuPaint, MenuShot, PaintPrefs};
 
 pub use arena::{cover_visual, pieces as arena_pieces, scenery_fingerprint, ArenaPiece};
 pub use away_still::{paint_away, AwayShot};

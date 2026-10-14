@@ -2,6 +2,7 @@
 
 mod act_now;
 mod audio;
+mod bank_host;
 mod flow;
 mod hud;
 mod pull_host;
@@ -317,11 +318,13 @@ mod tests {
             prefs.difficulty = Some("normal".into());
         }
         app.world_mut().insert_resource(flow::MatchSummary {
-            victory: true,
+            show: gemini_sim::bank::BankShow::Win,
             waves: 1,
             kills: 1,
             seconds: 10.0,
-            currency: 5.0,
+            earned: 5.0,
+            bonus: 0.0,
+            balance: None,
         });
         app.world_mut().resource_mut::<flow::Page>().clone_from(&flow::Page::Results);
         choose(&mut app, "play_again");
@@ -405,6 +408,11 @@ mod tests {
         tap(&mut app, KeyCode::Escape);
         press_hit(&mut app, "quit_to_menu");
         assert!(matches!(app.world().resource::<State<AppState>>().get(), AppState::Menu));
+        let summary = app.world().resource::<flow::MatchSummary>();
+        assert_eq!(summary.show, gemini_sim::bank::BankShow::Quit);
+        assert_eq!(summary.bonus, 0.0);
+        assert!(summary.balance.is_none(), "a client without a bank host does not invent a wallet");
+        assert_eq!(summary.earned, 0.0, "quitting before a wave clears banks nothing");
     }
 
     #[test]

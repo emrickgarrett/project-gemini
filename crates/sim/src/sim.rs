@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio_mix::SoundEvent;
 use crate::content::{
-    body_lift_of, hit_radius_of, wave_budget, weakpoint_of, Content, EnemyKind, WeaponDef,
+    body_lift_of, hit_radius_of, milestone_payout, wave_budget, wave_payout, weakpoint_of, win_payout, Content, EnemyKind,
+    WeaponDef,
 };
 use crate::content::{endless_hp_dmg_mult, rank_bonus};
 use crate::math::{
@@ -381,6 +382,12 @@ pub struct Sim {
     /// Wave numbers credited per player token. Survives a seat drop when leave_keeps_earned.
     #[serde(default)]
     pub credits: BTreeMap<u64, Vec<u32>>,
+    /// Match currency earned so far, per player token. This is not a wallet.
+    #[serde(default)]
+    pub currency_gain: BTreeMap<u64, f32>,
+    /// Win and wave-milestone portion of `currency_gain`.
+    #[serde(default)]
+    pub currency_bonus: BTreeMap<u64, f32>,
     #[serde(default)]
     pub next_token: u64,
     #[serde(skip)]
@@ -449,6 +456,8 @@ impl Sim {
             present_countdown: false,
             pending_joins: Vec::new(),
             credits: BTreeMap::new(),
+            currency_gain: BTreeMap::new(),
+            currency_bonus: BTreeMap::new(),
             next_token: 2,
             spatial: SpatialGrid::new(content.combat.cell_size, content.arena.half_extent),
             sounds: Vec::new(),
@@ -688,7 +697,7 @@ impl Sim {
             self.player_count = connected;
         }
         let wave_n = self.director.wave;
-        self.credit_round(content, wave_n);
+        self.note_presence(content, wave_n);
         let budget = wave_budget(
             &content.waves.budget,
             wave_n,
@@ -905,11 +914,14 @@ impl Sim {
         let token = self.players[index].token;
         if !content.coop.leave_keeps_earned {
             self.credits.remove(&token);
+            self.currency_gain.remove(&token);
+            self.currency_bonus.remove(&token);
         }
         self.players.remove(index);
     }
 
-    fn credit_round(&mut self, content: &Content, wave: u32) {
+    /// Remember who was connected when the wave opened. The payout waits for the clear.
+    fn note_presence(&mut self, content: &Content, wave: u32) {
         if content.coop.currency_credit != "per_round_present" {
             return;
         }
@@ -924,6 +936,51 @@ impl Sim {
             if !entry.contains(&wave) {
                 entry.push(wave);
             }
+            self.currency_gain.entry(token).or_insert(0.0);
+            self.currency_bonus.entry(token).or_insert(0.0);
+        }
+    }
+
+    /// Pay the wave that just cleared. The cue is here so it does not land on `wave_start`.
+    fn pay_cleared_wave(&mut self, content: &Content, wave: u32) {
+        if content.coop.currency_credit != "per_round_present" {
+            return;
+        }
+        let tier = content.tier(&self.difficulty).currency;
+        let earned = wave_payout(&content.currency, wave, tier);
+        let bonus = milestone_payout(&content.currency, wave, tier);
+        let tokens: Vec<u64> = self
+            .players
+            .iter()
+            .filter(|player| player.connected)
+            .map(|player| player.token)
+            .collect();
+        let mut paid = false;
+        for token in tokens {
+            let present = self.credits.get(&token).is_some_and(|waves| waves.contains(&wave));
+            if present {
+                self.add_currency(token, earned + bonus, bonus);
+                if earned + bonus > 0.0 {
+                    paid = true;
+                }
+            }
+        }
+        if paid {
+            self.sound_at("currency_gain", Vec3::ZERO);
+        }
+    }
+
+    fn add_currency(&mut self, token: u64, earned: f32, bonus: f32) {
+        *self.currency_gain.entry(token).or_default() += earned;
+        *self.currency_bonus.entry(token).or_default() += bonus;
+    }
+
+    /// Content win bonus for every connected player. The wallet is not here.
+    pub fn grant_victory_bonus(&mut self, content: &Content) {
+        let bonus = win_payout(&content.currency, content.tier(&self.difficulty).currency);
+        let tokens: Vec<u64> = self.players.iter().filter(|player| player.connected).map(|player| player.token).collect();
+        for token in tokens {
+            self.add_currency(token, bonus, bonus);
         }
     }
 
@@ -2460,6 +2517,15 @@ impl Sim {
         };
         if boss_id.is_some() {
             self.boss_kills += 1;
+            let pay = content.currency.boss_kill_bonus;
+            let wave = self.director.wave;
+            let tokens: Vec<u64> = self.players.iter().filter(|player| player.connected).map(|player| player.token).collect();
+            for token in tokens {
+                let present = self.credits.get(&token).is_some_and(|waves| waves.contains(&wave));
+                if present {
+                    self.add_currency(token, pay, 0.0);
+                }
+            }
         }
         let killer = self.enemies[index].last_hit_by;
         let seat = self.players.iter().position(|player| player.id == killer);
@@ -2639,9 +2705,12 @@ impl Sim {
         if self.enemies.iter().any(|e| e.alive) || !self.pending_vents.is_empty() || self.director.pool > 0.0 {
             return;
         }
+        let cleared = self.director.wave;
+        self.pay_cleared_wave(content, cleared);
         let last = content.waves.wave.iter().map(|w| w.n).max().unwrap_or(1);
         if self.director.wave >= last && !self.endless_mode {
             self.phase = Phase::Victory;
+            self.grant_victory_bonus(content);
             self.music.push(MusicMoment::MatchEnd);
             return;
         }

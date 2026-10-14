@@ -37,6 +37,8 @@ pub struct Game {
     /// Upgrade pick waiting for a sim tick. Number keys are `just_pressed` for one
     /// frame, and a frame faster than the 30 Hz tick used to drop them.
     pub pending_pick: Option<u8>,
+    /// Host match id. `None` when this client has no bank host.
+    pub match_id: Option<u64>,
 }
 
 #[derive(Resource, Clone)]
@@ -175,6 +177,7 @@ pub fn boot(
         token,
         seat: 0,
         pending_pick: None,
+        match_id: open_match(),
     });
     commands.insert_resource(link);
     commands.insert_resource(FrameFx::default());
@@ -696,6 +699,23 @@ mod page_visibility {
     }
 }
 
+fn open_match() -> Option<u64> {
+    #[cfg(feature = "dev-host")]
+    {
+        match crate::bank_host::open() {
+            Ok(id) => Some(id),
+            Err(err) => {
+                eprintln!("match bank host: {err}");
+                None
+            }
+        }
+    }
+    #[cfg(not(feature = "dev-host"))]
+    {
+        None
+    }
+}
+
 fn drive(game: &mut Game, link: &mut CoopLink, input: PlayerInput) {
     match link {
         CoopLink::Solo => game.sim.step(&game.content, input),
@@ -703,6 +723,11 @@ fn drive(game: &mut Game, link: &mut CoopLink, input: PlayerInput) {
         CoopLink::Host(host) => host.tick(game, input, crate::net::HostStep::Simulate),
         #[cfg(not(target_arch = "wasm32"))]
         CoopLink::Client(client) => client.send(game.sim.tick, input),
+    }
+    if let Some(id) = game.match_id {
+        if let Err(err) = crate::bank_host::note(id, &game.sim) {
+            eprintln!("match note failed: {err}");
+        }
     }
     if let Some(seat) = game.sim.players.iter().position(|player| player.token == game.token) {
         game.seat = seat;

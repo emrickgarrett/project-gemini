@@ -2,6 +2,7 @@
 //! No renderer, no sockets, no asset I/O.
 
 pub mod audio_mix;
+pub mod bank;
 pub mod bugs;
 pub mod content;
 pub mod host_away;

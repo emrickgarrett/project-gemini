@@ -14,8 +14,9 @@ use bevy::ui_widgets::{Activate, Button};
 use bevy::window::{CursorGrabMode, CursorOptions};
 
 use gemini_meshes::{paint_menu_masked, Hit, MenuPaint, MenuShot, PaintPrefs};
-use gemini_proto::{CratePullFault, CratePullReply};
-use gemini_sim::content::{currency_reward, format_fixed, Content};
+use gemini_proto::{BankFault, CratePullFault, CratePullReply};
+use gemini_sim::bank::{cues_between, shown_earned, BankCue, BankShow};
+use gemini_sim::content::{format_fixed, Content};
 use gemini_sim::reveal::RevealRun;
 use gemini_sim::sim::Phase;
 
@@ -47,11 +48,21 @@ impl Default for DebugHotkeys {
 
 #[derive(Resource, Clone, Debug)]
 pub struct MatchSummary {
-    pub victory: bool,
+    pub show: BankShow,
     pub waves: u32,
     pub kills: u32,
     pub seconds: f32,
-    pub currency: f32,
+    pub earned: f32,
+    pub bonus: f32,
+    /// Wallet after the deposit. `None` when the host did not answer.
+    pub balance: Option<f32>,
+}
+
+/// Count-up clock. The tick interval lives in `ui.toml`.
+#[derive(Resource, Clone, Copy, Debug, Default)]
+pub struct BankClock {
+    elapsed: f32,
+    shown: f32,
 }
 
 #[derive(Resource, Clone, Debug, Default)]
@@ -129,7 +140,8 @@ pub fn register(app: &mut App) {
         .add_systems(OnEnter(AppState::Menu), enter_menu)
         .add_systems(OnExit(AppState::Menu), despawn_menu)
         .add_systems(OnEnter(AppState::Playing), (enter_match, drop_summary))
-        .add_systems(Update, (navigate, hover, apply, rebuild, debug_hotkeys, crate::audio::flush_ui_cues).chain().run_if(in_state(AppState::Menu)));
+        .init_resource::<BankClock>()
+        .add_systems(Update, (navigate, hover, apply, tick_bank, rebuild, debug_hotkeys, crate::audio::flush_ui_cues).chain().run_if(in_state(AppState::Menu)));
 }
 
 fn enter_menu(
@@ -296,25 +308,97 @@ pub(crate) fn end_of_match(
     if summary.is_some() {
         return;
     }
-    let victory = match game.sim.phase {
-        Phase::Victory => true,
-        Phase::Defeat => false,
-        _ => return,
+    let show = match game.sim.phase {
+        Phase::Victory => BankShow::Win,
+        Phase::Defeat => BankShow::End,
+        Phase::Combat | Phase::Upgrade { .. } | Phase::Breather { .. } => return,
     };
-    let waves = if victory { game.sim.director.wave } else { game.sim.director.wave.saturating_sub(1) };
-    let tier = game.content.tier(&game.difficulty);
-    let currency = currency_reward(&game.content.currency, waves, tier.currency, victory, game.sim.boss_kills);
+    let waves = match show {
+        BankShow::Win => game.sim.director.wave,
+        BankShow::End | BankShow::Quit | BankShow::Disconnect => game.sim.director.wave.saturating_sub(1),
+    };
+    present_bank(&mut commands, &game, show, waves, &assets, &prefs);
+    next.set(AppState::Menu);
+}
+
+fn present_bank(commands: &mut Commands, game: &Game, show: BankShow, waves: u32, assets: &AssetServer, prefs: &Prefs) {
+    let (earned, bonus, balance) = settle_bank(game);
     commands.insert_resource(MatchSummary {
-        victory,
+        show,
         waves,
         kills: game.sim.kills,
         seconds: game.sim.time,
-        currency,
+        earned,
+        bonus,
+        balance,
     });
+    commands.insert_resource(BankClock::default());
     let content = Content::embedded();
-    let id = if victory { &content.ui.sounds.victory } else { &content.ui.sounds.defeat };
-    audio::ui_cue(&mut commands, &assets, &content, &prefs, id);
-    next.set(AppState::Menu);
+    let sting = match show {
+        BankShow::Win => Some(content.ui.sounds.victory.as_str()),
+        BankShow::End => Some(content.ui.sounds.defeat.as_str()),
+        BankShow::Quit | BankShow::Disconnect => None,
+    };
+    if let Some(id) = sting {
+        audio::ui_cue(commands, assets, &content, prefs, id);
+    }
+}
+
+/// Note the host's sim, then deposit by match id and player id. A missing host leaves the balance unset.
+fn settle_bank(game: &Game) -> (f32, f32, Option<f32>) {
+    let earned = game.sim.currency_gain.get(&game.token).copied().unwrap_or(0.0);
+    let bonus = game.sim.currency_bonus.get(&game.token).copied().unwrap_or(0.0);
+    let Some(id) = game.match_id else {
+        return (earned, bonus, None);
+    };
+    if crate::bank_host::note(id, &game.sim).is_err() {
+        return (earned, bonus, None);
+    }
+    match crate::bank_host::bank(id, game.token) {
+        Ok(reply) => match reply.fault {
+            None => (reply.earned, reply.bonus, Some(reply.balance)),
+            Some(BankFault::Player | BankFault::Amount | BankFault::Unavailable | BankFault::Unknown) => (earned, bonus, None),
+        },
+        Err(_) => (earned, bonus, None),
+    }
+}
+
+pub(crate) fn tick_bank(
+    time: Res<Time>,
+    page: Res<Page>,
+    summary: Option<Res<MatchSummary>>,
+    mut clock: ResMut<BankClock>,
+    mut dirty: ResMut<Dirty>,
+    mut commands: Commands,
+    assets: Res<AssetServer>,
+    prefs: Res<Prefs>,
+) {
+    if !matches!(*page, Page::Results) {
+        return;
+    }
+    let Some(summary) = summary else { return };
+    let content = Content::embedded();
+    let tick = content.ui.bank.count_tick_secs;
+    let count = content.ui.bank.count_secs;
+    let prev = clock.elapsed;
+    clock.elapsed += time.delta_secs();
+    let cues = match cues_between(summary.show, prev, clock.elapsed, tick, count, summary.earned) {
+        Ok(cues) => cues,
+        Err(err) => panic!("bank count interval: {err}"),
+    };
+    for cue in cues {
+        let id = match cue {
+            BankCue::Tick => content.ui.sounds.count_tick.as_str(),
+            BankCue::Chime => content.ui.sounds.bank_chime.as_str(),
+        };
+        audio::ui_cue(&mut commands, &assets, &content, &prefs, id);
+    }
+    let shown = shown_earned(summary.earned, clock.elapsed, count);
+    let places = content.ui.layout.currency_decimals;
+    if format_fixed(shown, places) != format_fixed(clock.shown, places) {
+        dirty.0 = true;
+    }
+    clock.shown = shown;
 }
 
 pub(crate) fn navigate(
@@ -461,6 +545,7 @@ pub(crate) fn apply(
     mut cursor: Query<&mut CursorOptions>,
     crate_box: Option<Res<ServerCrate>>,
     mut rank: ResMut<Account>,
+    game: Option<Res<Game>>,
 ) {
     let Some(id) = action.0.take() else { return };
     let content = Content::embedded();
@@ -517,10 +602,16 @@ pub(crate) fn apply(
         "quit_to_menu" => {
             pause.open = false;
             pause.settings = false;
-            commands.remove_resource::<MatchSummary>();
-            *page = Page::Title;
             focus.0 = 0;
             lock_cursor(&mut cursor, &mut pause, false);
+            if let Some(game) = game.as_deref() {
+                let waves = game.sim.director.wave.saturating_sub(1);
+                present_bank(&mut commands, game, BankShow::Quit, waves, &assets, &prefs);
+                *page = Page::Results;
+            } else {
+                commands.remove_resource::<MatchSummary>();
+                *page = Page::Title;
+            }
             next.set(AppState::Menu);
             audio::ui_cue(&mut commands, &assets, &content, &prefs, back_cue);
         }
@@ -702,6 +793,7 @@ pub(crate) struct MenuView<'w, 's> {
     soon: Res<'w, Soon>,
     notice: Res<'w, ResetNotice>,
     summary: Option<Res<'w, MatchSummary>>,
+    clock: Res<'w, BankClock>,
     crate_box: Option<Res<'w, ServerCrate>>,
     game: Option<Res<'w, Game>>,
     ready: Res<'w, PointerReady>,
@@ -739,6 +831,7 @@ pub(crate) fn rebuild(mut commands: Commands, mut dirty: ResMut<Dirty>, mut view
         view.soon.0,
         view.notice.0,
         view.summary.as_deref(),
+        view.clock.shown,
         view.crate_box.as_deref(),
         view.game.as_ref().map(|game| game.sim.connected_count()).unwrap_or(1),
         view.ready.0,
@@ -853,6 +946,7 @@ fn shot_for(
     soon: bool,
     notice: bool,
     summary: Option<&MatchSummary>,
+    shown: f32,
     crate_box: Option<&ServerCrate>,
     connected: usize,
     ready: bool,
@@ -885,11 +979,13 @@ fn shot_for(
             };
             MenuShot::Results {
                 focus,
-                victory: summary.victory,
+                show: summary.show,
                 waves: summary.waves,
                 kills: summary.kills,
                 seconds: summary.seconds,
-                currency: summary.currency,
+                earned: shown,
+                bonus: summary.bonus,
+                balance: summary.balance,
             }
         }
         Page::Crates => MenuShot::Crates {

@@ -7,9 +7,11 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use gemini_backend::{Account, PullError};
+use std::sync::{Mutex, MutexGuard, OnceLock};
+
+use gemini_backend::{Account, BankError, MatchBook, MatchRecord, PullError};
 use gemini_proto::{
-    CratePullFault, CratePullReply, Packet, PROTOCOL_VERSION,
+    BankFault, BankReply, BankRequest, CratePullFault, CratePullReply, Packet, PROTOCOL_VERSION,
 };
 use gemini_sim::Content;
 
@@ -77,20 +79,54 @@ pub fn exchange_at(path: &Path, request: &[u8]) -> Result<Vec<u8>, ExchangeError
 }
 
 fn exchange_with(path: &Path, content: &Content, request: &[u8]) -> Result<Vec<u8>, ExchangeError> {
-    let packet = Packet::decode(request).map_err(|err| ExchangeError::Failed(format!("crate pull request is not a proto packet: {err}")))?;
+    let packet = Packet::decode(request).map_err(|err| ExchangeError::Failed(format!("host request is not a proto packet: {err}")))?;
     let mut account = load_or_create(path, content)?;
     let reply = answer(&mut account, content, &packet)?;
     if !matches!(&reply, Packet::CratePullReply(body) if matches!(body.fault, Some(CratePullFault::Shards))) {
         write_account(path, &account)?;
     }
-    reply.encode().map_err(|err| ExchangeError::Failed(format!("could not encode the crate pull reply: {err}")))
+    reply.encode().map_err(|err| ExchangeError::Failed(format!("could not encode the host reply: {err}")))
+}
+
+fn books() -> Result<MutexGuard<'static, MatchBook>, ExchangeError> {
+    static BOOKS: OnceLock<Mutex<MatchBook>> = OnceLock::new();
+    BOOKS
+        .get_or_init(|| Mutex::new(MatchBook::new()))
+        .lock()
+        .map_err(|_| ExchangeError::Failed("match book lock is poisoned".into()))
+}
+
+/// Mint a match id. The server copies gain off its own sim later.
+pub fn open_match() -> Result<u64, ExchangeError> {
+    Ok(books()?.open())
+}
+
+/// Copy `currency_gain` off the sim the server is running. The client does not send a total.
+pub fn note_match(id: u64, sim: &gemini_sim::Sim) -> Result<(), ExchangeError> {
+    books()?.note(id, sim).map_err(ExchangeError::Failed)
 }
 
 /// Apply one already-decoded packet. Callers on a socket use this after `Packet::decode`.
 pub fn answer(account: &mut Account, content: &Content, packet: &Packet) -> Result<Packet, ExchangeError> {
-    let Packet::CratePull(request) = packet else {
-        return Err(ExchangeError::Failed("the stand-in only answers a crate pull packet".into()));
-    };
+    match packet {
+        Packet::CratePull(request) => answer_pull(account, content, request),
+        Packet::Bank(request) => {
+            let record = books()?.record(request.match_id).cloned();
+            answer_bank(account, record.as_ref(), request)
+        }
+        Packet::Hello(_)
+        | Packet::Input(_)
+        | Packet::Snapshot(_)
+        | Packet::Join(_)
+        | Packet::Reconnect(_)
+        | Packet::Welcome(_)
+        | Packet::HostAway { .. }
+        | Packet::CratePullReply(_)
+        | Packet::BankReply(_) => Err(ExchangeError::Failed("the stand-in only answers a crate pull or a bank packet".into())),
+    }
+}
+
+fn answer_pull(account: &mut Account, content: &Content, request: &gemini_proto::CratePullRequest) -> Result<Packet, ExchangeError> {
     if request.version != PROTOCOL_VERSION {
         return Err(ExchangeError::Failed(format!(
             "crate pull version {} does not match {PROTOCOL_VERSION}",
@@ -128,6 +164,45 @@ pub fn answer(account: &mut Account, content: &Content, packet: &Packet) -> Resu
         },
     };
     Ok(Packet::CratePullReply(reply))
+}
+
+fn answer_bank(account: &mut Account, record: Option<&MatchRecord>, request: &BankRequest) -> Result<Packet, ExchangeError> {
+    if request.version != PROTOCOL_VERSION {
+        return Err(ExchangeError::Failed(format!(
+            "bank version {} does not match {PROTOCOL_VERSION}",
+            request.version
+        )));
+    }
+    let Some(record) = record else {
+        return Ok(Packet::BankReply(bank_fault(BankFault::Unknown)));
+    };
+    if record.id != request.match_id {
+        return Ok(Packet::BankReply(bank_fault(BankFault::Unknown)));
+    }
+    let reply = match account.bank(record, request.player_id) {
+        Ok(receipt) => BankReply {
+            version: PROTOCOL_VERSION,
+            earned: receipt.earned,
+            bonus: receipt.bonus,
+            balance: receipt.balance,
+            fresh: receipt.fresh,
+            fault: None,
+        },
+        Err(BankError::Player) => bank_fault(BankFault::Player),
+        Err(BankError::Amount) => bank_fault(BankFault::Amount),
+    };
+    Ok(Packet::BankReply(reply))
+}
+
+fn bank_fault(fault: BankFault) -> BankReply {
+    BankReply {
+        version: PROTOCOL_VERSION,
+        earned: 0.0,
+        bonus: 0.0,
+        balance: 0.0,
+        fresh: false,
+        fault: Some(fault),
+    }
 }
 
 fn account_rank(account: &Account) -> u32 {
@@ -190,7 +265,7 @@ fn write_account(path: &Path, account: &Account) -> Result<(), ExchangeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gemini_proto::{CratePullRequest, Packet};
+    use gemini_proto::{BankFault, BankRequest, CratePullRequest, Packet};
 
     fn scratch(name: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!("gemini-dev-host-{}-{}", std::process::id(), name));
@@ -311,6 +386,83 @@ mod tests {
         assert!(matches!(reply.fault, Some(CratePullFault::Shards)), "{reply:?}");
         assert!(reply.rarity.is_none());
         assert_eq!(fs::read(&path).unwrap(), before, "a shard fault must leave the save where it was");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bank_request_has_no_amount_and_a_repeat_does_not_pay_again() {
+        let dir = scratch("bank");
+        let path = dir.join("account.bin");
+        let content = Content::embedded();
+        let sim = gemini_sim::Sim::new(&content, "normal", 1);
+        let player = sim.players[0].token;
+        let id = open_match().unwrap();
+        note_match(id, &sim).unwrap();
+        let request = BankRequest { version: PROTOCOL_VERSION, match_id: id, player_id: player };
+        let bytes = Packet::Bank(request.clone()).encode().unwrap();
+        let Packet::Bank(decoded) = Packet::decode(&bytes).unwrap() else { panic!("bank request") };
+        assert_eq!(decoded, request);
+        let first = Packet::decode(&exchange_at(&path, &bytes).unwrap()).unwrap();
+        let Packet::BankReply(first) = first else { panic!("bank reply") };
+        assert!(first.fault.is_none(), "{first:?}");
+        assert!(first.fresh);
+        assert_eq!(first.earned, 0.0, "an open wave is not a deposit");
+        assert_eq!(first.earned, sim.currency_gain[&player]);
+        let saved = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        assert!((saved.credits() - first.balance).abs() < 1e-3);
+        assert!(!partial_path(&path).exists(), "the wallet and the match key land in the one renamed save");
+        let second = Packet::decode(&exchange_at(&path, &bytes).unwrap()).unwrap();
+        let Packet::BankReply(second) = second else { panic!("bank reply") };
+        assert!(!second.fresh);
+        assert_eq!(second.earned, first.earned);
+        assert!((second.balance - first.balance).abs() < 1e-3);
+        let missing = BankRequest { version: PROTOCOL_VERSION, match_id: id.wrapping_add(9), player_id: player };
+        let unknown = Packet::decode(&exchange_at(&path, &Packet::Bank(missing).encode().unwrap()).unwrap()).unwrap();
+        let Packet::BankReply(unknown) = unknown else { panic!("bank reply") };
+        assert_eq!(unknown.fault, Some(BankFault::Unknown));
+        let still = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        assert!((still.credits() - first.balance).abs() < 1e-3);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bank_writes_the_balance_and_the_match_key_together() {
+        let dir = scratch("bank-txn");
+        let path = dir.join("account.bin");
+        let content = Content::embedded();
+        let mut sim = gemini_sim::Sim::new(&content, "normal", 1);
+        let player = sim.players[0].token;
+        sim.enemies.clear();
+        sim.pending_vents.clear();
+        sim.director.pool = 0.0;
+        sim.director.queue = 0.0;
+        sim.phase = gemini_sim::Phase::Combat;
+        sim.step(&content, gemini_sim::PlayerInput::default());
+        let earned = sim.currency_gain[&player];
+        assert!(earned > 0.0, "a cleared wave changes the wallet");
+        let id = open_match().unwrap();
+        note_match(id, &sim).unwrap();
+        let request = Packet::Bank(BankRequest {
+            version: PROTOCOL_VERSION,
+            match_id: id,
+            player_id: player,
+        })
+        .encode()
+        .unwrap();
+        let first = Packet::decode(&exchange_at(&path, &request).unwrap()).unwrap();
+        let Packet::BankReply(first) = first else { panic!("bank reply") };
+        assert!(first.fresh && first.fault.is_none(), "{first:?}");
+        assert!((first.earned - earned).abs() < 1e-3);
+        let saved = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        assert!((saved.credits() - first.balance).abs() < 1e-3);
+        assert!(!partial_path(&path).exists(), "one rename replaces the save");
+        let second = Packet::decode(&exchange_at(&path, &request).unwrap()).unwrap();
+        let Packet::BankReply(second) = second else { panic!("bank reply") };
+        assert!(!second.fresh, "the match key was in the same save as the balance");
+        assert!((second.earned - first.earned).abs() < 1e-3);
+        assert!((second.balance - first.balance).abs() < 1e-3);
+        let still = Account::from_bytes(&fs::read(&path).unwrap()).unwrap();
+        assert!((still.credits() - first.balance).abs() < 1e-3);
         let _ = fs::remove_dir_all(&dir);
     }
 }

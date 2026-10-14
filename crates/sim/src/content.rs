@@ -248,7 +248,11 @@ impl Content {
             controller,
             upgrades: parse::<UpgradeFile>("run_upgrades.toml", src.run_upgrades)?.upgrade,
             endless: parse("endless.toml", src.endless)?,
-            currency: parse("currency.toml", src.currency)?,
+            currency: {
+                let currency: Currency = parse("currency.toml", src.currency)?;
+                validate_currency(&currency)?;
+                currency
+            },
             banners: {
                 let banners: Banners = parse("banners.toml", src.banners)?;
                 validate_banners(&banners)?;
@@ -875,7 +879,9 @@ pub struct Endless {
 #[derive(Clone, Debug, Deserialize)]
 pub struct Currency {
     pub per_wave: f32,
+    pub flat_after_wave: u32,
     pub endless_milestone_every: u32,
+    pub endless_milestone_bonus: f32,
     pub match_complete_bonus: f32,
     pub boss_kill_bonus: f32,
     pub per_round_cap_mult: f32,
@@ -4813,6 +4819,8 @@ pub struct SfxDef {
     /// Mix row category. `category_ui` stays the ui flag.
     #[serde(default)]
     pub category: String,
+    /// UI bus cues that do not take a `voice_cap` slot. `load_mix` sets this from the row.
+    pub outside_voice_cap: bool,
 }
 
 fn require_emitted_game_voices(
@@ -5003,8 +5011,33 @@ pub fn power_level(table: &DuplicateRanks, rank: u32) -> f32 {
     rank as f32 * table.power_per_rank
 }
 
-/// Currency the backend formula will recognize. The flat endless milestone
-/// bonus lives only in a comment in `currency.toml`, so it is not applied here.
+/// Per-wave pay for a round the player was in at the start. Flat after `flat_after_wave`.
+pub fn wave_payout(currency: &Currency, wave: u32, tier_currency: f32) -> f32 {
+    if wave == 0 || wave > currency.flat_after_wave {
+        0.0
+    } else {
+        currency.per_wave * tier_currency
+    }
+}
+
+/// Milestone pay. It starts after `flat_after_wave`, every `endless_milestone_every` waves.
+pub fn milestone_payout(currency: &Currency, wave: u32, tier_currency: f32) -> f32 {
+    if wave <= currency.flat_after_wave {
+        return 0.0;
+    }
+    if wave % currency.endless_milestone_every == 0 {
+        currency.endless_milestone_bonus * tier_currency
+    } else {
+        0.0
+    }
+}
+
+/// Win bonus. A quit, a disconnect, and a defeat do not take it.
+pub fn win_payout(currency: &Currency, tier_currency: f32) -> f32 {
+    currency.match_complete_bonus * tier_currency
+}
+
+/// Currency the server's match record will recognize for waves `1..=wave_reached`.
 pub fn currency_reward(
     currency: &Currency,
     wave_reached: u32,
@@ -5012,12 +5045,39 @@ pub fn currency_reward(
     completed: bool,
     boss_kills: u32,
 ) -> f32 {
-    let mut total = currency.per_wave * (wave_reached.min(20) as f32) * tier_currency;
+    let mut total = 0.0;
+    let mut wave = 1u32;
+    while wave <= wave_reached {
+        total += wave_payout(currency, wave, tier_currency);
+        total += milestone_payout(currency, wave, tier_currency);
+        wave += 1;
+    }
     total += boss_kills as f32 * currency.boss_kill_bonus;
     if completed {
-        total += currency.match_complete_bonus * tier_currency;
+        total += win_payout(currency, tier_currency);
     }
     total
+}
+
+fn validate_currency(currency: &Currency) -> Result<(), String> {
+    for (name, value) in [
+        ("per_wave", currency.per_wave),
+        ("endless_milestone_bonus", currency.endless_milestone_bonus),
+        ("match_complete_bonus", currency.match_complete_bonus),
+        ("boss_kill_bonus", currency.boss_kill_bonus),
+        ("per_round_cap_mult", currency.per_round_cap_mult),
+    ] {
+        if !(value.is_finite() && value >= 0.0) {
+            return Err(format!("currency.toml {name} must be >= 0"));
+        }
+    }
+    if currency.flat_after_wave == 0 {
+        return Err("currency.toml flat_after_wave must be > 0".into());
+    }
+    if currency.endless_milestone_every == 0 {
+        return Err("currency.toml endless_milestone_every must be > 0".into());
+    }
+    Ok(())
 }
 
 pub fn weakpoint_of(content: &Content, kind: EnemyKind) -> Weakpoint {
@@ -5071,10 +5131,11 @@ pub struct Ui {
     pub portrait: UiPortrait,
     pub settings: UiSettings,
     pub sounds: UiSounds,
+    pub bank: UiBank,
 }
 
 impl Ui {
-    pub fn color_keys(&self) -> [(&str, &str); 13] {
+    pub fn color_keys(&self) -> [(&str, &str); 15] {
         [
             ("ui.colors.panel", self.colors.panel.as_str()),
             ("ui.colors.text", self.colors.text.as_str()),
@@ -5088,6 +5149,8 @@ impl Ui {
             ("ui.colors.bevel_light", self.colors.bevel_light.as_str()),
             ("ui.colors.bevel_shadow", self.colors.bevel_shadow.as_str()),
             ("ui.colors.veil", self.colors.veil.as_str()),
+            ("ui.colors.bank_count", self.colors.bank_count.as_str()),
+            ("ui.colors.bank_bonus", self.colors.bank_bonus.as_str()),
             ("ui.portrait.bg", self.portrait.bg.as_str()),
         ]
     }
@@ -5111,6 +5174,10 @@ pub struct UiColors {
     pub bevel_shadow: String,
     /// Co-op pause veil. The match shows through at `layout.coop_pause_dim`.
     pub veil: String,
+    /// Count-up digits. This key is not legendary gold.
+    pub bank_count: String,
+    /// Bonus line. This key is not legendary gold.
+    pub bank_bonus: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -5162,6 +5229,10 @@ pub struct UiCopy {
     pub pull_credits: String,
     pub pull_needs_server: String,
     pub pull_no_shards: String,
+    pub bank_earned: String,
+    pub bank_bonus: String,
+    pub bank_quit: String,
+    pub bank_disconnect: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -5243,6 +5314,15 @@ pub struct UiLayout {
     pub inset_portrait: f32,
     /// Smallest border inset, in screen pixels after scaling.
     pub inset_min: f32,
+    pub bank_panel_width: f32,
+    pub bank_panel_height: f32,
+}
+
+/// Match-end count-up. Both times come from `ui.toml`.
+#[derive(Clone, Debug, Deserialize)]
+pub struct UiBank {
+    pub count_secs: f32,
+    pub count_tick_secs: f32,
 }
 
 /// Framing for the hero-card portrait raster.
@@ -5296,10 +5376,12 @@ pub struct UiSounds {
     pub match_start: String,
     pub victory: String,
     pub defeat: String,
+    pub count_tick: String,
+    pub bank_chime: String,
 }
 
 impl UiSounds {
-    pub fn ids(&self) -> [(&str, &str); 11] {
+    pub fn ids(&self) -> [(&str, &str); 13] {
         [
             ("hover", self.hover.as_str()),
             ("confirm", self.confirm.as_str()),
@@ -5312,6 +5394,8 @@ impl UiSounds {
             ("match_start", self.match_start.as_str()),
             ("victory", self.victory.as_str()),
             ("defeat", self.defeat.as_str()),
+            ("count_tick", self.count_tick.as_str()),
+            ("bank_chime", self.bank_chime.as_str()),
         ]
     }
 }
@@ -5360,6 +5444,15 @@ fn validate_ui(
     if layout.title_scale == 0 || layout.button_scale == 0 || layout.hint_scale == 0 {
         return Err("ui.toml scales must be at least 1".into());
     }
+    if !(ui.bank.count_secs > 0.0) || !(ui.bank.count_tick_secs > 0.0) {
+        return Err("ui.toml bank count_secs and count_tick_secs must be > 0".into());
+    }
+    if ui.bank.count_secs < ui.bank.count_tick_secs {
+        return Err("ui.toml bank count_secs must cover one count_tick_secs".into());
+    }
+    if ui.colors.bank_count == "rarity_legendary" || ui.colors.bank_bonus == "rarity_legendary" {
+        return Err("ui.toml bank count and bonus must not use legendary gold".into());
+    }
     if !(layout.border_px > 0.0) {
         return Err("ui.toml layout.border_px must be > 0".into());
     }
@@ -5379,6 +5472,8 @@ fn validate_ui(
         ("settings_row_height", layout.settings_row_height),
         ("fit_width", layout.fit_width),
         ("fit_height", layout.fit_height),
+        ("bank_panel_width", layout.bank_panel_width),
+        ("bank_panel_height", layout.bank_panel_height),
     ] {
         if !(value.is_finite() && value > 0.0) {
             return Err(format!("ui.toml layout.{name} must be > 0"));
@@ -5509,6 +5604,41 @@ fn validate_ui(
         if check_files && !assets.join(&row.path).is_file() {
             return Err(format!("ui sound {id} file {} is missing", row.path));
         }
+    }
+    for slot in ["count_tick", "bank_chime"] {
+        let id = match slot {
+            "count_tick" => ui.sounds.count_tick.as_str(),
+            "bank_chime" => ui.sounds.bank_chime.as_str(),
+            _ => return Err(format!("ui.toml sounds.{slot} is not a bank cue")),
+        };
+        let row = audio
+            .sfx
+            .iter()
+            .find(|row| row.id == id)
+            .ok_or_else(|| format!("ui.toml sounds.{slot} \"{id}\" is missing from audio_mix.toml"))?;
+        if !row.outside_voice_cap {
+            return Err(format!("audio_mix.toml {id} must be outside the voice cap"));
+        }
+        if !row.stealable || row.looped || !row.flat {
+            return Err(format!("audio_mix.toml {id} must be a flat stealable one-shot"));
+        }
+    }
+    let glyph_px = glyphs.title_glyph_px.max(1);
+    let bank_inner = layout.bank_panel_width - layout.pause_outline_px * 2.0 - layout.bevel_px * 2.0;
+    for label in [&ui.copy.bank_quit, &ui.copy.bank_disconnect, &ui.copy.victory, &ui.copy.defeat] {
+        require_fit(label, layout.title_scale, glyph_px, bank_inner, "bank title")?;
+    }
+    let line_h = layout.button_scale as f32 * glyphs.glyph_rows as f32 + layout.spacing_block;
+    let title_h = layout.title_scale as f32 * glyphs.glyph_rows as f32;
+    let stack = layout.margin_y * 2.0
+        + title_h
+        + layout.title_gap
+        + line_h * 6.0
+        + layout.row_gap
+        + layout.button_height * 2.0
+        + layout.row_gap;
+    if stack > layout.bank_panel_height {
+        return Err(format!("ui.toml bank panel is {stack}px tall and bank_panel_height is {}", layout.bank_panel_height));
     }
     let glyph = glyphs.title_glyph_px.max(1);
     let button_inner = layout.button_width - layout.border_px * 2.0;
