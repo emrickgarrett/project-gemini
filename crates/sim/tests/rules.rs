@@ -1354,7 +1354,9 @@ fn victory_palette_key_is_required() {
     assert_eq!(content.ui.colors.victory, "victory");
     assert_eq!(content.palette.keys.victory, "#2DE1D0");
     assert_eq!(content.palette.hex("victory"), Some("#2DE1D0"));
-    assert_ne!(content.palette.hex("victory"), content.palette.hex("rarity_legendary"));
+    for name in ["rarity_common", "rarity_rare", "rarity_epic", "rarity_legendary"] {
+        assert_ne!(content.palette.hex("victory"), content.palette.hex(name), "{name}");
+    }
     let base = gemini_sim::content::embedded_sources();
     let missing = base.palette.replacen("victory = \"#2DE1D0\"\n", "", 1);
     assert_ne!(missing, base.palette);
@@ -1373,6 +1375,35 @@ fn victory_palette_key_is_required() {
     .expect_err("victory must not be legendary gold");
     assert!(err.contains("victory"), "{err}");
     assert!(err.contains("legendary"), "{err}");
+    let plate = content.palette.hex("hero_plate").expect("hero_plate");
+    let legendary = content.palette.hex("rarity_legendary").expect("legendary");
+    let aliased = base.palette.replacen(
+        &format!("hero_plate = \"{plate}\""),
+        &format!("hero_plate = \"{legendary}\""),
+        1,
+    );
+    let pointed = base.ui.replacen("victory = \"victory\"", "victory = \"hero_plate\"", 1);
+    assert_ne!(aliased, base.palette);
+    assert_ne!(pointed, base.ui);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        palette: &aliased,
+        ui: &pointed,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("alias of legendary gold");
+    assert!(err.contains("victory"), "{err}");
+    assert!(err.contains("rarity_legendary"), "{err}");
+    for name in ["rarity_epic", "rarity_rare"] {
+        let painted = base.ui.replacen("victory = \"victory\"", &format!("victory = \"{name}\""), 1);
+        assert_ne!(painted, base.ui);
+        let err = Content::parse(&gemini_sim::content::Sources {
+            ui: &painted,
+            ..sources_with(&base, base.coop)
+        })
+        .expect_err(name);
+        assert!(err.contains("victory"), "{name}: {err}");
+        assert!(err.contains(name), "{name}: {err}");
+    }
 }
 
 #[test]
