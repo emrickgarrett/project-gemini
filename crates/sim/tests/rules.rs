@@ -1512,13 +1512,6 @@ fn palette_hex_must_be_upper_rrggbb() {
     assert!(err.contains("#c67a2e"), "{err}");
 }
 
-fn quoted_after(text: &str, marker: &str) -> String {
-    let start = text.find(marker).unwrap_or_else(|| panic!("missing {marker}"));
-    let rest = &text[start + marker.len()..];
-    let end = rest.find('"').unwrap_or_else(|| panic!("unclosed {marker}"));
-    rest[..end].to_string()
-}
-
 fn palette_doc(text: &str) -> toml::Value {
     toml::from_str(text).expect("palette.toml")
 }
@@ -1541,15 +1534,6 @@ fn bug_owned_names(doc: &toml::Value) -> Vec<String> {
         .iter()
         .map(|name| name.as_str().expect("bug_owned name").to_string())
         .collect()
-}
-
-/// Defeat stays `spitter_glow` in the shipped file. Tests that need a clean load
-/// point it at the panel key already in ui.toml. That is not a replacement color.
-fn point_defeat_at_panel(ui: &str) -> String {
-    let panel = quoted_after(ui, "panel = \"");
-    let updated = ui.replacen("defeat = \"spitter_glow\"", &format!("defeat = \"{panel}\""), 1);
-    assert_ne!(updated, ui);
-    updated
 }
 
 #[test]
@@ -1615,11 +1599,9 @@ fn bug_hex_alias_is_rejected() {
     assert!(err.contains("crate_reveal.toml layout.stage"), "{err}");
     assert!(err.contains("palette.toml keys.swarmer_glow"), "{err}");
 
-    let ui = point_defeat_at_panel(base.ui);
     let hero = base.hero.replacen("accent_key = \"hero_vex\"", "accent_key = \"swarmer_glow\"", 1);
     assert_ne!(hero, base.hero);
     let err = Content::parse(&gemini_sim::content::Sources {
-        ui: &ui,
         hero: &hero,
         ..sources_with(&base, base.coop)
     })
@@ -1631,7 +1613,6 @@ fn bug_hex_alias_is_rejected() {
     let bugs = base.bugs.replacen("color=\"swarmer_amber\"", "color=\"bugs.acid\"", 1);
     assert_ne!(bugs, base.bugs);
     Content::parse(&gemini_sim::content::Sources {
-        ui: &ui,
         bugs: &bugs,
         ..sources_with(&base, base.coop)
     })
@@ -1684,19 +1665,66 @@ fn current_palette_loads() {
         let hex = palette_hex(&doc, name);
         assert!(hex.starts_with('#'), "{name} {hex}");
     }
-    let err = Content::parse(&sources_with(&base, base.coop)).expect_err(
-        "ui.toml colors.defeat is spitter_glow, a bug-owned hex. Art picks the replacement.",
-    );
-    assert!(err.contains("ui.toml colors.defeat"), "{err}");
-    assert!(err.contains("spitter_glow"), "{err}");
-    assert!(err.contains("palette.toml"), "{err}");
+    assert!(!names.iter().any(|name| name == "defeat_ember"));
+    let content = Content::parse(&sources_with(&base, base.coop)).expect("the shipped palette loads");
+    assert_eq!(content.ui.colors.defeat, "defeat_ember");
+    let ember = palette_hex(&doc, "defeat_ember");
+    assert_eq!(content.palette.hex("defeat_ember"), Some(ember.as_str()));
+    assert_ne!(ember, palette_hex(&doc, "victory"));
+    for name in &names {
+        assert_ne!(ember, palette_hex(&doc, name), "{name}");
+    }
+}
 
-    let ui = point_defeat_at_panel(base.ui);
-    Content::parse(&gemini_sim::content::Sources {
-        ui: &ui,
-        ..sources_with(&base, base.coop)
-    })
-    .expect("the shipped palette loads once defeat is not a bug-owned hex");
+#[test]
+fn defeat_hex_rejects_rarity_bug_and_victory() {
+    let base = gemini_sim::content::embedded_sources();
+    let doc = palette_doc(base.palette);
+    let ember = palette_hex(&doc, "defeat_ember");
+    let paint = |hex: &str| {
+        let palette = base.palette.replacen(
+            &format!("defeat_ember = \"{ember}\""),
+            &format!("defeat_ember = \"{hex}\""),
+            1,
+        );
+        assert_ne!(palette, base.palette);
+        palette
+    };
+    let load = |palette: &str, why: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            palette,
+            ..sources_with(&base, base.coop)
+        })
+        .expect_err(why)
+    };
+
+    let legendary = palette_hex(&doc, "rarity.legendary");
+    assert_ne!(ember, legendary);
+    let err = load(&paint(&legendary), "defeat must not share a rarity hex");
+    assert!(err.starts_with("ui.toml colors.defeat"), "{err}");
+    assert!(err.contains("palette.toml rarity.legendary"), "{err}");
+
+    let acid = palette_hex(&doc, "bugs.acid");
+    assert_ne!(ember, acid);
+    let err = load(&paint(&acid), "defeat must not share a bug-owned hex");
+    assert!(err.starts_with("ui.toml colors.defeat"), "{err}");
+    assert!(err.contains("bug-owned"), "{err}");
+    assert!(err.contains("palette.toml"), "{err}");
+    let shared: Vec<String> = bug_owned_names(&doc)
+        .into_iter()
+        .filter(|name| palette_hex(&doc, name) == acid)
+        .collect();
+    assert!(!shared.is_empty());
+    assert!(
+        shared.iter().any(|name| err.contains(name) || err.contains(&format!("keys.{name}"))),
+        "{err} shared={shared:?}"
+    );
+
+    let victory = palette_hex(&doc, "victory");
+    assert_ne!(ember, victory);
+    let err = load(&paint(&victory), "defeat must not share the victory hex");
+    assert!(err.starts_with("ui.toml colors.defeat"), "{err}");
+    assert!(err.contains("palette.toml keys.victory"), "{err}");
 }
 
 #[test]

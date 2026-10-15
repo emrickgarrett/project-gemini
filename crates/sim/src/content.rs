@@ -4327,6 +4327,8 @@ pub struct PaletteKeys {
     pub reveal_paper: String,
     /// Win title and panel outline. Its resolved hex must not match a rarity color.
     pub victory: String,
+    /// Loss title and outline. Its resolved hex must not match a rarity, a bug-owned color, or victory.
+    pub defeat_ember: String,
     pub hero_vex: String,
     pub hero_nyra: String,
     pub hero_brakk: String,
@@ -4443,6 +4445,7 @@ impl Palette {
             ("reveal_ink", "keys.reveal_ink", self.keys.reveal_ink.as_str()),
             ("reveal_paper", "keys.reveal_paper", self.keys.reveal_paper.as_str()),
             ("victory", "keys.victory", self.keys.victory.as_str()),
+            ("defeat_ember", "keys.defeat_ember", self.keys.defeat_ember.as_str()),
             ("hero_vex", "keys.hero_vex", self.keys.hero_vex.as_str()),
             ("hero_nyra", "keys.hero_nyra", self.keys.hero_nyra.as_str()),
             ("hero_brakk", "keys.hero_brakk", self.keys.hero_brakk.as_str()),
@@ -6073,6 +6076,26 @@ fn validate_ui(
         if victory_hex == rarity_hex {
             return Err(format!("ui.toml colors.victory matches {name}"));
         }
+    }
+    let defeat_hex = palette.hex(&ui.colors.defeat).ok_or_else(|| {
+        format!("ui.toml colors.defeat \"{}\" does not resolve", ui.colors.defeat)
+    })?;
+    for name in ["rarity_common", "rarity_rare", "rarity_epic", "rarity_legendary"] {
+        let rarity_hex = palette.hex(name).ok_or_else(|| format!("palette.toml {name} does not resolve"))?;
+        if defeat_hex == rarity_hex {
+            let path = palette.palette_toml_path(name)?;
+            return Err(format!("ui.toml colors.defeat matches palette.toml {path}"));
+        }
+    }
+    for (bug, bug_hex) in bug_owned_hexes(palette)? {
+        if defeat_hex == bug_hex {
+            let path = palette.palette_toml_path(&bug)?;
+            return Err(format!("ui.toml colors.defeat matches bug-owned palette.toml {path}"));
+        }
+    }
+    if defeat_hex == victory_hex {
+        let path = palette.palette_toml_path(&ui.colors.victory)?;
+        return Err(format!("ui.toml colors.defeat matches palette.toml {path}"));
     }
     if !(layout.border_px > 0.0) {
         return Err("ui.toml layout.border_px must be > 0".into());
