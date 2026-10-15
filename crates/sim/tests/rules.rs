@@ -1486,12 +1486,12 @@ fn palette_hex_must_be_upper_rrggbb() {
     let blank_teal = base.palette.replacen("teal = \"#1FB5A8\"", "teal = \"\"", 1);
     assert_ne!(blank_teal, base.palette);
     let err = load(&blank_teal, "empty hero.teal");
-    assert!(err.contains("hero_teal"), "{err}");
+    assert!(err.contains("hero.teal"), "{err}");
     assert!(err.contains("#RRGGBB"), "{err}");
     let blank_shot = base.palette.replacen("player = \"#2DE1D0\"", "player = \"\"", 1);
     assert_ne!(blank_shot, base.palette);
     let err = load(&blank_shot, "empty shots.player");
-    assert!(err.contains("shots_player"), "{err}");
+    assert!(err.contains("shots.player"), "{err}");
     assert!(err.contains("#RRGGBB"), "{err}");
     let blank_white = base.palette.replacen("white = \"#F2F2F2\"", "white = \"\"", 1);
     assert_ne!(blank_white, base.palette);
@@ -1510,6 +1510,36 @@ fn palette_hex_must_be_upper_rrggbb() {
     let err = load(&lower_shell, "lowercase swarmer.shell");
     assert!(err.contains("swarmer.shell"), "{err}");
     assert!(err.contains("#c67a2e"), "{err}");
+}
+
+#[test]
+fn enemy_colors_stay_off_ui_and_heroes() {
+    let base = gemini_sim::content::embedded_sources();
+    let ui = base.ui.replacen("panel = \"ui_panel_slate\"", "panel = \"bugs.acid\"", 1);
+    assert_ne!(ui, base.ui);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        ui: &ui,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("ui must not use bugs.acid");
+    assert!(err.contains("bugs.acid"), "{err}");
+    assert!(err.contains("ui.colors.panel"), "{err}");
+    let hero = base.hero.replacen("accent_key = \"hero_vex\"", "accent_key = \"bugs.acid\"", 1);
+    assert_ne!(hero, base.hero);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        hero: &hero,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("hero must not use bugs.acid");
+    assert!(err.contains("bugs.acid"), "{err}");
+    assert!(err.contains("accent_key"), "{err}");
+    let bugs = base.bugs.replacen("color=\"swarmer_amber\"", "color=\"bugs.acid\"", 1);
+    assert_ne!(bugs, base.bugs);
+    Content::parse(&gemini_sim::content::Sources {
+        bugs: &bugs,
+        ..sources_with(&base, base.coop)
+    })
+    .expect("enemy content may use bugs.acid");
 }
 
 #[test]

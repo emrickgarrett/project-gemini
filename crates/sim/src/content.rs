@@ -197,6 +197,7 @@ impl Content {
         let difficulty = parse::<DifficultyFile>("difficulty.toml", src.difficulty)?.tier;
         require_palette_keys(&palette, &bugs, &presentation.hud.away, &crate_reveal.layout, &ui, &heroes)
             .map_err(|err| format!("palette.toml: {err}"))?;
+        reject_enemy_colors_on_friendly(&ui, &heroes, &heroes_visual)?;
         let accent_key = heroes
             .iter()
             .find(|card| card.id == hero.id)
@@ -4539,6 +4540,25 @@ impl CastLook {
     }
 }
 
+/// Lookup name from [`Palette::hex`] to the `palette.toml` path named in load errors.
+fn palette_toml_path(key: &str) -> String {
+    match key {
+        "hero_teal" => "hero.teal".to_string(),
+        "hero_cobalt" => "hero.cobalt".to_string(),
+        "hero_white" => "hero.white".to_string(),
+        "hero_accent" => "hero.accent".to_string(),
+        "shots_player" => "shots.player".to_string(),
+        "arena_dark" => "arena.rock_dark".to_string(),
+        "arena_light" => "arena.rock_light".to_string(),
+        "rarity_common" => "rarity.common".to_string(),
+        "rarity_rare" => "rarity.rare".to_string(),
+        "rarity_epic" => "rarity.epic".to_string(),
+        "rarity_legendary" => "rarity.legendary".to_string(),
+        other if other.contains('.') => other.to_string(),
+        other => format!("keys.{other}"),
+    }
+}
+
 fn require_upper_rrggbb(name: &str, hex: &str) -> Result<(), String> {
     // Only these two are empty during this check. `hero.white` may be omitted so a later
     // check can name it. `hero.accent` is copied from the starter hero after this runs.
@@ -4557,12 +4577,53 @@ fn require_upper_rrggbb(name: &str, hex: &str) -> Result<(), String> {
 
 fn validate_palette_hexes(palette: &Palette) -> Result<(), String> {
     for (name, hex) in palette.hex_fields() {
-        let name = match name {
-            "hero_white" => "hero.white",
-            "hero_accent" => "hero.accent",
-            other => other,
-        };
-        require_upper_rrggbb(name, hex)?;
+        require_upper_rrggbb(&palette_toml_path(name), hex)?;
+    }
+    Ok(())
+}
+
+fn enemy_only_palette(name: &str) -> bool {
+    name.starts_with("swarmer.")
+        || name.starts_with("spitter.")
+        || name.starts_with("brute.")
+        || name.starts_with("bugs.")
+}
+
+fn reject_enemy_color(owner: &str, name: &str) -> Result<(), String> {
+    if enemy_only_palette(name) {
+        return Err(format!("{owner} must not use enemy color \"{name}\""));
+    }
+    Ok(())
+}
+
+fn reject_enemy_colors_on_friendly(ui: &Ui, heroes: &[HeroCard], heroes_visual: &HeroesVisual) -> Result<(), String> {
+    for (owner, name) in ui.color_keys() {
+        reject_enemy_color(owner, name)?;
+    }
+    for hero in heroes {
+        reject_enemy_color(&format!("characters.toml {} accent_key", hero.id), &hero.accent_key)?;
+    }
+    for mesh in &heroes_visual.meshes {
+        for part in &mesh.parts {
+            if part.color != "accent" {
+                reject_enemy_color(&format!("heroes_visual.toml {} color", mesh.id), &part.color)?;
+            }
+        }
+    }
+    for model in &heroes_visual.models {
+        for (slot, name) in [
+            ("base", model.base.as_str()),
+            ("primary", model.primary.as_str()),
+            ("secondary", model.secondary.as_str()),
+            ("accent", model.accent.as_str()),
+            ("fourth", model.fourth.as_str()),
+            ("glow", model.glow.as_str()),
+            ("rim", model.rim.as_str()),
+        ] {
+            if !name.is_empty() {
+                reject_enemy_color(&format!("heroes_visual.toml {} {slot}", model.id), name)?;
+            }
+        }
     }
     Ok(())
 }
@@ -4572,11 +4633,12 @@ fn validate_lit_keys(palette: &Palette) -> Result<(), String> {
         ("gear_nyra_gun_glow", &palette.keys.gear_nyra_gun_glow),
         ("gear_brakk_gun_glow", &palette.keys.gear_brakk_gun_glow),
     ] {
+        let path = palette_toml_path(name);
         if lit.hex.trim().trim_start_matches('#').len() < 6 {
-            return Err(format!("{name} hex does not resolve"));
+            return Err(format!("{path} hex does not resolve"));
         }
         if !lit.emissive {
-            return Err(format!("{name} emissive must be true"));
+            return Err(format!("{path} emissive must be true"));
         }
     }
     Ok(())
