@@ -202,6 +202,9 @@ impl Content {
         if let Err(err) = require_palette_keys(&palette, &bugs, &presentation.hud.away, &crate_reveal.layout, &ui, &heroes) {
             blocked.push(if err.starts_with("bugs.toml ") { err } else { format!("palette.toml {err}") });
         }
+        if let Err(err) = require_bug_visual_owned(&palette, &models, &bugs) {
+            blocked.push(err);
+        }
         if let Err(err) = reject_bug_owned_on_friendly(
             &palette,
             &ui,
@@ -4721,6 +4724,35 @@ fn validate_lit_keys(palette: &Palette) -> Result<(), String> {
     Ok(())
 }
 
+/// Bug cast colors in `bugs_visual.toml`. Empty slots, such as a rim the mask does not use, are skipped.
+fn require_bug_visual_owned(palette: &Palette, models: &[CastModel], bugs: &crate::bugs::BugBook) -> Result<(), String> {
+    let mut unowned = Vec::new();
+    for model in models {
+        if bugs.rows().iter().all(|(id, _)| *id != model.id) {
+            continue;
+        }
+        for (slot, name) in [
+            ("base", model.base.as_str()),
+            ("accent", model.accent.as_str()),
+            ("glow", model.glow.as_str()),
+            ("rim", model.rim.as_str()),
+        ] {
+            if name.is_empty() {
+                continue;
+            }
+            if palette.bug_owned.iter().any(|key| key == name) {
+                continue;
+            }
+            unowned.push(format!("bugs_visual.toml {} {slot} \"{name}\" is not bug_owned", model.id));
+        }
+    }
+    if unowned.is_empty() {
+        Ok(())
+    } else {
+        Err(unowned.join("\n"))
+    }
+}
+
 fn require_palette_keys(
     palette: &Palette,
     bugs: &crate::bugs::BugBook,
@@ -6109,12 +6141,6 @@ fn validate_ui(
         if defeat_hex == rarity_hex {
             let path = palette.palette_toml_path(name)?;
             return Err(format!("ui.toml colors.defeat matches palette.toml {path}"));
-        }
-    }
-    for (bug, bug_hex) in bug_owned_hexes(palette)? {
-        if defeat_hex == bug_hex {
-            let path = palette.palette_toml_path(&bug)?;
-            return Err(format!("ui.toml colors.defeat matches bug-owned palette.toml {path}"));
         }
     }
     if defeat_hex == victory_hex {

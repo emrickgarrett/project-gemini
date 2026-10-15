@@ -1698,6 +1698,16 @@ fn bug_colors_must_be_bug_owned() {
             assert!(names.iter().any(|name| name == &part.color), "{bug} {}", part.name);
         }
     }
+    for model in &content.models {
+        if content.bugs.rows().iter().all(|(id, _)| *id != model.id) {
+            continue;
+        }
+        for (slot, name) in [("base", &model.base), ("accent", &model.accent), ("glow", &model.glow), ("rim", &model.rim)] {
+            if !name.is_empty() {
+                assert!(names.iter().any(|owned| owned == name), "{} {slot} {name}", model.id);
+            }
+        }
+    }
 
     let friendly = "defeat_ember";
     assert!(!names.iter().any(|name| name == friendly));
@@ -1728,6 +1738,29 @@ fn bug_colors_must_be_bug_owned() {
     let err = load(&part, "part color must be bug_owned");
     assert!(err.contains("bugs.toml brood_mother.visual.parts.sac"), "{err}");
     assert!(err.contains(friendly), "{err}");
+    assert!(err.contains("not bug_owned"), "{err}");
+
+    let owned = |palette: &str, why: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            palette,
+            ..sources_with(&base, base.coop)
+        })
+        .expect_err(why)
+    };
+    let without_rim = base.palette.replacen("  \"spitter_rim\",\n", "", 1);
+    assert_ne!(without_rim, base.palette);
+    assert!(without_rim.contains("spitter_rim = "));
+    let err = owned(&without_rim, "spitter rim must be bug_owned");
+    assert!(err.contains("bugs_visual.toml spitter rim"), "{err}");
+    assert!(err.contains("\"spitter_rim\""), "{err}");
+    assert!(err.contains("not bug_owned"), "{err}");
+
+    let without_sac = base.palette.replacen("  \"brood_sac\",\n", "", 1);
+    assert_ne!(without_sac, base.palette);
+    let err = owned(&without_sac, "brood sac must be bug_owned");
+    assert!(err.contains("bugs.toml"), "{err}");
+    assert!(err.contains("bugs_visual.toml brood_mother base"), "{err}");
+    assert!(err.contains("\"brood_sac\""), "{err}");
     assert!(err.contains("not bug_owned"), "{err}");
 }
 
