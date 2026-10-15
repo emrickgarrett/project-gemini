@@ -1461,6 +1461,44 @@ fn palette_hex_must_be_upper_rrggbb() {
         assert!(err.contains(bad), "{label}: {err}");
         assert!(err.contains("#RRGGBB"), "{label}: {err}");
     }
+    for (alias, canonical) in [
+        ("teal", "hero_teal"),
+        ("cobalt", "hero_cobalt"),
+        ("white", "hero_white"),
+        ("accent", "hero_accent"),
+    ] {
+        assert_eq!(content.palette.hex(alias), content.palette.hex(canonical), "{alias}");
+        assert!(content.palette.hex(alias).is_some_and(|hex| !hex.is_empty()), "{alias}");
+    }
+    assert!(content.palette.hex("not_a_palette_key").is_none());
+    let load = |palette: &str, why: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            palette,
+            ..sources_with(&base, base.coop)
+        })
+        .expect_err(why)
+    };
+    let blank_victory = base.palette.replacen("victory = \"#2DE1D0\"", "victory = \"\"", 1);
+    assert_ne!(blank_victory, base.palette);
+    let err = load(&blank_victory, "empty victory");
+    assert!(err.contains("victory"), "{err}");
+    assert!(err.contains("#RRGGBB"), "{err}");
+    let blank_teal = base.palette.replacen("teal = \"#1FB5A8\"", "teal = \"\"", 1);
+    assert_ne!(blank_teal, base.palette);
+    let err = load(&blank_teal, "empty hero.teal");
+    assert!(err.contains("hero_teal"), "{err}");
+    assert!(err.contains("#RRGGBB"), "{err}");
+    let blank_shot = base.palette.replacen("player = \"#2DE1D0\"", "player = \"\"", 1);
+    assert_ne!(blank_shot, base.palette);
+    let err = load(&blank_shot, "empty shots.player");
+    assert!(err.contains("shots_player"), "{err}");
+    assert!(err.contains("#RRGGBB"), "{err}");
+    let blank_white = base.palette.replacen("white = \"#F2F2F2\"", "white = \"\"", 1);
+    assert_ne!(blank_white, base.palette);
+    let err = load(&blank_white, "empty hero.white");
+    assert!(err.contains("hero_white"), "{err}");
+    assert!(err.contains("does not resolve"), "{err}");
+    assert!(!err.contains("#RRGGBB"), "{err}");
 }
 
 #[test]
