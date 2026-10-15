@@ -4395,15 +4395,21 @@ impl Palette {
             .find_map(|(key, hex)| (key == name).then_some(hex))
     }
 
-    /// Canonical name and hex for every color [`Self::hex`] resolves. Aliases are not repeated.
+    /// Every stored palette hex. [`Self::hex`] and `validate_palette_hexes` both walk this list. Aliases are not repeated.
     fn hex_fields(&self) -> impl Iterator<Item = (&'static str, &str)> {
         [
             ("swarmer_amber", self.keys.swarmer_amber.as_str()),
             ("swarmer_glow", self.keys.swarmer_glow.as_str()),
+            ("swarmer.shell", self.swarmer.shell.as_str()),
+            ("swarmer.glow", self.swarmer.glow.as_str()),
             ("spitter_carapace", self.keys.spitter_carapace.as_str()),
             ("spitter_glow", self.keys.spitter_glow.as_str()),
+            ("spitter.carapace", self.spitter.carapace.as_str()),
+            ("spitter.glow", self.spitter.glow.as_str()),
             ("brute_amber", self.keys.brute_amber.as_str()),
             ("brute_cracks", self.keys.brute_cracks.as_str()),
+            ("brute.shell", self.brute.shell.as_str()),
+            ("brute.cracks", self.brute.cracks.as_str()),
             ("brood_sac", self.keys.brood_sac.as_str()),
             ("bud_glow", self.keys.bud_glow.as_str()),
             ("ui_panel_slate", self.keys.ui_panel_slate.as_str()),
@@ -4485,6 +4491,9 @@ impl Palette {
             ("rarity_rare", self.rarity.rare.as_str()),
             ("rarity_epic", self.rarity.epic.as_str()),
             ("rarity_legendary", self.rarity.legendary.as_str()),
+            ("bugs.acid", self.bugs.acid.as_str()),
+            ("bugs.amber", self.bugs.amber.as_str()),
+            ("bugs.magenta", self.bugs.magenta.as_str()),
         ]
         .into_iter()
     }

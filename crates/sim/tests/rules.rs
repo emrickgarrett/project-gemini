@@ -1499,6 +1499,17 @@ fn palette_hex_must_be_upper_rrggbb() {
     assert!(err.contains("hero_white"), "{err}");
     assert!(err.contains("does not resolve"), "{err}");
     assert!(!err.contains("#RRGGBB"), "{err}");
+    assert_eq!(content.palette.hex("bugs.acid"), Some(content.palette.bugs.acid.as_str()));
+    let blank_acid = base.palette.replacen("acid = \"#7CFF3A\"", "acid = \"\"", 1);
+    assert_ne!(blank_acid, base.palette);
+    let err = load(&blank_acid, "empty bugs.acid");
+    assert!(err.contains("bugs.acid"), "{err}");
+    assert!(err.contains("#RRGGBB"), "{err}");
+    let lower_shell = base.palette.replacen("shell = \"#C67A2E\"", "shell = \"#c67a2e\"", 1);
+    assert_ne!(lower_shell, base.palette);
+    let err = load(&lower_shell, "lowercase swarmer.shell");
+    assert!(err.contains("swarmer.shell"), "{err}");
+    assert!(err.contains("#c67a2e"), "{err}");
 }
 
 #[test]
