@@ -197,7 +197,7 @@ impl Content {
         let difficulty = parse::<DifficultyFile>("difficulty.toml", src.difficulty)?.tier;
         require_palette_keys(&palette, &bugs, &presentation.hud.away, &crate_reveal.layout, &ui, &heroes)
             .map_err(|err| format!("palette.toml: {err}"))?;
-        reject_enemy_colors_on_friendly(&ui, &heroes, &heroes_visual)?;
+        reject_bug_colors_on_friendly(&palette, &ui, &heroes, &heroes_visual)?;
         let accent_key = heroes
             .iter()
             .find(|card| card.id == hero.id)
@@ -4235,6 +4235,8 @@ pub struct Palette {
     pub rarity: RarityColors,
     pub bugs: BugColors,
     pub keys: PaletteKeys,
+    /// Palette names whose resolved hexes are reserved for bugs. Read from `palette.toml`.
+    pub bug_owned: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -4582,32 +4584,58 @@ fn validate_palette_hexes(palette: &Palette) -> Result<(), String> {
     Ok(())
 }
 
-fn enemy_only_palette(name: &str) -> bool {
-    name.starts_with("swarmer.")
-        || name.starts_with("spitter.")
-        || name.starts_with("brute.")
-        || name.starts_with("bugs.")
+fn bug_color_hexes(palette: &Palette) -> Result<Vec<&str>, String> {
+    let mut hexes = Vec::new();
+    for name in &palette.bug_owned {
+        let hex = palette.hex(name).ok_or_else(|| {
+            format!("palette.toml bug_owned \"{name}\" does not resolve")
+        })?;
+        if hex.is_empty() {
+            return Err(format!("palette.toml bug_owned \"{name}\" does not resolve"));
+        }
+        if !hexes.contains(&hex) {
+            hexes.push(hex);
+        }
+    }
+    Ok(hexes)
 }
 
-fn reject_enemy_color(owner: &str, name: &str) -> Result<(), String> {
-    if enemy_only_palette(name) {
+fn reject_bug_color(owner: &str, name: &str, palette: &Palette, owned: &[&str]) -> Result<(), String> {
+    let Some(hex) = palette.hex(name).filter(|hex| !hex.is_empty()) else {
+        return Ok(());
+    };
+    if owned.contains(&hex) {
         return Err(format!("{owner} must not use enemy color \"{name}\""));
     }
     Ok(())
 }
 
-fn reject_enemy_colors_on_friendly(ui: &Ui, heroes: &[HeroCard], heroes_visual: &HeroesVisual) -> Result<(), String> {
+fn reject_bug_colors_on_friendly(
+    palette: &Palette,
+    ui: &Ui,
+    heroes: &[HeroCard],
+    heroes_visual: &HeroesVisual,
+) -> Result<(), String> {
+    let owned = bug_color_hexes(palette)?;
     for (owner, name) in ui.color_keys() {
-        reject_enemy_color(owner, name)?;
+        reject_bug_color(owner, name, palette, &owned)?;
     }
     for hero in heroes {
-        reject_enemy_color(&format!("characters.toml {} accent_key", hero.id), &hero.accent_key)?;
+        reject_bug_color(
+            &format!("characters.toml {} accent_key", hero.id),
+            &hero.accent_key,
+            palette,
+            &owned,
+        )?;
     }
     for mesh in &heroes_visual.meshes {
         for part in &mesh.parts {
-            if part.color != "accent" {
-                reject_enemy_color(&format!("heroes_visual.toml {} color", mesh.id), &part.color)?;
-            }
+            reject_bug_color(
+                &format!("heroes_visual.toml {} color", mesh.id),
+                &part.color,
+                palette,
+                &owned,
+            )?;
         }
     }
     for model in &heroes_visual.models {
@@ -4620,9 +4648,12 @@ fn reject_enemy_colors_on_friendly(ui: &Ui, heroes: &[HeroCard], heroes_visual: 
             ("glow", model.glow.as_str()),
             ("rim", model.rim.as_str()),
         ] {
-            if !name.is_empty() {
-                reject_enemy_color(&format!("heroes_visual.toml {} {slot}", model.id), name)?;
-            }
+            reject_bug_color(
+                &format!("heroes_visual.toml {} {slot}", model.id),
+                name,
+                palette,
+                &owned,
+            )?;
         }
     }
     Ok(())

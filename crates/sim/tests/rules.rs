@@ -1513,8 +1513,50 @@ fn palette_hex_must_be_upper_rrggbb() {
 }
 
 #[test]
-fn enemy_colors_stay_off_ui_and_heroes() {
+fn bug_owned_hexes_stay_off_ui_and_heroes() {
+    let content = Content::embedded();
     let base = gemini_sim::content::embedded_sources();
+    let required = [
+        "swarmer.shell",
+        "swarmer.glow",
+        "spitter.carapace",
+        "spitter.glow",
+        "brute.shell",
+        "brute.cracks",
+        "bugs.acid",
+        "bugs.amber",
+        "bugs.magenta",
+        "swarmer_amber",
+        "brute_amber",
+        "swarmer_glow",
+        "bud_glow",
+        "spitter_carapace",
+        "spitter_glow",
+        "brute_cracks",
+    ];
+    for name in required {
+        assert!(content.palette.bug_owned.iter().any(|key| key == name), "{name}");
+        assert!(content.palette.hex(name).is_some(), "{name}");
+    }
+    assert_eq!(content.palette.hex("swarmer.shell"), content.palette.hex("brute_amber"));
+    assert_eq!(content.palette.hex("spitter.glow"), content.palette.hex("brute.cracks"));
+    assert_eq!(content.palette.hex("spitter_glow"), content.palette.hex("bugs.magenta"));
+    assert_eq!(content.palette.hex("swarmer.glow"), content.palette.hex("bud_glow"));
+    let owned: Vec<&str> = content
+        .palette
+        .bug_owned
+        .iter()
+        .map(|name| content.palette.hex(name).expect(name))
+        .collect();
+    for (owner, name) in content.ui.color_keys() {
+        let hex = content.palette.hex(name).unwrap_or("");
+        assert!(!owned.contains(&hex), "{owner} {name} {hex}");
+    }
+    for hero in &content.heroes {
+        let hex = content.palette.hex(&hero.accent_key).unwrap_or("");
+        assert!(!owned.contains(&hex), "{} {}", hero.id, hex);
+    }
+
     let ui = base.ui.replacen("panel = \"ui_panel_slate\"", "panel = \"bugs.acid\"", 1);
     assert_ne!(ui, base.ui);
     let err = Content::parse(&gemini_sim::content::Sources {
@@ -1533,6 +1575,54 @@ fn enemy_colors_stay_off_ui_and_heroes() {
     .expect_err("hero must not use bugs.acid");
     assert!(err.contains("bugs.acid"), "{err}");
     assert!(err.contains("accent_key"), "{err}");
+
+    let acid = content.palette.hex("bugs.acid").expect("bugs.acid");
+    let plate = content.palette.hex("hero_plate").expect("hero_plate");
+    let aliased = base.palette.replacen(
+        &format!("hero_plate = \"{plate}\""),
+        &format!("hero_plate = \"{acid}\""),
+        1,
+    );
+    assert_ne!(aliased, base.palette);
+    let pointed = base.ui.replacen("panel = \"ui_panel_slate\"", "panel = \"hero_plate\"", 1);
+    assert_ne!(pointed, base.ui);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        palette: &aliased,
+        ui: &pointed,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("ui alias of a bug hex");
+    assert!(err.contains("hero_plate"), "{err}");
+    assert!(err.contains("ui.colors.panel"), "{err}");
+    let accent = base.hero.replacen("accent_key = \"hero_vex\"", "accent_key = \"hero_plate\"", 1);
+    assert_ne!(accent, base.hero);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        palette: &aliased,
+        hero: &accent,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("hero alias of a bug hex");
+    assert!(err.contains("hero_plate"), "{err}");
+    assert!(err.contains("accent_key"), "{err}");
+
+    let missing = base.palette.replacen("bug_owned = [", "ignored_owned = [", 1);
+    assert_ne!(missing, base.palette);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        palette: &missing,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("missing bug_owned");
+    assert!(err.contains("bug_owned"), "{err}");
+    let unknown = base.palette.replacen("\"brute_cracks\"", "\"not_a_bug_key\"", 1);
+    assert_ne!(unknown, base.palette);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        palette: &unknown,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("unknown bug_owned key");
+    assert!(err.contains("not_a_bug_key"), "{err}");
+    assert!(err.contains("bug_owned"), "{err}");
+
     let bugs = base.bugs.replacen("color=\"swarmer_amber\"", "color=\"bugs.acid\"", 1);
     assert_ne!(bugs, base.bugs);
     Content::parse(&gemini_sim::content::Sources {

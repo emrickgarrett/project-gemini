@@ -1,4 +1,23 @@
 # Art-lead palette. Read these in the client; do not duplicate the hex values in code.
+# Names reserved for bugs. UI and heroes may not resolve to any of these hexes.
+bug_owned = [
+  "swarmer.shell",
+  "swarmer.glow",
+  "spitter.carapace",
+  "spitter.glow",
+  "brute.shell",
+  "brute.cracks",
+  "bugs.acid",
+  "bugs.amber",
+  "bugs.magenta",
+  "swarmer_amber",
+  "brute_amber",
+  "swarmer_glow",
+  "bud_glow",
+  "spitter_carapace",
+  "spitter_glow",
+  "brute_cracks",
+]
 
 [hero]
 teal = "#1FB5A8"
