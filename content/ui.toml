@@ -10,8 +10,7 @@ stage = "reveal_stage"
 focus_before_hero = "rarity_common"
 # Win title and outline. Legendary gold stays on the crate reveal and legendary cards.
 victory = "victory"
-# Loss title and outline. Bug magenta stays on enemies.
-defeat = "hero_brakk"
+defeat = "spitter_glow"
 locked = "reveal_ink"
 # Every line on a locked card, including the HP/SPD line.
 locked_text = "rarity_common"

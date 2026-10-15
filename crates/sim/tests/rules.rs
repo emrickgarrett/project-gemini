@@ -1512,124 +1512,191 @@ fn palette_hex_must_be_upper_rrggbb() {
     assert!(err.contains("#c67a2e"), "{err}");
 }
 
-#[test]
-fn bug_owned_hexes_stay_off_ui_and_heroes() {
-    let content = Content::embedded();
-    let base = gemini_sim::content::embedded_sources();
-    let required = [
-        "swarmer.shell",
-        "swarmer.glow",
-        "spitter.carapace",
-        "spitter.glow",
-        "brute.shell",
-        "brute.cracks",
-        "bugs.acid",
-        "bugs.amber",
-        "bugs.magenta",
-        "swarmer_amber",
-        "brute_amber",
-        "swarmer_glow",
-        "bud_glow",
-        "spitter_carapace",
-        "spitter_glow",
-        "brute_cracks",
-    ];
-    for name in required {
-        assert!(content.palette.bug_owned.iter().any(|key| key == name), "{name}");
-        assert!(content.palette.hex(name).is_some(), "{name}");
-    }
-    assert_eq!(content.palette.hex("swarmer.shell"), content.palette.hex("brute_amber"));
-    assert_eq!(content.palette.hex("spitter.glow"), content.palette.hex("brute.cracks"));
-    assert_eq!(content.palette.hex("spitter_glow"), content.palette.hex("bugs.magenta"));
-    assert_eq!(content.palette.hex("swarmer.glow"), content.palette.hex("bud_glow"));
-    let owned: Vec<&str> = content
-        .palette
-        .bug_owned
-        .iter()
-        .map(|name| content.palette.hex(name).expect(name))
-        .collect();
-    for (owner, name) in content.ui.color_keys() {
-        let hex = content.palette.hex(name).unwrap_or("");
-        assert!(!owned.contains(&hex), "{owner} {name} {hex}");
-    }
-    for hero in &content.heroes {
-        let hex = content.palette.hex(&hero.accent_key).unwrap_or("");
-        assert!(!owned.contains(&hex), "{} {}", hero.id, hex);
-    }
+fn quoted_after(text: &str, marker: &str) -> String {
+    let start = text.find(marker).unwrap_or_else(|| panic!("missing {marker}"));
+    let rest = &text[start + marker.len()..];
+    let end = rest.find('"').unwrap_or_else(|| panic!("unclosed {marker}"));
+    rest[..end].to_string()
+}
 
-    let ui = base.ui.replacen("panel = \"ui_panel_slate\"", "panel = \"bugs.acid\"", 1);
+fn palette_doc(text: &str) -> toml::Value {
+    toml::from_str(text).expect("palette.toml")
+}
+
+fn palette_hex(doc: &toml::Value, name: &str) -> String {
+    if let Some((section, field)) = name.split_once('.') {
+        return doc[section][field].as_str().unwrap_or_else(|| panic!("{name}")).to_string();
+    }
+    match &doc["keys"][name] {
+        toml::Value::String(hex) => hex.clone(),
+        toml::Value::Table(table) => table["hex"].as_str().unwrap_or_else(|| panic!("{name} hex")).to_string(),
+        other => panic!("{name} is {other}"),
+    }
+}
+
+fn bug_owned_names(doc: &toml::Value) -> Vec<String> {
+    doc["bug_owned"]
+        .as_array()
+        .expect("bug_owned")
+        .iter()
+        .map(|name| name.as_str().expect("bug_owned name").to_string())
+        .collect()
+}
+
+/// Defeat stays `spitter_glow` in the shipped file. Tests that need a clean load
+/// point it at the panel key already in ui.toml. That is not a replacement color.
+fn point_defeat_at_panel(ui: &str) -> String {
+    let panel = quoted_after(ui, "panel = \"");
+    let updated = ui.replacen("defeat = \"spitter_glow\"", &format!("defeat = \"{panel}\""), 1);
+    assert_ne!(updated, ui);
+    updated
+}
+
+#[test]
+fn bug_hex_alias_is_rejected() {
+    let base = gemini_sim::content::embedded_sources();
+    let doc = palette_doc(base.palette);
+    let acid = palette_hex(&doc, "bugs.acid");
+    let victory = palette_hex(&doc, "victory");
+    assert_ne!(acid, victory);
+    let palette = base.palette.replacen(
+        &format!("victory = \"{victory}\""),
+        &format!("victory = \"{acid}\""),
+        1,
+    );
+    assert_ne!(palette, base.palette);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        palette: &palette,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("a friendly key with a bug hex must fail");
+    assert!(err.contains("ui.toml colors.victory"), "{err}");
+    assert!(err.contains("\"victory\""), "{err}");
+    assert!(err.contains("bug-owned"), "{err}");
+    assert!(err.contains("palette.toml"), "{err}");
+    let shared: Vec<String> = bug_owned_names(&doc)
+        .into_iter()
+        .filter(|name| palette_hex(&doc, name) == acid)
+        .collect();
+    assert!(!shared.is_empty());
+    assert!(
+        shared.iter().any(|name| err.contains(name) || err.contains(&format!("keys.{name}"))),
+        "{err} shared={shared:?}"
+    );
+
+    let ui = base.ui.replacen("panel = \"ui_panel_slate\"", "panel = \"swarmer_glow\"", 1);
     assert_ne!(ui, base.ui);
     let err = Content::parse(&gemini_sim::content::Sources {
         ui: &ui,
         ..sources_with(&base, base.coop)
     })
-    .expect_err("ui must not use bugs.acid");
-    assert!(err.contains("bugs.acid"), "{err}");
-    assert!(err.contains("ui.colors.panel"), "{err}");
-    let hero = base.hero.replacen("accent_key = \"hero_vex\"", "accent_key = \"bugs.acid\"", 1);
+    .expect_err("flat swarmer_glow is bug-owned");
+    assert!(err.contains("ui.toml colors.panel"), "{err}");
+    assert!(err.contains("swarmer_glow"), "{err}");
+    assert!(err.contains("palette.toml keys.swarmer_glow"), "{err}");
+
+    let presentation = base.presentation.replacen("text = \"white\"", "text = \"swarmer_glow\"", 1);
+    assert_ne!(presentation, base.presentation);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        presentation: &presentation,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("hud.away must reject a bug hex");
+    assert!(err.contains("presentation.toml hud.away.text"), "{err}");
+    assert!(err.contains("palette.toml keys.swarmer_glow"), "{err}");
+
+    let reveal = base.crate_reveal.replacen("stage = \"reveal_stage\"", "stage = \"swarmer_glow\"", 1);
+    assert_ne!(reveal, base.crate_reveal);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        crate_reveal: &reveal,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("crate_reveal must reject a bug hex");
+    assert!(err.contains("crate_reveal.toml layout.stage"), "{err}");
+    assert!(err.contains("palette.toml keys.swarmer_glow"), "{err}");
+
+    let ui = point_defeat_at_panel(base.ui);
+    let hero = base.hero.replacen("accent_key = \"hero_vex\"", "accent_key = \"swarmer_glow\"", 1);
     assert_ne!(hero, base.hero);
     let err = Content::parse(&gemini_sim::content::Sources {
+        ui: &ui,
         hero: &hero,
         ..sources_with(&base, base.coop)
     })
-    .expect_err("hero must not use bugs.acid");
-    assert!(err.contains("bugs.acid"), "{err}");
+    .expect_err("hero accent must reject a bug hex");
+    assert!(err.contains("characters.toml"), "{err}");
     assert!(err.contains("accent_key"), "{err}");
-
-    let acid = content.palette.hex("bugs.acid").expect("bugs.acid");
-    let plate = content.palette.hex("hero_plate").expect("hero_plate");
-    let aliased = base.palette.replacen(
-        &format!("hero_plate = \"{plate}\""),
-        &format!("hero_plate = \"{acid}\""),
-        1,
-    );
-    assert_ne!(aliased, base.palette);
-    let pointed = base.ui.replacen("panel = \"ui_panel_slate\"", "panel = \"hero_plate\"", 1);
-    assert_ne!(pointed, base.ui);
-    let err = Content::parse(&gemini_sim::content::Sources {
-        palette: &aliased,
-        ui: &pointed,
-        ..sources_with(&base, base.coop)
-    })
-    .expect_err("ui alias of a bug hex");
-    assert!(err.contains("hero_plate"), "{err}");
-    assert!(err.contains("ui.colors.panel"), "{err}");
-    let accent = base.hero.replacen("accent_key = \"hero_vex\"", "accent_key = \"hero_plate\"", 1);
-    assert_ne!(accent, base.hero);
-    let err = Content::parse(&gemini_sim::content::Sources {
-        palette: &aliased,
-        hero: &accent,
-        ..sources_with(&base, base.coop)
-    })
-    .expect_err("hero alias of a bug hex");
-    assert!(err.contains("hero_plate"), "{err}");
-    assert!(err.contains("accent_key"), "{err}");
-
-    let missing = base.palette.replacen("bug_owned = [", "ignored_owned = [", 1);
-    assert_ne!(missing, base.palette);
-    let err = Content::parse(&gemini_sim::content::Sources {
-        palette: &missing,
-        ..sources_with(&base, base.coop)
-    })
-    .expect_err("missing bug_owned");
-    assert!(err.contains("bug_owned"), "{err}");
-    let unknown = base.palette.replacen("\"brute_cracks\"", "\"not_a_bug_key\"", 1);
-    assert_ne!(unknown, base.palette);
-    let err = Content::parse(&gemini_sim::content::Sources {
-        palette: &unknown,
-        ..sources_with(&base, base.coop)
-    })
-    .expect_err("unknown bug_owned key");
-    assert!(err.contains("not_a_bug_key"), "{err}");
-    assert!(err.contains("bug_owned"), "{err}");
+    assert!(err.contains("palette.toml keys.swarmer_glow"), "{err}");
 
     let bugs = base.bugs.replacen("color=\"swarmer_amber\"", "color=\"bugs.acid\"", 1);
     assert_ne!(bugs, base.bugs);
     Content::parse(&gemini_sim::content::Sources {
+        ui: &ui,
         bugs: &bugs,
         ..sources_with(&base, base.coop)
     })
-    .expect("enemy content may use bugs.acid");
+    .expect("enemy content may use a bug-owned color");
+}
+
+#[test]
+fn bug_owned_list_is_required() {
+    let base = gemini_sim::content::embedded_sources();
+    let start = base.palette.find("bug_owned = [").expect("bug_owned");
+    let end = base.palette[start..].find("]\n").expect("bug_owned end") + start + 2;
+    let palette = format!("{}{}", &base.palette[..start], &base.palette[end..]);
+    assert_ne!(palette, base.palette);
+    assert!(!palette.contains("bug_owned"));
+    let err = Content::parse(&gemini_sim::content::Sources {
+        palette: &palette,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("bug_owned is required");
+    assert!(err.contains("palette.toml"), "{err}");
+    assert!(err.contains("bug_owned"), "{err}");
+}
+
+#[test]
+fn bug_owned_unknown_key_is_rejected() {
+    let base = gemini_sim::content::embedded_sources();
+    let palette = base.palette.replacen(
+        "bug_owned = [",
+        "bug_owned = [\n  \"not_a_palette_key\",",
+        1,
+    );
+    assert_ne!(palette, base.palette);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        palette: &palette,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("unknown bug_owned key");
+    assert!(err.contains("palette.toml bug_owned"), "{err}");
+    assert!(err.contains("not_a_palette_key"), "{err}");
+    assert!(err.contains("does not resolve"), "{err}");
+    assert!(!err.contains("keys.not_a_palette_key"), "{err}");
+}
+
+#[test]
+fn current_palette_loads() {
+    let base = gemini_sim::content::embedded_sources();
+    let doc = palette_doc(base.palette);
+    let names = bug_owned_names(&doc);
+    for name in &names {
+        let hex = palette_hex(&doc, name);
+        assert!(hex.starts_with('#'), "{name} {hex}");
+    }
+    let err = Content::parse(&sources_with(&base, base.coop)).expect_err(
+        "ui.toml colors.defeat is spitter_glow, a bug-owned hex. Art picks the replacement.",
+    );
+    assert!(err.contains("ui.toml colors.defeat"), "{err}");
+    assert!(err.contains("spitter_glow"), "{err}");
+    assert!(err.contains("palette.toml"), "{err}");
+
+    let ui = point_defeat_at_panel(base.ui);
+    Content::parse(&gemini_sim::content::Sources {
+        ui: &ui,
+        ..sources_with(&base, base.coop)
+    })
+    .expect("the shipped palette loads once defeat is not a bug-owned hex");
 }
 
 #[test]
