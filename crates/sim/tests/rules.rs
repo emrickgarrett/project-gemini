@@ -1669,7 +1669,8 @@ fn empty_bug_owned_is_rejected() {
         ..sources_with(&base, base.coop)
     })
     .expect_err("empty bug_owned");
-    assert!(err.starts_with("palette.toml bug_owned"), "{err}");
+    assert!(err.contains("palette.toml bug_owned"), "{err}");
+    assert!(err.contains("at least one"), "{err}");
 }
 
 #[test]
@@ -1710,35 +1711,42 @@ fn bug_colors_must_be_bug_owned() {
     let bud = base.bugs.replacen("bud_color = \"brood_sac\"", &format!("bud_color = \"{friendly}\""), 1);
     assert_ne!(bud, base.bugs);
     let err = load(&bud, "bud_color must be bug_owned");
-    assert!(err.starts_with("bugs.toml brood_mother.visual.bud_color"), "{err}");
+    assert!(err.contains("bugs.toml brood_mother.visual.bud_color"), "{err}");
     assert!(err.contains(friendly), "{err}");
-    assert!(err.contains("bug_owned"), "{err}");
+    assert!(err.contains("not bug_owned"), "{err}");
 
     let grown = base.bugs.replacen("grown_color = \"bud_glow\"", &format!("grown_color = \"{friendly}\""), 1);
     assert_ne!(grown, base.bugs);
     let err = load(&grown, "grown_color must be bug_owned");
-    assert!(err.starts_with("bugs.toml brood_mother.visual.grown_color"), "{err}");
+    assert!(err.contains("bugs.toml brood_mother.visual.grown_color"), "{err}");
     assert!(err.contains(friendly), "{err}");
+    assert!(err.contains("not bug_owned"), "{err}");
 
     let sac = "name=\"sac\",   part=\"gem\",   shape=\"sphere\", size=[2.6,2.0,2.6], offset=[0,1.75,-0.1], color=\"brood_sac\"";
     let part = base.bugs.replacen(sac, &sac.replace("color=\"brood_sac\"", &format!("color=\"{friendly}\"")), 1);
     assert_ne!(part, base.bugs);
     let err = load(&part, "part color must be bug_owned");
-    assert!(err.starts_with("bugs.toml brood_mother.visual.parts.sac"), "{err}");
+    assert!(err.contains("bugs.toml brood_mother.visual.parts.sac"), "{err}");
     assert!(err.contains(friendly), "{err}");
+    assert!(err.contains("not bug_owned"), "{err}");
 }
 
 #[test]
 fn current_palette_loads() {
-    let base = gemini_sim::content::embedded_sources();
-    let doc = palette_doc(base.palette);
+    let sources = gemini_sim::content::embedded_sources();
+    assert!(sources.ui.contains("defeat = \"defeat_ember\""));
+    assert!(!sources.ui.contains("defeat = \"spitter_glow\""));
+    assert!(!sources.ui.contains("defeat = \"hero_brakk\""));
+    assert!(sources.palette.contains("defeat_ember = \"#A34A50\""));
+    let doc = palette_doc(sources.palette);
     let names = bug_owned_names(&doc);
+    assert!(names.iter().any(|name| name == "brood_sac"));
+    assert!(!names.iter().any(|name| name == "defeat_ember"));
     for name in &names {
         let hex = palette_hex(&doc, name);
         assert!(hex.starts_with('#'), "{name} {hex}");
     }
-    assert!(!names.iter().any(|name| name == "defeat_ember"));
-    let content = Content::parse(&sources_with(&base, base.coop)).expect("the shipped palette loads");
+    let content = Content::embedded();
     assert_eq!(content.ui.colors.defeat, "defeat_ember");
     let ember = palette_hex(&doc, "defeat_ember");
     assert_eq!(content.palette.hex("defeat_ember"), Some(ember.as_str()));
@@ -1773,13 +1781,13 @@ fn defeat_hex_rejects_rarity_bug_and_victory() {
     let legendary = palette_hex(&doc, "rarity.legendary");
     assert_ne!(ember, legendary);
     let err = load(&paint(&legendary), "defeat must not share a rarity hex");
-    assert!(err.starts_with("ui.toml colors.defeat"), "{err}");
+    assert!(err.contains("ui.toml colors.defeat"), "{err}");
     assert!(err.contains("palette.toml rarity.legendary"), "{err}");
 
     let acid = palette_hex(&doc, "bugs.acid");
     assert_ne!(ember, acid);
     let err = load(&paint(&acid), "defeat must not share a bug-owned hex");
-    assert!(err.starts_with("ui.toml colors.defeat"), "{err}");
+    assert!(err.contains("ui.toml colors.defeat"), "{err}");
     assert!(err.contains("bug-owned"), "{err}");
     assert!(err.contains("palette.toml"), "{err}");
     let shared: Vec<String> = bug_owned_names(&doc)
@@ -1795,7 +1803,7 @@ fn defeat_hex_rejects_rarity_bug_and_victory() {
     let victory = palette_hex(&doc, "victory");
     assert_ne!(ember, victory);
     let err = load(&paint(&victory), "defeat must not share the victory hex");
-    assert!(err.starts_with("ui.toml colors.defeat"), "{err}");
+    assert!(err.contains("ui.toml colors.defeat"), "{err}");
     assert!(err.contains("palette.toml keys.victory"), "{err}");
 }
 

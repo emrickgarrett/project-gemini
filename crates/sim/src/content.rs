@@ -147,7 +147,6 @@ impl Content {
         let mut palette: Palette = parse("palette.toml", src.palette)?;
         validate_palette_hexes(&palette).map_err(|err| format!("palette.toml {err}"))?;
         validate_lit_keys(&palette).map_err(|err| format!("palette.toml {err}"))?;
-        bug_owned_hexes(&palette).map_err(|err| format!("palette.toml {err}"))?;
         let heroes_visual = load_heroes_visual(src.heroes_visual, &palette)?;
         let bug_models = load_model_table(
             include_str!("../../../content/bugs_visual.toml"),
@@ -196,22 +195,26 @@ impl Content {
         validate_downed(&controller.downed)?;
         validate_ledge_catch(&controller.ledge_catch)?;
         let difficulty = parse::<DifficultyFile>("difficulty.toml", src.difficulty)?.tier;
-        require_palette_keys(&palette, &bugs, &presentation.hud.away, &crate_reveal.layout, &ui, &heroes)
-            .map_err(|err| {
-                if err.starts_with("bugs.toml ") {
-                    err
-                } else {
-                    format!("palette.toml {err}")
-                }
-            })?;
-        reject_bug_owned_on_friendly(
+        let mut blocked = Vec::new();
+        if let Err(err) = bug_owned_hexes(&palette) {
+            blocked.push(format!("palette.toml {err}"));
+        }
+        if let Err(err) = require_palette_keys(&palette, &bugs, &presentation.hud.away, &crate_reveal.layout, &ui, &heroes) {
+            blocked.push(if err.starts_with("bugs.toml ") { err } else { format!("palette.toml {err}") });
+        }
+        if let Err(err) = reject_bug_owned_on_friendly(
             &palette,
             &ui,
             &heroes,
             &heroes_visual,
             &presentation.hud.away,
             &crate_reveal,
-        )?;
+        ) {
+            blocked.push(err);
+        }
+        if !blocked.is_empty() {
+            return Err(blocked.join("\n"));
+        }
         let accent_key = heroes
             .iter()
             .find(|card| card.id == hero.id)
@@ -4735,25 +4738,28 @@ fn require_palette_keys(
     };
     // Locked portraits paint the lit body with this key. Fail here, not in the painter.
     check("portrait", "hero_white")?;
-    let on_bug_owned = |path: &str, name: &str| -> Result<(), String> {
-        if palette.bug_owned.iter().any(|key| key == name) {
-            return Ok(());
+    let mut unowned = Vec::new();
+    let mut note_unowned = |path: &str, name: &str| {
+        if !palette.bug_owned.iter().any(|key| key == name) {
+            unowned.push(format!("bugs.toml {path} \"{name}\" is not bug_owned"));
         }
-        Err(format!("bugs.toml {path} \"{name}\" is not bug_owned"))
     };
     for (bug, row) in bugs.rows() {
         if !row.visual.bud_color.is_empty() {
             check(bug, &row.visual.bud_color)?;
-            on_bug_owned(&format!("{bug}.visual.bud_color"), &row.visual.bud_color)?;
+            note_unowned(&format!("{bug}.visual.bud_color"), &row.visual.bud_color);
         }
         if !row.visual.grown_color.is_empty() {
             check(bug, &row.visual.grown_color)?;
-            on_bug_owned(&format!("{bug}.visual.grown_color"), &row.visual.grown_color)?;
+            note_unowned(&format!("{bug}.visual.grown_color"), &row.visual.grown_color);
         }
         for part in &row.visual.parts {
             check(&format!("{bug} {}", part.name), &part.color)?;
-            on_bug_owned(&format!("{bug}.visual.parts.{}", part.name), &part.color)?;
+            note_unowned(&format!("{bug}.visual.parts.{}", part.name), &part.color);
         }
+    }
+    if !unowned.is_empty() {
+        return Err(unowned.join("\n"));
     }
     for rarity in ["common", "rare", "epic", "legendary"] {
         check("rarity", &format!("rarity_{rarity}"))?;
