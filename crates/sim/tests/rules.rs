@@ -1444,24 +1444,23 @@ fn palette_hex_must_be_upper_rrggbb() {
             "{hex}"
         );
     }
-    let lower = base.palette.replacen("victory = \"#2DE1D0\"", "victory = \"#2de1d0\"", 1);
-    assert_ne!(lower, base.palette);
-    let err = Content::parse(&gemini_sim::content::Sources {
-        palette: &lower,
-        ..sources_with(&base, base.coop)
-    })
-    .expect_err("lowercase hex");
-    assert!(err.contains("victory"), "{err}");
-    assert!(err.contains("#2de1d0"), "{err}");
-    let short = base.palette.replacen("victory = \"#2DE1D0\"", "victory = \"#2DE1D\"", 1);
-    assert_ne!(short, base.palette);
-    let err = Content::parse(&gemini_sim::content::Sources {
-        palette: &short,
-        ..sources_with(&base, base.coop)
-    })
-    .expect_err("malformed hex");
-    assert!(err.contains("victory"), "{err}");
-    assert!(err.contains("#RRGGBB"), "{err}");
+    for (label, bad) in [
+        ("missing hash", "2de1d0"),
+        ("eight digits", "#2DE1D0FF"),
+        ("lowercase", "#2de1d0"),
+        ("malformed", "#2DE1DG"),
+    ] {
+        let painted = base.palette.replacen("victory = \"#2DE1D0\"", &format!("victory = \"{bad}\""), 1);
+        assert_ne!(painted, base.palette, "{label}");
+        let err = Content::parse(&gemini_sim::content::Sources {
+            palette: &painted,
+            ..sources_with(&base, base.coop)
+        })
+        .expect_err(label);
+        assert!(err.contains("victory"), "{label}: {err}");
+        assert!(err.contains(bad), "{label}: {err}");
+        assert!(err.contains("#RRGGBB"), "{label}: {err}");
+    }
 }
 
 #[test]

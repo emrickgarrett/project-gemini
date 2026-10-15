@@ -6006,12 +6006,17 @@ fn validate_ui(
     if ui.colors.bank_count == "rarity_legendary" || ui.colors.bank_bonus == "rarity_legendary" {
         return Err("ui.toml bank count and bonus must not use legendary gold".into());
     }
-    let victory_hex = palette.hex(&ui.colors.victory).ok_or(format!(
-        "ui.toml colors.victory \"{}\" does not resolve",
-        ui.colors.victory
-    ))?;
+    let victory_hex = palette.hex(&ui.colors.victory).ok_or_else(|| {
+        format!(
+            "ui.toml colors.victory \"{}\" does not resolve",
+            ui.colors.victory
+        )
+    })?;
     for name in ["rarity_common", "rarity_rare", "rarity_epic", "rarity_legendary"] {
-        if palette.hex(name) == Some(victory_hex) {
+        let rarity_hex = palette
+            .hex(name)
+            .ok_or_else(|| format!("palette.toml {name} does not resolve"))?;
+        if victory_hex == rarity_hex {
             return Err(format!("ui.toml colors.victory matches {name}"));
         }
     }
