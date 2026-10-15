@@ -1393,7 +1393,7 @@ fn victory_palette_key_is_required() {
     .expect_err("alias of legendary gold");
     assert!(err.contains("victory"), "{err}");
     assert!(err.contains("rarity_legendary"), "{err}");
-    for name in ["rarity_epic", "rarity_rare"] {
+    for name in ["rarity_epic", "rarity_rare", "rarity_common"] {
         let painted = base.ui.replacen("victory = \"victory\"", &format!("victory = \"{name}\""), 1);
         assert_ne!(painted, base.ui);
         let err = Content::parse(&gemini_sim::content::Sources {
@@ -1403,6 +1403,63 @@ fn victory_palette_key_is_required() {
         .expect_err(name);
         assert!(err.contains("victory"), "{name}: {err}");
         assert!(err.contains(name), "{name}: {err}");
+    }
+}
+
+#[test]
+fn palette_hex_must_be_upper_rrggbb() {
+    let content = Content::embedded();
+    let base = gemini_sim::content::embedded_sources();
+    let stored = [
+        content.palette.hero.teal.as_str(),
+        content.palette.hero.cobalt.as_str(),
+        content.palette.hero.white.as_str(),
+        content.palette.shots.player.as_str(),
+        content.palette.swarmer.shell.as_str(),
+        content.palette.swarmer.glow.as_str(),
+        content.palette.spitter.carapace.as_str(),
+        content.palette.spitter.glow.as_str(),
+        content.palette.brute.shell.as_str(),
+        content.palette.brute.cracks.as_str(),
+        content.palette.arena.rock_dark.as_str(),
+        content.palette.arena.rock_light.as_str(),
+        content.palette.rarity.common.as_str(),
+        content.palette.rarity.rare.as_str(),
+        content.palette.rarity.epic.as_str(),
+        content.palette.rarity.legendary.as_str(),
+        content.palette.bugs.acid.as_str(),
+        content.palette.bugs.amber.as_str(),
+        content.palette.bugs.magenta.as_str(),
+        content.palette.keys.victory.as_str(),
+        content.palette.keys.gear_nyra_gun_glow.hex.as_str(),
+        content.palette.keys.gear_brakk_gun_glow.hex.as_str(),
+    ];
+    for hex in stored {
+        assert!(
+            hex.len() == 7
+                && hex.as_bytes()[0] == b'#'
+                && hex.as_bytes()[1..]
+                    .iter()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_lowercase()),
+            "{hex}"
+        );
+    }
+    for (label, bad) in [
+        ("missing hash", "2de1d0"),
+        ("eight digits", "#2DE1D0FF"),
+        ("lowercase", "#2de1d0"),
+        ("malformed", "#2DE1DG"),
+    ] {
+        let painted = base.palette.replacen("victory = \"#2DE1D0\"", &format!("victory = \"{bad}\""), 1);
+        assert_ne!(painted, base.palette, "{label}");
+        let err = Content::parse(&gemini_sim::content::Sources {
+            palette: &painted,
+            ..sources_with(&base, base.coop)
+        })
+        .expect_err(label);
+        assert!(err.contains("victory"), "{label}: {err}");
+        assert!(err.contains(bad), "{label}: {err}");
+        assert!(err.contains("#RRGGBB"), "{label}: {err}");
     }
 }
 

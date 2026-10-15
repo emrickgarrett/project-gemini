@@ -145,6 +145,7 @@ impl Content {
         let bosses = load_bosses(src.bosses).map_err(|err| format!("bosses.toml: {err}"))?;
         require_spawn_clearance(&bosses, &bugs).map_err(|err| format!("bosses.toml: {err}"))?;
         let mut palette: Palette = parse("palette.toml", src.palette)?;
+        validate_palette_hexes(&palette).map_err(|err| format!("palette.toml: {err}"))?;
         validate_lit_keys(&palette).map_err(|err| format!("palette.toml: {err}"))?;
         let heroes_visual = load_heroes_visual(src.heroes_visual, &palette)?;
         let bug_models = load_model_table(
@@ -4516,6 +4517,126 @@ impl CastLook {
     }
 }
 
+fn require_upper_rrggbb(name: &str, hex: &str) -> Result<(), String> {
+    if hex.is_empty() {
+        return Ok(());
+    }
+    let bytes = hex.as_bytes();
+    let upper = bytes.len() == 7
+        && bytes[0] == b'#'
+        && bytes[1..].iter().all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_lowercase());
+    if upper {
+        return Ok(());
+    }
+    Err(format!("{name} \"{hex}\" must be #RRGGBB"))
+}
+
+fn validate_palette_hexes(palette: &Palette) -> Result<(), String> {
+    let keys = &palette.keys;
+    let fields = [
+        ("hero.teal", palette.hero.teal.as_str()),
+        ("hero.cobalt", palette.hero.cobalt.as_str()),
+        ("hero.white", palette.hero.white.as_str()),
+        ("hero.accent", palette.hero.accent.as_str()),
+        ("shots.player", palette.shots.player.as_str()),
+        ("swarmer.shell", palette.swarmer.shell.as_str()),
+        ("swarmer.glow", palette.swarmer.glow.as_str()),
+        ("spitter.carapace", palette.spitter.carapace.as_str()),
+        ("spitter.glow", palette.spitter.glow.as_str()),
+        ("brute.shell", palette.brute.shell.as_str()),
+        ("brute.cracks", palette.brute.cracks.as_str()),
+        ("arena.rock_dark", palette.arena.rock_dark.as_str()),
+        ("arena.rock_light", palette.arena.rock_light.as_str()),
+        ("rarity.common", palette.rarity.common.as_str()),
+        ("rarity.rare", palette.rarity.rare.as_str()),
+        ("rarity.epic", palette.rarity.epic.as_str()),
+        ("rarity.legendary", palette.rarity.legendary.as_str()),
+        ("bugs.acid", palette.bugs.acid.as_str()),
+        ("bugs.amber", palette.bugs.amber.as_str()),
+        ("bugs.magenta", palette.bugs.magenta.as_str()),
+        ("keys.swarmer_amber", keys.swarmer_amber.as_str()),
+        ("keys.swarmer_glow", keys.swarmer_glow.as_str()),
+        ("keys.spitter_carapace", keys.spitter_carapace.as_str()),
+        ("keys.spitter_glow", keys.spitter_glow.as_str()),
+        ("keys.brute_amber", keys.brute_amber.as_str()),
+        ("keys.brute_cracks", keys.brute_cracks.as_str()),
+        ("keys.brood_sac", keys.brood_sac.as_str()),
+        ("keys.bud_glow", keys.bud_glow.as_str()),
+        ("keys.ui_panel_slate", keys.ui_panel_slate.as_str()),
+        ("keys.reveal_stage", keys.reveal_stage.as_str()),
+        ("keys.reveal_ink", keys.reveal_ink.as_str()),
+        ("keys.reveal_paper", keys.reveal_paper.as_str()),
+        ("keys.victory", keys.victory.as_str()),
+        ("keys.hero_vex", keys.hero_vex.as_str()),
+        ("keys.hero_nyra", keys.hero_nyra.as_str()),
+        ("keys.hero_brakk", keys.hero_brakk.as_str()),
+        ("keys.hero_kip", keys.hero_kip.as_str()),
+        ("keys.spitter_rim", keys.spitter_rim.as_str()),
+        ("keys.hero_plate", keys.hero_plate.as_str()),
+        ("keys.portrait_field", keys.portrait_field.as_str()),
+        ("keys.arena_sky", keys.arena_sky.as_str()),
+        ("keys.hero_vex_primary", keys.hero_vex_primary.as_str()),
+        ("keys.hero_vex_secondary", keys.hero_vex_secondary.as_str()),
+        ("keys.hero_vex_accent", keys.hero_vex_accent.as_str()),
+        ("keys.hero_vex_glow", keys.hero_vex_glow.as_str()),
+        ("keys.hero_nyra_primary", keys.hero_nyra_primary.as_str()),
+        ("keys.hero_nyra_secondary", keys.hero_nyra_secondary.as_str()),
+        ("keys.hero_nyra_accent", keys.hero_nyra_accent.as_str()),
+        ("keys.hero_nyra_glow", keys.hero_nyra_glow.as_str()),
+        ("keys.hero_brakk_primary", keys.hero_brakk_primary.as_str()),
+        ("keys.hero_brakk_secondary", keys.hero_brakk_secondary.as_str()),
+        ("keys.hero_brakk_accent", keys.hero_brakk_accent.as_str()),
+        ("keys.hero_brakk_glow", keys.hero_brakk_glow.as_str()),
+        ("keys.hero_kip_primary", keys.hero_kip_primary.as_str()),
+        ("keys.hero_kip_secondary", keys.hero_kip_secondary.as_str()),
+        ("keys.hero_kip_accent", keys.hero_kip_accent.as_str()),
+        ("keys.hero_kip_glow", keys.hero_kip_glow.as_str()),
+        ("keys.gear_vex_gun_primary", keys.gear_vex_gun_primary.as_str()),
+        ("keys.gear_vex_gun_secondary", keys.gear_vex_gun_secondary.as_str()),
+        ("keys.gear_vex_gun_accent", keys.gear_vex_gun_accent.as_str()),
+        ("keys.gear_nyra_gun_primary", keys.gear_nyra_gun_primary.as_str()),
+        ("keys.gear_nyra_gun_secondary", keys.gear_nyra_gun_secondary.as_str()),
+        ("keys.gear_nyra_gun_accent", keys.gear_nyra_gun_accent.as_str()),
+        ("keys.gear_nyra_gun_glow", keys.gear_nyra_gun_glow.hex.as_str()),
+        ("keys.gear_brakk_gun_primary", keys.gear_brakk_gun_primary.as_str()),
+        ("keys.gear_brakk_gun_secondary", keys.gear_brakk_gun_secondary.as_str()),
+        ("keys.gear_brakk_gun_glow", keys.gear_brakk_gun_glow.hex.as_str()),
+        ("keys.gear_kip_gun_primary", keys.gear_kip_gun_primary.as_str()),
+        ("keys.gear_kip_gun_secondary", keys.gear_kip_gun_secondary.as_str()),
+        ("keys.gear_kip_gun_accent", keys.gear_kip_gun_accent.as_str()),
+        ("keys.gear_brakk_shield_primary", keys.gear_brakk_shield_primary.as_str()),
+        ("keys.gear_brakk_shield_secondary", keys.gear_brakk_shield_secondary.as_str()),
+        ("keys.gear_brakk_shield_accent", keys.gear_brakk_shield_accent.as_str()),
+        ("keys.dirt_mauve", keys.dirt_mauve.as_str()),
+        ("keys.dirt_outer", keys.dirt_outer.as_str()),
+        ("keys.rim_violet", keys.rim_violet.as_str()),
+        ("keys.rim_violet_hi", keys.rim_violet_hi.as_str()),
+        ("keys.boulder_violet", keys.boulder_violet.as_str()),
+        ("keys.platform_pale", keys.platform_pale.as_str()),
+        ("keys.platform_navy", keys.platform_navy.as_str()),
+        ("keys.trim_cyan", keys.trim_cyan.as_str()),
+        ("keys.nest_brass", keys.nest_brass.as_str()),
+        ("keys.nest_goo", keys.nest_goo.as_str()),
+        ("keys.beacon_cyan", keys.beacon_cyan.as_str()),
+        ("keys.rubble_violet", keys.rubble_violet.as_str()),
+        ("keys.crack_dark", keys.crack_dark.as_str()),
+        ("keys.vein_resin", keys.vein_resin.as_str()),
+        ("keys.vent_tell", keys.vent_tell.as_str()),
+        ("keys.flora_stalk", keys.flora_stalk.as_str()),
+        ("keys.flora_bulb", keys.flora_bulb.as_str()),
+        ("keys.fog_violet", keys.fog_violet.as_str()),
+        ("keys.sky_haze", keys.sky_haze.as_str()),
+        ("keys.key_warm", keys.key_warm.as_str()),
+        ("keys.mark_ink", keys.mark_ink.as_str()),
+        ("keys.fill_cool", keys.fill_cool.as_str()),
+        ("keys.ambient_haze", keys.ambient_haze.as_str()),
+    ];
+    for (name, hex) in fields {
+        require_upper_rrggbb(name, hex)?;
+    }
+    Ok(())
+}
+
 fn validate_lit_keys(palette: &Palette) -> Result<(), String> {
     for (name, lit) in [
         ("gear_nyra_gun_glow", &palette.keys.gear_nyra_gun_glow),
@@ -5885,11 +6006,18 @@ fn validate_ui(
     if ui.colors.bank_count == "rarity_legendary" || ui.colors.bank_bonus == "rarity_legendary" {
         return Err("ui.toml bank count and bonus must not use legendary gold".into());
     }
-    if let Some(victory_hex) = palette.hex(&ui.colors.victory) {
-        for name in ["rarity_common", "rarity_rare", "rarity_epic", "rarity_legendary"] {
-            if palette.hex(name) == Some(victory_hex) {
-                return Err(format!("ui.toml colors.victory matches {name}"));
-            }
+    let victory_hex = palette.hex(&ui.colors.victory).ok_or_else(|| {
+        format!(
+            "ui.toml colors.victory \"{}\" does not resolve",
+            ui.colors.victory
+        )
+    })?;
+    for name in ["rarity_common", "rarity_rare", "rarity_epic", "rarity_legendary"] {
+        let rarity_hex = palette
+            .hex(name)
+            .ok_or_else(|| format!("palette.toml {name} does not resolve"))?;
+        if victory_hex == rarity_hex {
+            return Err(format!("ui.toml colors.victory matches {name}"));
         }
     }
     if !(layout.border_px > 0.0) {

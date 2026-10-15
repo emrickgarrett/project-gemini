@@ -54,6 +54,7 @@ Emissive and bloom are used only on: projectiles, weak points, pickups, rarity g
 `content/crate_reveal.toml` is the source of truth for the storyboard. Shared beats: drop 0-2s, crack 2-3.5s, burst 3.5s. Legendary freezes for 1s, and its burst is at 4.5s. Rise ends at the card. Card time is per tier; these figures are a reference only: common 4.2s, rare 5.0s, epic 5.3s, legendary 6.5s.
 - The result is decided before the drop. A fake-out flickers at most one tier up and always settles on the real tier.
 - Skip works at any point. Ten-pulls end on a summary grid. In a ten-pull only the best card gets its full tier time; the others flip fast.
+- Palette hexes are uppercase `#RRGGBB`.
 
 ## 9. Telegraph honesty
 - A warning glow (pods, veins, spitter sac) always means the attack or spawn really happens. Spawn telegraphs reserve room under the enemy cap (`reserve_on_telegraph = true` in `bosses.toml`).
