@@ -1404,22 +1404,64 @@ fn victory_palette_key_is_required() {
         assert!(err.contains("victory"), "{name}: {err}");
         assert!(err.contains(name), "{name}: {err}");
     }
-    let epic = content.palette.hex("rarity_epic").expect("epic");
-    let folded = epic.to_ascii_lowercase();
-    assert_ne!(folded, epic);
-    let cased = base.palette.replacen(
-        &format!("victory = \"{}\"", content.palette.keys.victory),
-        &format!("victory = \"{folded}\""),
-        1,
-    );
-    assert_ne!(cased, base.palette);
+}
+
+#[test]
+fn palette_hex_must_be_upper_rrggbb() {
+    let content = Content::embedded();
+    let base = gemini_sim::content::embedded_sources();
+    let stored = [
+        content.palette.hero.teal.as_str(),
+        content.palette.hero.cobalt.as_str(),
+        content.palette.hero.white.as_str(),
+        content.palette.shots.player.as_str(),
+        content.palette.swarmer.shell.as_str(),
+        content.palette.swarmer.glow.as_str(),
+        content.palette.spitter.carapace.as_str(),
+        content.palette.spitter.glow.as_str(),
+        content.palette.brute.shell.as_str(),
+        content.palette.brute.cracks.as_str(),
+        content.palette.arena.rock_dark.as_str(),
+        content.palette.arena.rock_light.as_str(),
+        content.palette.rarity.common.as_str(),
+        content.palette.rarity.rare.as_str(),
+        content.palette.rarity.epic.as_str(),
+        content.palette.rarity.legendary.as_str(),
+        content.palette.bugs.acid.as_str(),
+        content.palette.bugs.amber.as_str(),
+        content.palette.bugs.magenta.as_str(),
+        content.palette.keys.victory.as_str(),
+        content.palette.keys.gear_nyra_gun_glow.hex.as_str(),
+        content.palette.keys.gear_brakk_gun_glow.hex.as_str(),
+    ];
+    for hex in stored {
+        assert!(
+            hex.len() == 7
+                && hex.as_bytes()[0] == b'#'
+                && hex.as_bytes()[1..]
+                    .iter()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_lowercase()),
+            "{hex}"
+        );
+    }
+    let lower = base.palette.replacen("victory = \"#2DE1D0\"", "victory = \"#2de1d0\"", 1);
+    assert_ne!(lower, base.palette);
     let err = Content::parse(&gemini_sim::content::Sources {
-        palette: &cased,
+        palette: &lower,
         ..sources_with(&base, base.coop)
     })
-    .expect_err("victory hex differs from epic only by case");
+    .expect_err("lowercase hex");
     assert!(err.contains("victory"), "{err}");
-    assert!(err.contains("rarity_epic"), "{err}");
+    assert!(err.contains("#2de1d0"), "{err}");
+    let short = base.palette.replacen("victory = \"#2DE1D0\"", "victory = \"#2DE1D\"", 1);
+    assert_ne!(short, base.palette);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        palette: &short,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("malformed hex");
+    assert!(err.contains("victory"), "{err}");
+    assert!(err.contains("#RRGGBB"), "{err}");
 }
 
 #[test]
