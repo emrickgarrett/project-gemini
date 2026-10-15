@@ -49,6 +49,8 @@ ui_panel_slate = "#334155"
 reveal_stage = "#120E17"
 reveal_ink = "#1C1820"
 reveal_paper = "#F2F2F2"
+# Win title and panel outline. Same family as shots.player. Not legendary gold.
+victory = "#2DE1D0"
 # UI accents only. Casts do not tint with these keys.
 hero_vex = "#F97316"
 hero_nyra = "#7DD3FC"

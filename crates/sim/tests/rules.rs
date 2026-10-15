@@ -1349,6 +1349,33 @@ fn vent_tell_size_and_height_are_required() {
 }
 
 #[test]
+fn victory_palette_key_is_required() {
+    let content = Content::embedded();
+    assert_eq!(content.ui.colors.victory, "victory");
+    assert_eq!(content.palette.keys.victory, "#2DE1D0");
+    assert_eq!(content.palette.hex("victory"), Some("#2DE1D0"));
+    assert_ne!(content.palette.hex("victory"), content.palette.hex("rarity_legendary"));
+    let base = gemini_sim::content::embedded_sources();
+    let missing = base.palette.replacen("victory = \"#2DE1D0\"\n", "", 1);
+    assert_ne!(missing, base.palette);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        palette: &missing,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("missing victory");
+    assert!(err.contains("victory"), "{err}");
+    let gold = base.ui.replacen("victory = \"victory\"", "victory = \"rarity_legendary\"", 1);
+    assert_ne!(gold, base.ui);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        ui: &gold,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("victory must not be legendary gold");
+    assert!(err.contains("victory"), "{err}");
+    assert!(err.contains("legendary"), "{err}");
+}
+
+#[test]
 fn spatial_grid_finds_neighbors_in_order() {
     use gemini_sim::spatial::SpatialGrid;
     let mut grid = SpatialGrid::new(4.0, 32.0);

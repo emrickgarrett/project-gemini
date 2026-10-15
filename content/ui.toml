@@ -8,7 +8,8 @@ text = "reveal_paper"
 dim = "reveal_ink"
 stage = "reveal_stage"
 focus_before_hero = "rarity_common"
-victory = "rarity_legendary"
+# Win title and outline. Legendary gold stays on the crate reveal and legendary cards.
+victory = "victory"
 defeat = "spitter_glow"
 locked = "reveal_ink"
 # Every line on a locked card, including the HP/SPD line.
