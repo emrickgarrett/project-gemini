@@ -1133,6 +1133,7 @@ mod tests {
         let mut reply = seen_settle_reply(rank);
         reply.credits = settled;
         pull_host::script_next_pull(Ok(reply));
+        app.world_mut().resource_mut::<audio::Music>().duck_gain = 1.0;
         app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
         app.world_mut().run_system_once(flow::reveal_act).unwrap();
         assert_eq!(app.world().resource::<flow::ServerCrate>().credits, Some(settled));
@@ -1142,6 +1143,13 @@ mod tests {
         assert_eq!(app.world().resource::<settings::Prefs>().pull_key, old, "a failed settle leaves the key saved");
         let waiting = pull_host::round_trip("banner", "check", false);
         assert!(waiting.is_err(), "a failed settle sends nothing new");
+        let cues = ui_cues(&mut app);
+        let failed = &content.crate_reveal.grid.pull_failed;
+        let tick = &content.ui.sounds.count_tick;
+        let chime = &content.ui.sounds.bank_chime;
+        assert_eq!(cues, vec![failed.clone()], "{cues:?}");
+        assert!(cues.iter().all(|id| id != tick && id != chime && id != &content.crate_reveal.grid.flip_cue && id != &content.ui.sounds.confirm));
+        assert!((app.world().resource::<audio::Music>().duck_gain - 1.0).abs() < 1e-4, "a failed settle does not duck");
     }
 
     #[test]
@@ -1179,6 +1187,7 @@ mod tests {
                 credits: fault_balance,
             }),
         ]);
+        app.world_mut().resource_mut::<audio::Music>().duck_gain = 1.0;
         app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
         app.world_mut().run_system_once(flow::reveal_act).unwrap();
         let sent = app.world().resource::<flow::ServerCrate>().sent_keys.clone();
@@ -1191,6 +1200,48 @@ mod tests {
         assert_eq!(app.world().resource::<flow::ServerCrate>().reason, content.ui.copy.pull_failed);
         assert!(app.world().resource::<settings::Prefs>().pull_key.is_empty(), "the fault clears the new key");
         assert!(app.world().resource::<settings::Prefs>().pull_seen_keys.iter().any(|row| row == old));
+        let cues = ui_cues(&mut app);
+        let failed = &content.crate_reveal.grid.pull_failed;
+        let tick = &content.ui.sounds.count_tick;
+        let chime = &content.ui.sounds.bank_chime;
+        assert_eq!(cues.iter().filter(|id| *id == failed).count(), 1, "{cues:?}");
+        assert!(cues.iter().all(|id| id != tick && id != chime && id != &content.crate_reveal.grid.flip_cue), "{cues:?}");
+        assert!((app.world().resource::<audio::Music>().duck_gain - 1.0).abs() < 1e-4, "a faulted pull does not duck");
+    }
+
+    #[test]
+    fn a_lost_new_pull_keeps_the_settle_reply_balance() {
+        let _guard = settings_lock();
+        let mut app = menu_app();
+        app.update();
+        let content = gemini_sim::content::Content::embedded();
+        let local = content.banners.cost.single as f32;
+        let settled = content.banners.dev.starting_credits;
+        let cost = content.banners.cost.ten_pull_cost as f32;
+        assert!(local + content.banners.cost.credit_slack < cost);
+        assert!(settled + content.banners.cost.credit_slack >= cost);
+        assert!(local != settled);
+        pull_host::clear_scripted_pull();
+        open_grid(&mut app, true);
+        let old = "0123456789abcdef0123456789abcdef";
+        plant_seen_key(&mut app, old);
+        app.world_mut().resource_mut::<flow::ServerCrate>().credits = Some(local);
+        let rank = app.world().resource::<session::Account>().rank;
+        let mut reply = seen_settle_reply(rank);
+        reply.credits = settled;
+        pull_host::script_pulls(vec![
+            Ok(reply),
+            Err(pull_host::PullHostError::Lost("timed out".into())),
+        ]);
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        let sent = app.world().resource::<flow::ServerCrate>().sent_keys.clone();
+        assert_eq!(sent.len(), 2, "the lost pull was sent: {sent:?}");
+        assert_eq!(sent[0], old);
+        assert_ne!(sent[1], old);
+        assert_eq!(app.world().resource::<flow::ServerCrate>().credits, Some(settled));
+        assert_ne!(app.world().resource::<flow::ServerCrate>().credits, Some(local));
+        assert_eq!(app.world().resource::<flow::ServerCrate>().reason, content.ui.copy.connection_lost);
     }
 
     #[test]
