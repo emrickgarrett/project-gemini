@@ -5859,6 +5859,10 @@ fn validate_downed(downed: &DownedCfg) -> Result<(), String> {
     Ok(())
 }
 
+fn normalized_hex(hex: &str) -> String {
+    hex.trim().to_ascii_lowercase()
+}
+
 fn validate_ui(
     ui: &Ui,
     ui_text: &str,
@@ -5885,11 +5889,16 @@ fn validate_ui(
     if ui.colors.bank_count == "rarity_legendary" || ui.colors.bank_bonus == "rarity_legendary" {
         return Err("ui.toml bank count and bonus must not use legendary gold".into());
     }
-    if let Some(victory_hex) = palette.hex(&ui.colors.victory) {
-        for name in ["rarity_common", "rarity_rare", "rarity_epic", "rarity_legendary"] {
-            if palette.hex(name) == Some(victory_hex) {
-                return Err(format!("ui.toml colors.victory matches {name}"));
-            }
+    let victory_hex = palette.hex(&ui.colors.victory).ok_or(format!(
+        "ui.toml colors.victory \"{}\" does not resolve",
+        ui.colors.victory
+    ))?;
+    for name in ["rarity_common", "rarity_rare", "rarity_epic", "rarity_legendary"] {
+        let Some(rarity_hex) = palette.hex(name) else {
+            continue;
+        };
+        if normalized_hex(victory_hex) == normalized_hex(rarity_hex) {
+            return Err(format!("ui.toml colors.victory matches {name}"));
         }
     }
     if !(layout.border_px > 0.0) {

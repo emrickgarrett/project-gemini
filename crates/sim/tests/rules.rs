@@ -1393,7 +1393,7 @@ fn victory_palette_key_is_required() {
     .expect_err("alias of legendary gold");
     assert!(err.contains("victory"), "{err}");
     assert!(err.contains("rarity_legendary"), "{err}");
-    for name in ["rarity_epic", "rarity_rare"] {
+    for name in ["rarity_epic", "rarity_rare", "rarity_common"] {
         let painted = base.ui.replacen("victory = \"victory\"", &format!("victory = \"{name}\""), 1);
         assert_ne!(painted, base.ui);
         let err = Content::parse(&gemini_sim::content::Sources {
@@ -1404,6 +1404,22 @@ fn victory_palette_key_is_required() {
         assert!(err.contains("victory"), "{name}: {err}");
         assert!(err.contains(name), "{name}: {err}");
     }
+    let epic = content.palette.hex("rarity_epic").expect("epic");
+    let folded = epic.to_ascii_lowercase();
+    assert_ne!(folded, epic);
+    let cased = base.palette.replacen(
+        &format!("victory = \"{}\"", content.palette.keys.victory),
+        &format!("victory = \"{folded}\""),
+        1,
+    );
+    assert_ne!(cased, base.palette);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        palette: &cased,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("victory hex differs from epic only by case");
+    assert!(err.contains("victory"), "{err}");
+    assert!(err.contains("rarity_epic"), "{err}");
 }
 
 #[test]
