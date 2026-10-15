@@ -219,6 +219,7 @@ impl Content {
             &crate_reveal.layout,
             src.crate_reveal,
             &heroes,
+            &palette,
         )?;
         let waves: WavesFile = parse("waves.toml", src.waves)?;
         let combat: Combat = parse("combat.toml", src.combat)?;
@@ -4312,7 +4313,7 @@ pub struct PaletteKeys {
     pub reveal_stage: String,
     pub reveal_ink: String,
     pub reveal_paper: String,
-    /// Win title and panel outline. Not legendary gold.
+    /// Win title and panel outline. Its resolved hex must not match a rarity color.
     pub victory: String,
     pub hero_vex: String,
     pub hero_nyra: String,
@@ -5868,6 +5869,7 @@ fn validate_ui(
     glyphs: &RevealLayout,
     reveal_text: &str,
     heroes: &[HeroCard],
+    palette: &Palette,
 ) -> Result<(), String> {
     let layout = &ui.layout;
     let settings = &ui.settings;
@@ -5883,8 +5885,12 @@ fn validate_ui(
     if ui.colors.bank_count == "rarity_legendary" || ui.colors.bank_bonus == "rarity_legendary" {
         return Err("ui.toml bank count and bonus must not use legendary gold".into());
     }
-    if ui.colors.victory == "rarity_legendary" {
-        return Err("ui.toml colors.victory must not use legendary gold".into());
+    if let Some(victory_hex) = palette.hex(&ui.colors.victory) {
+        for name in ["rarity_common", "rarity_rare", "rarity_epic", "rarity_legendary"] {
+            if palette.hex(name) == Some(victory_hex) {
+                return Err(format!("ui.toml colors.victory matches {name}"));
+            }
+        }
     }
     if !(layout.border_px > 0.0) {
         return Err("ui.toml layout.border_px must be > 0".into());
