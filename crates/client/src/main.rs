@@ -1233,15 +1233,37 @@ mod tests {
             Ok(reply),
             Err(pull_host::PullHostError::Lost("timed out".into())),
         ]);
+        app.world_mut().resource_mut::<audio::Music>().duck_gain = 1.0;
         app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
         app.world_mut().run_system_once(flow::reveal_act).unwrap();
         let sent = app.world().resource::<flow::ServerCrate>().sent_keys.clone();
         assert_eq!(sent.len(), 2, "the lost pull was sent: {sent:?}");
         assert_eq!(sent[0], old);
-        assert_ne!(sent[1], old);
+        let new_key = sent[1].clone();
+        assert_ne!(new_key, old);
         assert_eq!(app.world().resource::<flow::ServerCrate>().credits, Some(settled));
         assert_ne!(app.world().resource::<flow::ServerCrate>().credits, Some(local));
         assert_eq!(app.world().resource::<flow::ServerCrate>().reason, content.ui.copy.connection_lost);
+        let cues = ui_cues(&mut app);
+        let failed = &content.crate_reveal.grid.pull_failed;
+        let tick = &content.ui.sounds.count_tick;
+        let chime = &content.ui.sounds.bank_chime;
+        assert_eq!(cues.iter().filter(|id| *id == failed).count(), 1, "{cues:?}");
+        assert!(cues.iter().all(|id| id != tick && id != chime && id != &content.crate_reveal.grid.flip_cue), "{cues:?}");
+        assert!((app.world().resource::<audio::Music>().duck_gain - 1.0).abs() < 1e-4, "a lost pull does not duck");
+        let prefs = app.world().resource::<settings::Prefs>();
+        assert!(prefs.pull_seen_keys.iter().any(|row| row == old), "the old key stays settled");
+        assert_ne!(prefs.pull_key, old);
+        assert_eq!(prefs.pull_key, new_key, "the new key stays saved");
+        assert!(prefs.pull_awaiting, "the lost key is waiting to retry");
+        app.world_mut().run_system_once(flow::release_pull).unwrap();
+        pull_host::script_next_pull(Err(pull_host::PullHostError::Lost("timed out".into())));
+        app.world_mut().resource_mut::<flow::PendingAction>().0 = Some("pull_again".into());
+        app.world_mut().run_system_once(flow::reveal_act).unwrap();
+        let sent = app.world().resource::<flow::ServerCrate>().sent_keys.clone();
+        assert_eq!(sent.last().map(String::as_str), Some(new_key.as_str()), "retry resends the new key: {sent:?}");
+        assert_eq!(sent.iter().filter(|row| *row == old).count(), 1, "retry does not resend the old key: {sent:?}");
+        assert_eq!(app.world().resource::<settings::Prefs>().pull_key, new_key);
     }
 
     #[test]
