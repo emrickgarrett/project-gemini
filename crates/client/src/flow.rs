@@ -1102,7 +1102,7 @@ pub(crate) fn reveal_act(
                     crate_box.pull_busy = true;
                     crate_box.sent_keys = kept_keys;
                     crate_box.reveal_gen = kept_gen;
-                    crate_box.credits = kept_credits;
+                    crate_box.credits = Some(reply.credits);
                     audio::ui_cue(&mut commands, &assets, &content, &prefs, &failed_cue);
                     return;
                 }
@@ -1274,7 +1274,7 @@ fn apply_pull_reply(
             crate_box.pull_busy = true;
             crate_box.sent_keys = kept_keys;
             crate_box.reveal_gen = kept_gen;
-            crate_box.credits = kept_credits;
+            crate_box.credits = Some(reply.credits);
             if landed.failed {
                 audio::ui_cue(commands, assets, content, prefs, &failed_cue);
             }
