@@ -1486,12 +1486,12 @@ fn palette_hex_must_be_upper_rrggbb() {
     let blank_teal = base.palette.replacen("teal = \"#1FB5A8\"", "teal = \"\"", 1);
     assert_ne!(blank_teal, base.palette);
     let err = load(&blank_teal, "empty hero.teal");
-    assert!(err.contains("hero_teal"), "{err}");
+    assert!(err.contains("hero.teal"), "{err}");
     assert!(err.contains("#RRGGBB"), "{err}");
     let blank_shot = base.palette.replacen("player = \"#2DE1D0\"", "player = \"\"", 1);
     assert_ne!(blank_shot, base.palette);
     let err = load(&blank_shot, "empty shots.player");
-    assert!(err.contains("shots_player"), "{err}");
+    assert!(err.contains("shots.player"), "{err}");
     assert!(err.contains("#RRGGBB"), "{err}");
     let blank_white = base.palette.replacen("white = \"#F2F2F2\"", "white = \"\"", 1);
     assert_ne!(blank_white, base.palette);
@@ -1510,6 +1510,334 @@ fn palette_hex_must_be_upper_rrggbb() {
     let err = load(&lower_shell, "lowercase swarmer.shell");
     assert!(err.contains("swarmer.shell"), "{err}");
     assert!(err.contains("#c67a2e"), "{err}");
+}
+
+fn palette_doc(text: &str) -> toml::Value {
+    toml::from_str(text).expect("palette.toml")
+}
+
+fn palette_hex(doc: &toml::Value, name: &str) -> String {
+    if let Some((section, field)) = name.split_once('.') {
+        return doc[section][field].as_str().unwrap_or_else(|| panic!("{name}")).to_string();
+    }
+    match &doc["keys"][name] {
+        toml::Value::String(hex) => hex.clone(),
+        toml::Value::Table(table) => table["hex"].as_str().unwrap_or_else(|| panic!("{name} hex")).to_string(),
+        other => panic!("{name} is {other}"),
+    }
+}
+
+fn bug_owned_names(doc: &toml::Value) -> Vec<String> {
+    doc["bug_owned"]
+        .as_array()
+        .expect("bug_owned")
+        .iter()
+        .map(|name| name.as_str().expect("bug_owned name").to_string())
+        .collect()
+}
+
+#[test]
+fn bug_hex_alias_is_rejected() {
+    let base = gemini_sim::content::embedded_sources();
+    let doc = palette_doc(base.palette);
+    let acid = palette_hex(&doc, "bugs.acid");
+    let victory = palette_hex(&doc, "victory");
+    assert_ne!(acid, victory);
+    let palette = base.palette.replacen(
+        &format!("victory = \"{victory}\""),
+        &format!("victory = \"{acid}\""),
+        1,
+    );
+    assert_ne!(palette, base.palette);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        palette: &palette,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("a friendly key with a bug hex must fail");
+    assert!(err.contains("ui.toml colors.victory"), "{err}");
+    assert!(err.contains("\"victory\""), "{err}");
+    assert!(err.contains("bug-owned"), "{err}");
+    assert!(err.contains("palette.toml"), "{err}");
+    let shared: Vec<String> = bug_owned_names(&doc)
+        .into_iter()
+        .filter(|name| palette_hex(&doc, name) == acid)
+        .collect();
+    assert!(!shared.is_empty());
+    assert!(
+        shared.iter().any(|name| err.contains(name) || err.contains(&format!("keys.{name}"))),
+        "{err} shared={shared:?}"
+    );
+
+    let ui = base.ui.replacen("panel = \"ui_panel_slate\"", "panel = \"swarmer_glow\"", 1);
+    assert_ne!(ui, base.ui);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        ui: &ui,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("flat swarmer_glow is bug-owned");
+    assert!(err.contains("ui.toml colors.panel"), "{err}");
+    assert!(err.contains("swarmer_glow"), "{err}");
+    assert!(err.contains("palette.toml keys.swarmer_glow"), "{err}");
+
+    let presentation = base.presentation.replacen("text = \"white\"", "text = \"swarmer_glow\"", 1);
+    assert_ne!(presentation, base.presentation);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        presentation: &presentation,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("hud.away must reject a bug hex");
+    assert!(err.contains("presentation.toml hud.away.text"), "{err}");
+    assert!(err.contains("palette.toml keys.swarmer_glow"), "{err}");
+
+    let reveal = base.crate_reveal.replacen("stage = \"reveal_stage\"", "stage = \"swarmer_glow\"", 1);
+    assert_ne!(reveal, base.crate_reveal);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        crate_reveal: &reveal,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("crate_reveal must reject a bug hex");
+    assert!(err.contains("crate_reveal.toml layout.stage"), "{err}");
+    assert!(err.contains("palette.toml keys.swarmer_glow"), "{err}");
+
+    let hero = base.hero.replacen("accent_key = \"hero_vex\"", "accent_key = \"swarmer_glow\"", 1);
+    assert_ne!(hero, base.hero);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        hero: &hero,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("hero accent must reject a bug hex");
+    assert!(err.contains("characters.toml"), "{err}");
+    assert!(err.contains("accent_key"), "{err}");
+    assert!(err.contains("palette.toml keys.swarmer_glow"), "{err}");
+
+    let bugs = base.bugs.replacen("color=\"swarmer_amber\"", "color=\"bugs.acid\"", 1);
+    assert_ne!(bugs, base.bugs);
+    Content::parse(&gemini_sim::content::Sources {
+        bugs: &bugs,
+        ..sources_with(&base, base.coop)
+    })
+    .expect("enemy content may use a bug-owned color");
+}
+
+#[test]
+fn bug_owned_list_is_required() {
+    let base = gemini_sim::content::embedded_sources();
+    let start = base.palette.find("bug_owned = [").expect("bug_owned");
+    let end = base.palette[start..].find("]\n").expect("bug_owned end") + start + 2;
+    let palette = format!("{}{}", &base.palette[..start], &base.palette[end..]);
+    assert_ne!(palette, base.palette);
+    assert!(!palette.contains("bug_owned"));
+    let err = Content::parse(&gemini_sim::content::Sources {
+        palette: &palette,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("bug_owned is required");
+    assert!(err.contains("palette.toml"), "{err}");
+    assert!(err.contains("bug_owned"), "{err}");
+}
+
+#[test]
+fn bug_owned_unknown_key_is_rejected() {
+    let base = gemini_sim::content::embedded_sources();
+    let palette = base.palette.replacen(
+        "bug_owned = [",
+        "bug_owned = [\n  \"not_a_palette_key\",",
+        1,
+    );
+    assert_ne!(palette, base.palette);
+    let err = Content::parse(&gemini_sim::content::Sources {
+        palette: &palette,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("unknown bug_owned key");
+    assert!(err.contains("palette.toml bug_owned"), "{err}");
+    assert!(err.contains("not_a_palette_key"), "{err}");
+    assert!(err.contains("does not resolve"), "{err}");
+    assert!(!err.contains("keys.not_a_palette_key"), "{err}");
+}
+
+#[test]
+fn empty_bug_owned_is_rejected() {
+    let base = gemini_sim::content::embedded_sources();
+    let start = base.palette.find("bug_owned = [").expect("bug_owned");
+    let end = base.palette[start..].find(']').expect("bug_owned end") + start + 1;
+    let palette = format!("{}bug_owned = []{}", &base.palette[..start], &base.palette[end..]);
+    assert_ne!(palette, base.palette);
+    assert!(palette.contains("bug_owned = []"));
+    let err = Content::parse(&gemini_sim::content::Sources {
+        palette: &palette,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("empty bug_owned");
+    assert!(err.contains("palette.toml bug_owned"), "{err}");
+    assert!(err.contains("at least one"), "{err}");
+}
+
+#[test]
+fn bug_colors_must_be_bug_owned() {
+    let base = gemini_sim::content::embedded_sources();
+    let doc = palette_doc(base.palette);
+    let names = bug_owned_names(&doc);
+    assert!(names.iter().any(|name| name == "brood_sac"));
+    assert!(names.iter().any(|name| name == "spitter_rim"));
+    let visual = include_str!("../../../content/bugs_visual.toml");
+    assert_eq!(visual.matches("spitter_rim").count(), 1);
+    let spitter = visual.find("id = \"spitter\"").expect("spitter model");
+    let next = visual[spitter + 1..].find("id = \"").expect("model after spitter") + spitter + 1;
+    assert!(visual[spitter..next].contains("rim = \"spitter_rim\""));
+    assert!(!base.bugs.contains("spitter_rim"));
+    let content = Content::parse(&sources_with(&base, base.coop)).expect("shipped bugs use bug_owned colors");
+    for (bug, row) in content.bugs.rows() {
+        if !row.visual.bud_color.is_empty() {
+            assert!(names.iter().any(|name| name == &row.visual.bud_color), "{bug} bud");
+        }
+        if !row.visual.grown_color.is_empty() {
+            assert!(names.iter().any(|name| name == &row.visual.grown_color), "{bug} grown");
+        }
+        for part in &row.visual.parts {
+            assert!(names.iter().any(|name| name == &part.color), "{bug} {}", part.name);
+        }
+    }
+    for model in &content.models {
+        if content.bugs.rows().iter().all(|(id, _)| *id != model.id) {
+            continue;
+        }
+        for (slot, name) in [("base", &model.base), ("accent", &model.accent), ("glow", &model.glow), ("rim", &model.rim)] {
+            if !name.is_empty() {
+                assert!(names.iter().any(|owned| owned == name), "{} {slot} {name}", model.id);
+            }
+        }
+    }
+
+    let friendly = "defeat_ember";
+    assert!(!names.iter().any(|name| name == friendly));
+    let load = |bugs: &str, why: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            bugs,
+            ..sources_with(&base, base.coop)
+        })
+        .expect_err(why)
+    };
+    let bud = base.bugs.replacen("bud_color = \"brood_sac\"", &format!("bud_color = \"{friendly}\""), 1);
+    assert_ne!(bud, base.bugs);
+    let err = load(&bud, "bud_color must be bug_owned");
+    assert!(err.contains("bugs.toml brood_mother.visual.bud_color"), "{err}");
+    assert!(err.contains(friendly), "{err}");
+    assert!(err.contains("not bug_owned"), "{err}");
+
+    let grown = base.bugs.replacen("grown_color = \"bud_glow\"", &format!("grown_color = \"{friendly}\""), 1);
+    assert_ne!(grown, base.bugs);
+    let err = load(&grown, "grown_color must be bug_owned");
+    assert!(err.contains("bugs.toml brood_mother.visual.grown_color"), "{err}");
+    assert!(err.contains(friendly), "{err}");
+    assert!(err.contains("not bug_owned"), "{err}");
+
+    let sac = "name=\"sac\",   part=\"gem\",   shape=\"sphere\", size=[2.6,2.0,2.6], offset=[0,1.75,-0.1], color=\"brood_sac\"";
+    let part = base.bugs.replacen(sac, &sac.replace("color=\"brood_sac\"", &format!("color=\"{friendly}\"")), 1);
+    assert_ne!(part, base.bugs);
+    let err = load(&part, "part color must be bug_owned");
+    assert!(err.contains("bugs.toml brood_mother.visual.parts.sac"), "{err}");
+    assert!(err.contains(friendly), "{err}");
+    assert!(err.contains("not bug_owned"), "{err}");
+
+    let owned = |palette: &str, why: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            palette,
+            ..sources_with(&base, base.coop)
+        })
+        .expect_err(why)
+    };
+    let without_rim = base.palette.replacen("  \"spitter_rim\",\n", "", 1);
+    assert_ne!(without_rim, base.palette);
+    assert!(without_rim.contains("spitter_rim = "));
+    let err = owned(&without_rim, "spitter rim must be bug_owned");
+    assert!(err.contains("bugs_visual.toml spitter rim"), "{err}");
+    assert!(err.contains("\"spitter_rim\""), "{err}");
+    assert!(err.contains("not bug_owned"), "{err}");
+
+    let without_sac = base.palette.replacen("  \"brood_sac\",\n", "", 1);
+    assert_ne!(without_sac, base.palette);
+    let err = owned(&without_sac, "brood sac must be bug_owned");
+    assert!(err.contains("bugs.toml"), "{err}");
+    assert!(err.contains("bugs_visual.toml brood_mother base"), "{err}");
+    assert!(err.contains("\"brood_sac\""), "{err}");
+    assert!(err.contains("not bug_owned"), "{err}");
+}
+
+#[test]
+fn current_palette_loads() {
+    let sources = gemini_sim::content::embedded_sources();
+    assert!(sources.ui.contains("defeat = \"defeat_ember\""));
+    assert!(!sources.ui.contains("defeat = \"spitter_glow\""));
+    assert!(!sources.ui.contains("defeat = \"hero_brakk\""));
+    assert!(sources.palette.contains("defeat_ember = \"#A34A50\""));
+    let doc = palette_doc(sources.palette);
+    let names = bug_owned_names(&doc);
+    assert!(names.iter().any(|name| name == "brood_sac"));
+    assert!(!names.iter().any(|name| name == "defeat_ember"));
+    for name in &names {
+        let hex = palette_hex(&doc, name);
+        assert!(hex.starts_with('#'), "{name} {hex}");
+    }
+    let content = Content::embedded();
+    assert_eq!(content.ui.colors.defeat, "defeat_ember");
+    let ember = palette_hex(&doc, "defeat_ember");
+    assert_eq!(content.palette.hex("defeat_ember"), Some(ember.as_str()));
+    assert_ne!(ember, palette_hex(&doc, "victory"));
+    for name in &names {
+        assert_ne!(ember, palette_hex(&doc, name), "{name}");
+    }
+}
+
+#[test]
+fn defeat_hex_rejects_rarity_bug_and_victory() {
+    let base = gemini_sim::content::embedded_sources();
+    let doc = palette_doc(base.palette);
+    let ember = palette_hex(&doc, "defeat_ember");
+    let paint = |hex: &str| {
+        let palette = base.palette.replacen(
+            &format!("defeat_ember = \"{ember}\""),
+            &format!("defeat_ember = \"{hex}\""),
+            1,
+        );
+        assert_ne!(palette, base.palette);
+        palette
+    };
+    let load = |palette: &str, why: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            palette,
+            ..sources_with(&base, base.coop)
+        })
+        .expect_err(why)
+    };
+
+    let legendary = palette_hex(&doc, "rarity.legendary");
+    assert_ne!(ember, legendary);
+    let err = load(&paint(&legendary), "defeat must not share a rarity hex");
+    assert!(err.contains("ui.toml colors.defeat"), "{err}");
+    assert!(err.contains("palette.toml rarity.legendary"), "{err}");
+
+    let acid = palette_hex(&doc, "bugs.acid");
+    assert_ne!(ember, acid);
+    let err = load(&paint(&acid), "defeat must not share a bug-owned hex");
+    assert!(err.contains("ui.toml colors.defeat"), "{err}");
+    assert!(err.contains("bug-owned"), "{err}");
+    assert!(err.contains("palette.toml"), "{err}");
+    let shared: Vec<String> = bug_owned_names(&doc)
+        .into_iter()
+        .filter(|name| palette_hex(&doc, name) == acid)
+        .collect();
+    assert!(!shared.is_empty());
+    assert!(
+        shared.iter().any(|name| err.contains(name) || err.contains(&format!("keys.{name}"))),
+        "{err} shared={shared:?}"
+    );
+
+    let victory = palette_hex(&doc, "victory");
+    assert_ne!(ember, victory);
+    let err = load(&paint(&victory), "defeat must not share the victory hex");
+    assert!(err.contains("ui.toml colors.defeat"), "{err}");
+    assert!(err.contains("palette.toml keys.victory"), "{err}");
 }
 
 #[test]

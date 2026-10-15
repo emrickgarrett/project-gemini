@@ -1178,8 +1178,10 @@ mod tests {
         assert_eq!(hits[0].id, "play_again");
         assert_eq!(hits[1].id, "main_menu");
         let defeat_color = bytes(&content, &content.ui.colors.defeat);
-        assert_eq!(defeat_color, bytes(&content, "spitter_glow"));
-        assert!(lost.chunks(3).any(|px| px == defeat_color), "defeat title uses spitter_glow");
+        assert_eq!(content.ui.colors.defeat, "defeat_ember");
+        assert_eq!(defeat_color, bytes(&content, "defeat_ember"));
+        assert_ne!(defeat_color, bytes(&content, "spitter_glow"));
+        assert!(lost.chunks(3).any(|px| px == defeat_color), "defeat title uses defeat_ember");
         let victory_color = bytes(&content, &content.ui.colors.victory);
         assert_eq!(content.ui.colors.victory, "victory");
         assert_eq!(victory_color, bytes(&content, "victory"));

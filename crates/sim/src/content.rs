@@ -145,8 +145,8 @@ impl Content {
         let bosses = load_bosses(src.bosses).map_err(|err| format!("bosses.toml: {err}"))?;
         require_spawn_clearance(&bosses, &bugs).map_err(|err| format!("bosses.toml: {err}"))?;
         let mut palette: Palette = parse("palette.toml", src.palette)?;
-        validate_palette_hexes(&palette).map_err(|err| format!("palette.toml: {err}"))?;
-        validate_lit_keys(&palette).map_err(|err| format!("palette.toml: {err}"))?;
+        validate_palette_hexes(&palette).map_err(|err| format!("palette.toml {err}"))?;
+        validate_lit_keys(&palette).map_err(|err| format!("palette.toml {err}"))?;
         let heroes_visual = load_heroes_visual(src.heroes_visual, &palette)?;
         let bug_models = load_model_table(
             include_str!("../../../content/bugs_visual.toml"),
@@ -195,8 +195,29 @@ impl Content {
         validate_downed(&controller.downed)?;
         validate_ledge_catch(&controller.ledge_catch)?;
         let difficulty = parse::<DifficultyFile>("difficulty.toml", src.difficulty)?.tier;
-        require_palette_keys(&palette, &bugs, &presentation.hud.away, &crate_reveal.layout, &ui, &heroes)
-            .map_err(|err| format!("palette.toml: {err}"))?;
+        let mut blocked = Vec::new();
+        if let Err(err) = bug_owned_hexes(&palette) {
+            blocked.push(format!("palette.toml {err}"));
+        }
+        if let Err(err) = require_palette_keys(&palette, &bugs, &presentation.hud.away, &crate_reveal.layout, &ui, &heroes) {
+            blocked.push(if err.starts_with("bugs.toml ") { err } else { format!("palette.toml {err}") });
+        }
+        if let Err(err) = require_bug_visual_owned(&palette, &models, &bugs) {
+            blocked.push(err);
+        }
+        if let Err(err) = reject_bug_owned_on_friendly(
+            &palette,
+            &ui,
+            &heroes,
+            &heroes_visual,
+            &presentation.hud.away,
+            &crate_reveal,
+        ) {
+            blocked.push(err);
+        }
+        if !blocked.is_empty() {
+            return Err(blocked.join("\n"));
+        }
         let accent_key = heroes
             .iter()
             .find(|card| card.id == hero.id)
@@ -4234,6 +4255,8 @@ pub struct Palette {
     pub rarity: RarityColors,
     pub bugs: BugColors,
     pub keys: PaletteKeys,
+    /// Lookup names whose resolved hex stays on enemies.
+    pub bug_owned: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -4316,6 +4339,8 @@ pub struct PaletteKeys {
     pub reveal_paper: String,
     /// Win title and panel outline. Its resolved hex must not match a rarity color.
     pub victory: String,
+    /// Loss title and outline. Its resolved hex must not match a rarity, a bug-owned color, or victory.
+    pub defeat_ember: String,
     pub hero_vex: String,
     pub hero_nyra: String,
     pub hero_brakk: String,
@@ -4381,119 +4406,135 @@ pub struct PaletteKeys {
     pub ambient_haze: String,
 }
 
+fn canonical_palette_name(name: &str) -> &str {
+    match name {
+        "teal" => "hero_teal",
+        "cobalt" => "hero_cobalt",
+        "white" => "hero_white",
+        "accent" => "hero_accent",
+        other => other,
+    }
+}
+
 impl Palette {
     /// Hex for a known color name. `None` when the name is not in the palette.
     pub fn hex(&self, name: &str) -> Option<&str> {
-        let name = match name {
-            "teal" => "hero_teal",
-            "cobalt" => "hero_cobalt",
-            "white" => "hero_white",
-            "accent" => "hero_accent",
-            other => other,
-        };
+        let name = canonical_palette_name(name);
         self.hex_fields()
-            .find_map(|(key, hex)| (key == name).then_some(hex))
+            .find_map(|(key, _, hex)| (key == name).then_some(hex))
+    }
+
+    /// `palette.toml` path for a [`Self::hex`] name. The path is stored beside that field.
+    /// An unknown name fails. There is no `keys.<name>` fallback.
+    fn palette_toml_path(&self, key: &str) -> Result<&'static str, String> {
+        let key = canonical_palette_name(key);
+        self.hex_fields()
+            .find(|(lookup, _, _)| *lookup == key)
+            .map(|(_, path, _)| path)
+            .ok_or_else(|| format!("\"{key}\" has no path"))
     }
 
     /// Every stored palette hex. [`Self::hex`] and `validate_palette_hexes` both walk this list. Aliases are not repeated.
-    fn hex_fields(&self) -> impl Iterator<Item = (&'static str, &str)> {
+    /// The middle string is the `palette.toml` path for load errors.
+    fn hex_fields(&self) -> impl Iterator<Item = (&'static str, &'static str, &str)> {
         [
-            ("swarmer_amber", self.keys.swarmer_amber.as_str()),
-            ("swarmer_glow", self.keys.swarmer_glow.as_str()),
-            ("swarmer.shell", self.swarmer.shell.as_str()),
-            ("swarmer.glow", self.swarmer.glow.as_str()),
-            ("spitter_carapace", self.keys.spitter_carapace.as_str()),
-            ("spitter_glow", self.keys.spitter_glow.as_str()),
-            ("spitter.carapace", self.spitter.carapace.as_str()),
-            ("spitter.glow", self.spitter.glow.as_str()),
-            ("brute_amber", self.keys.brute_amber.as_str()),
-            ("brute_cracks", self.keys.brute_cracks.as_str()),
-            ("brute.shell", self.brute.shell.as_str()),
-            ("brute.cracks", self.brute.cracks.as_str()),
-            ("brood_sac", self.keys.brood_sac.as_str()),
-            ("bud_glow", self.keys.bud_glow.as_str()),
-            ("ui_panel_slate", self.keys.ui_panel_slate.as_str()),
-            ("reveal_stage", self.keys.reveal_stage.as_str()),
-            ("reveal_ink", self.keys.reveal_ink.as_str()),
-            ("reveal_paper", self.keys.reveal_paper.as_str()),
-            ("victory", self.keys.victory.as_str()),
-            ("hero_vex", self.keys.hero_vex.as_str()),
-            ("hero_nyra", self.keys.hero_nyra.as_str()),
-            ("hero_brakk", self.keys.hero_brakk.as_str()),
-            ("hero_kip", self.keys.hero_kip.as_str()),
-            ("spitter_rim", self.keys.spitter_rim.as_str()),
-            ("hero_plate", self.keys.hero_plate.as_str()),
-            ("portrait_field", self.keys.portrait_field.as_str()),
-            ("arena_sky", self.keys.arena_sky.as_str()),
-            ("hero_vex_primary", self.keys.hero_vex_primary.as_str()),
-            ("hero_vex_secondary", self.keys.hero_vex_secondary.as_str()),
-            ("hero_vex_accent", self.keys.hero_vex_accent.as_str()),
-            ("hero_vex_glow", self.keys.hero_vex_glow.as_str()),
-            ("hero_nyra_primary", self.keys.hero_nyra_primary.as_str()),
-            ("hero_nyra_secondary", self.keys.hero_nyra_secondary.as_str()),
-            ("hero_nyra_accent", self.keys.hero_nyra_accent.as_str()),
-            ("hero_nyra_glow", self.keys.hero_nyra_glow.as_str()),
-            ("hero_brakk_primary", self.keys.hero_brakk_primary.as_str()),
-            ("hero_brakk_secondary", self.keys.hero_brakk_secondary.as_str()),
-            ("hero_brakk_accent", self.keys.hero_brakk_accent.as_str()),
-            ("hero_brakk_glow", self.keys.hero_brakk_glow.as_str()),
-            ("hero_kip_primary", self.keys.hero_kip_primary.as_str()),
-            ("hero_kip_secondary", self.keys.hero_kip_secondary.as_str()),
-            ("hero_kip_accent", self.keys.hero_kip_accent.as_str()),
-            ("hero_kip_glow", self.keys.hero_kip_glow.as_str()),
-            ("gear_vex_gun_primary", self.keys.gear_vex_gun_primary.as_str()),
-            ("gear_vex_gun_secondary", self.keys.gear_vex_gun_secondary.as_str()),
-            ("gear_vex_gun_accent", self.keys.gear_vex_gun_accent.as_str()),
-            ("gear_nyra_gun_primary", self.keys.gear_nyra_gun_primary.as_str()),
-            ("gear_nyra_gun_secondary", self.keys.gear_nyra_gun_secondary.as_str()),
-            ("gear_nyra_gun_accent", self.keys.gear_nyra_gun_accent.as_str()),
-            ("gear_nyra_gun_glow", self.keys.gear_nyra_gun_glow.hex.as_str()),
-            ("gear_brakk_gun_primary", self.keys.gear_brakk_gun_primary.as_str()),
-            ("gear_brakk_gun_secondary", self.keys.gear_brakk_gun_secondary.as_str()),
-            ("gear_brakk_gun_glow", self.keys.gear_brakk_gun_glow.hex.as_str()),
-            ("gear_kip_gun_primary", self.keys.gear_kip_gun_primary.as_str()),
-            ("gear_kip_gun_secondary", self.keys.gear_kip_gun_secondary.as_str()),
-            ("gear_kip_gun_accent", self.keys.gear_kip_gun_accent.as_str()),
-            ("gear_brakk_shield_primary", self.keys.gear_brakk_shield_primary.as_str()),
-            ("gear_brakk_shield_secondary", self.keys.gear_brakk_shield_secondary.as_str()),
-            ("gear_brakk_shield_accent", self.keys.gear_brakk_shield_accent.as_str()),
-            ("dirt_mauve", self.keys.dirt_mauve.as_str()),
-            ("dirt_outer", self.keys.dirt_outer.as_str()),
-            ("rim_violet", self.keys.rim_violet.as_str()),
-            ("rim_violet_hi", self.keys.rim_violet_hi.as_str()),
-            ("boulder_violet", self.keys.boulder_violet.as_str()),
-            ("platform_pale", self.keys.platform_pale.as_str()),
-            ("platform_navy", self.keys.platform_navy.as_str()),
-            ("trim_cyan", self.keys.trim_cyan.as_str()),
-            ("nest_brass", self.keys.nest_brass.as_str()),
-            ("nest_goo", self.keys.nest_goo.as_str()),
-            ("beacon_cyan", self.keys.beacon_cyan.as_str()),
-            ("rubble_violet", self.keys.rubble_violet.as_str()),
-            ("crack_dark", self.keys.crack_dark.as_str()),
-            ("vein_resin", self.keys.vein_resin.as_str()),
-            ("vent_tell", self.keys.vent_tell.as_str()),
-            ("flora_stalk", self.keys.flora_stalk.as_str()),
-            ("flora_bulb", self.keys.flora_bulb.as_str()),
-            ("fog_violet", self.keys.fog_violet.as_str()),
-            ("sky_haze", self.keys.sky_haze.as_str()),
-            ("key_warm", self.keys.key_warm.as_str()),
-            ("mark_ink", self.keys.mark_ink.as_str()),
-            ("fill_cool", self.keys.fill_cool.as_str()),
-            ("ambient_haze", self.keys.ambient_haze.as_str()),
-            ("hero_teal", self.hero.teal.as_str()),
-            ("hero_cobalt", self.hero.cobalt.as_str()),
-            ("hero_white", self.hero.white.as_str()),
-            ("hero_accent", self.hero.accent.as_str()),
-            ("shots_player", self.shots.player.as_str()),
-            ("arena_dark", self.arena.rock_dark.as_str()),
-            ("arena_light", self.arena.rock_light.as_str()),
-            ("rarity_common", self.rarity.common.as_str()),
-            ("rarity_rare", self.rarity.rare.as_str()),
-            ("rarity_epic", self.rarity.epic.as_str()),
-            ("rarity_legendary", self.rarity.legendary.as_str()),
-            ("bugs.acid", self.bugs.acid.as_str()),
-            ("bugs.amber", self.bugs.amber.as_str()),
-            ("bugs.magenta", self.bugs.magenta.as_str()),
+            ("swarmer_amber", "keys.swarmer_amber", self.keys.swarmer_amber.as_str()),
+            ("swarmer_glow", "keys.swarmer_glow", self.keys.swarmer_glow.as_str()),
+            ("swarmer.shell", "swarmer.shell", self.swarmer.shell.as_str()),
+            ("swarmer.glow", "swarmer.glow", self.swarmer.glow.as_str()),
+            ("spitter_carapace", "keys.spitter_carapace", self.keys.spitter_carapace.as_str()),
+            ("spitter_glow", "keys.spitter_glow", self.keys.spitter_glow.as_str()),
+            ("spitter.carapace", "spitter.carapace", self.spitter.carapace.as_str()),
+            ("spitter.glow", "spitter.glow", self.spitter.glow.as_str()),
+            ("brute_amber", "keys.brute_amber", self.keys.brute_amber.as_str()),
+            ("brute_cracks", "keys.brute_cracks", self.keys.brute_cracks.as_str()),
+            ("brute.shell", "brute.shell", self.brute.shell.as_str()),
+            ("brute.cracks", "brute.cracks", self.brute.cracks.as_str()),
+            ("brood_sac", "keys.brood_sac", self.keys.brood_sac.as_str()),
+            ("bud_glow", "keys.bud_glow", self.keys.bud_glow.as_str()),
+            ("ui_panel_slate", "keys.ui_panel_slate", self.keys.ui_panel_slate.as_str()),
+            ("reveal_stage", "keys.reveal_stage", self.keys.reveal_stage.as_str()),
+            ("reveal_ink", "keys.reveal_ink", self.keys.reveal_ink.as_str()),
+            ("reveal_paper", "keys.reveal_paper", self.keys.reveal_paper.as_str()),
+            ("victory", "keys.victory", self.keys.victory.as_str()),
+            ("defeat_ember", "keys.defeat_ember", self.keys.defeat_ember.as_str()),
+            ("hero_vex", "keys.hero_vex", self.keys.hero_vex.as_str()),
+            ("hero_nyra", "keys.hero_nyra", self.keys.hero_nyra.as_str()),
+            ("hero_brakk", "keys.hero_brakk", self.keys.hero_brakk.as_str()),
+            ("hero_kip", "keys.hero_kip", self.keys.hero_kip.as_str()),
+            ("spitter_rim", "keys.spitter_rim", self.keys.spitter_rim.as_str()),
+            ("hero_plate", "keys.hero_plate", self.keys.hero_plate.as_str()),
+            ("portrait_field", "keys.portrait_field", self.keys.portrait_field.as_str()),
+            ("arena_sky", "keys.arena_sky", self.keys.arena_sky.as_str()),
+            ("hero_vex_primary", "keys.hero_vex_primary", self.keys.hero_vex_primary.as_str()),
+            ("hero_vex_secondary", "keys.hero_vex_secondary", self.keys.hero_vex_secondary.as_str()),
+            ("hero_vex_accent", "keys.hero_vex_accent", self.keys.hero_vex_accent.as_str()),
+            ("hero_vex_glow", "keys.hero_vex_glow", self.keys.hero_vex_glow.as_str()),
+            ("hero_nyra_primary", "keys.hero_nyra_primary", self.keys.hero_nyra_primary.as_str()),
+            ("hero_nyra_secondary", "keys.hero_nyra_secondary", self.keys.hero_nyra_secondary.as_str()),
+            ("hero_nyra_accent", "keys.hero_nyra_accent", self.keys.hero_nyra_accent.as_str()),
+            ("hero_nyra_glow", "keys.hero_nyra_glow", self.keys.hero_nyra_glow.as_str()),
+            ("hero_brakk_primary", "keys.hero_brakk_primary", self.keys.hero_brakk_primary.as_str()),
+            ("hero_brakk_secondary", "keys.hero_brakk_secondary", self.keys.hero_brakk_secondary.as_str()),
+            ("hero_brakk_accent", "keys.hero_brakk_accent", self.keys.hero_brakk_accent.as_str()),
+            ("hero_brakk_glow", "keys.hero_brakk_glow", self.keys.hero_brakk_glow.as_str()),
+            ("hero_kip_primary", "keys.hero_kip_primary", self.keys.hero_kip_primary.as_str()),
+            ("hero_kip_secondary", "keys.hero_kip_secondary", self.keys.hero_kip_secondary.as_str()),
+            ("hero_kip_accent", "keys.hero_kip_accent", self.keys.hero_kip_accent.as_str()),
+            ("hero_kip_glow", "keys.hero_kip_glow", self.keys.hero_kip_glow.as_str()),
+            ("gear_vex_gun_primary", "keys.gear_vex_gun_primary", self.keys.gear_vex_gun_primary.as_str()),
+            ("gear_vex_gun_secondary", "keys.gear_vex_gun_secondary", self.keys.gear_vex_gun_secondary.as_str()),
+            ("gear_vex_gun_accent", "keys.gear_vex_gun_accent", self.keys.gear_vex_gun_accent.as_str()),
+            ("gear_nyra_gun_primary", "keys.gear_nyra_gun_primary", self.keys.gear_nyra_gun_primary.as_str()),
+            ("gear_nyra_gun_secondary", "keys.gear_nyra_gun_secondary", self.keys.gear_nyra_gun_secondary.as_str()),
+            ("gear_nyra_gun_accent", "keys.gear_nyra_gun_accent", self.keys.gear_nyra_gun_accent.as_str()),
+            ("gear_nyra_gun_glow", "keys.gear_nyra_gun_glow", self.keys.gear_nyra_gun_glow.hex.as_str()),
+            ("gear_brakk_gun_primary", "keys.gear_brakk_gun_primary", self.keys.gear_brakk_gun_primary.as_str()),
+            ("gear_brakk_gun_secondary", "keys.gear_brakk_gun_secondary", self.keys.gear_brakk_gun_secondary.as_str()),
+            ("gear_brakk_gun_glow", "keys.gear_brakk_gun_glow", self.keys.gear_brakk_gun_glow.hex.as_str()),
+            ("gear_kip_gun_primary", "keys.gear_kip_gun_primary", self.keys.gear_kip_gun_primary.as_str()),
+            ("gear_kip_gun_secondary", "keys.gear_kip_gun_secondary", self.keys.gear_kip_gun_secondary.as_str()),
+            ("gear_kip_gun_accent", "keys.gear_kip_gun_accent", self.keys.gear_kip_gun_accent.as_str()),
+            ("gear_brakk_shield_primary", "keys.gear_brakk_shield_primary", self.keys.gear_brakk_shield_primary.as_str()),
+            ("gear_brakk_shield_secondary", "keys.gear_brakk_shield_secondary", self.keys.gear_brakk_shield_secondary.as_str()),
+            ("gear_brakk_shield_accent", "keys.gear_brakk_shield_accent", self.keys.gear_brakk_shield_accent.as_str()),
+            ("dirt_mauve", "keys.dirt_mauve", self.keys.dirt_mauve.as_str()),
+            ("dirt_outer", "keys.dirt_outer", self.keys.dirt_outer.as_str()),
+            ("rim_violet", "keys.rim_violet", self.keys.rim_violet.as_str()),
+            ("rim_violet_hi", "keys.rim_violet_hi", self.keys.rim_violet_hi.as_str()),
+            ("boulder_violet", "keys.boulder_violet", self.keys.boulder_violet.as_str()),
+            ("platform_pale", "keys.platform_pale", self.keys.platform_pale.as_str()),
+            ("platform_navy", "keys.platform_navy", self.keys.platform_navy.as_str()),
+            ("trim_cyan", "keys.trim_cyan", self.keys.trim_cyan.as_str()),
+            ("nest_brass", "keys.nest_brass", self.keys.nest_brass.as_str()),
+            ("nest_goo", "keys.nest_goo", self.keys.nest_goo.as_str()),
+            ("beacon_cyan", "keys.beacon_cyan", self.keys.beacon_cyan.as_str()),
+            ("rubble_violet", "keys.rubble_violet", self.keys.rubble_violet.as_str()),
+            ("crack_dark", "keys.crack_dark", self.keys.crack_dark.as_str()),
+            ("vein_resin", "keys.vein_resin", self.keys.vein_resin.as_str()),
+            ("vent_tell", "keys.vent_tell", self.keys.vent_tell.as_str()),
+            ("flora_stalk", "keys.flora_stalk", self.keys.flora_stalk.as_str()),
+            ("flora_bulb", "keys.flora_bulb", self.keys.flora_bulb.as_str()),
+            ("fog_violet", "keys.fog_violet", self.keys.fog_violet.as_str()),
+            ("sky_haze", "keys.sky_haze", self.keys.sky_haze.as_str()),
+            ("key_warm", "keys.key_warm", self.keys.key_warm.as_str()),
+            ("mark_ink", "keys.mark_ink", self.keys.mark_ink.as_str()),
+            ("fill_cool", "keys.fill_cool", self.keys.fill_cool.as_str()),
+            ("ambient_haze", "keys.ambient_haze", self.keys.ambient_haze.as_str()),
+            ("hero_teal", "hero.teal", self.hero.teal.as_str()),
+            ("hero_cobalt", "hero.cobalt", self.hero.cobalt.as_str()),
+            ("hero_white", "hero.white", self.hero.white.as_str()),
+            ("hero_accent", "hero.accent", self.hero.accent.as_str()),
+            ("shots_player", "shots.player", self.shots.player.as_str()),
+            ("arena_dark", "arena.rock_dark", self.arena.rock_dark.as_str()),
+            ("arena_light", "arena.rock_light", self.arena.rock_light.as_str()),
+            ("rarity_common", "rarity.common", self.rarity.common.as_str()),
+            ("rarity_rare", "rarity.rare", self.rarity.rare.as_str()),
+            ("rarity_epic", "rarity.epic", self.rarity.epic.as_str()),
+            ("rarity_legendary", "rarity.legendary", self.rarity.legendary.as_str()),
+            ("bugs.acid", "bugs.acid", self.bugs.acid.as_str()),
+            ("bugs.amber", "bugs.amber", self.bugs.amber.as_str()),
+            ("bugs.magenta", "bugs.magenta", self.bugs.magenta.as_str()),
         ]
         .into_iter()
     }
@@ -4556,13 +4597,113 @@ fn require_upper_rrggbb(name: &str, hex: &str) -> Result<(), String> {
 }
 
 fn validate_palette_hexes(palette: &Palette) -> Result<(), String> {
-    for (name, hex) in palette.hex_fields() {
-        let name = match name {
-            "hero_white" => "hero.white",
-            "hero_accent" => "hero.accent",
-            other => other,
-        };
-        require_upper_rrggbb(name, hex)?;
+    for (_name, path, hex) in palette.hex_fields() {
+        require_upper_rrggbb(path, hex)?;
+    }
+    Ok(())
+}
+
+/// Resolved hex of every `bug_owned` name. A missing list fails at parse. An unknown name fails here.
+fn bug_owned_hexes(palette: &Palette) -> Result<Vec<(String, String)>, String> {
+    if palette.bug_owned.is_empty() {
+        return Err("bug_owned must name at least one color".into());
+    }
+    let mut owned = Vec::new();
+    for name in &palette.bug_owned {
+        let hex = palette.hex(name).filter(|hex| !hex.is_empty()).ok_or_else(|| {
+            format!("bug_owned \"{name}\" does not resolve")
+        })?;
+        // The path has to exist on the field list. Do not invent `keys.<name>`.
+        let _ = palette.palette_toml_path(name)?;
+        owned.push((name.clone(), hex.to_string()));
+    }
+    Ok(owned)
+}
+
+fn reject_bug_owned_hex(palette: &Palette, owned: &[(String, String)], owner: &str, name: &str) -> Result<(), String> {
+    if name.is_empty() || name == "accent" {
+        return Ok(());
+    }
+    let Some(hex) = palette.hex(name).filter(|hex| !hex.is_empty()) else {
+        return Ok(());
+    };
+    let matched = owned
+        .iter()
+        .find(|(bug, bug_hex)| bug == name && bug_hex == hex)
+        .or_else(|| owned.iter().find(|(_, bug_hex)| bug_hex == hex));
+    if let Some((bug, _)) = matched {
+        let path = palette.palette_toml_path(bug)?;
+        return Err(format!("{owner} \"{name}\" matches bug-owned palette.toml {path}"));
+    }
+    Ok(())
+}
+
+fn reject_bug_owned_on_friendly(
+    palette: &Palette,
+    ui: &Ui,
+    heroes: &[HeroCard],
+    heroes_visual: &HeroesVisual,
+    away: &AwayHud,
+    reveal: &CrateReveal,
+) -> Result<(), String> {
+    let owned = bug_owned_hexes(palette)?;
+    for (field, name) in [
+        ("slate", away.slate.as_str()),
+        ("text", away.text.as_str()),
+        ("bar", away.bar.as_str()),
+        ("count", away.count.as_str()),
+        ("count_outline", away.count_outline.as_str()),
+        ("count_shadow", away.count_shadow.as_str()),
+    ] {
+        reject_bug_owned_hex(palette, &owned, &format!("presentation.toml hud.away.{field}"), name)?;
+    }
+    for (field, name) in [
+        ("layout.stage", reveal.layout.stage.as_str()),
+        ("layout.ink_dark", reveal.layout.ink_dark.as_str()),
+        ("layout.ink_light", reveal.layout.ink_light.as_str()),
+        ("grid.back", reveal.grid.back.as_str()),
+        ("grid.frame", reveal.grid.frame.as_str()),
+        ("grid.face", reveal.grid.face.as_str()),
+        ("grid.refund_face", reveal.grid.refund_face.as_str()),
+        ("grid.refund_ink", reveal.grid.refund_ink.as_str()),
+        ("grid.failure_ink", reveal.grid.failure_ink.as_str()),
+    ] {
+        reject_bug_owned_hex(palette, &owned, &format!("crate_reveal.toml {field}"), name)?;
+    }
+    for (owner, name) in ui.color_keys() {
+        let owner = owner.strip_prefix("ui.").unwrap_or(owner);
+        reject_bug_owned_hex(palette, &owned, &format!("ui.toml {owner}"), name)?;
+    }
+    for hero in heroes {
+        reject_bug_owned_hex(
+            palette,
+            &owned,
+            &format!("characters.toml {} accent_key", hero.id),
+            &hero.accent_key,
+        )?;
+    }
+    for mesh in &heroes_visual.meshes {
+        for part in &mesh.parts {
+            reject_bug_owned_hex(
+                palette,
+                &owned,
+                &format!("heroes_visual.toml {} color", mesh.id),
+                &part.color,
+            )?;
+        }
+    }
+    for model in &heroes_visual.models {
+        for (slot, name) in [
+            ("base", model.base.as_str()),
+            ("primary", model.primary.as_str()),
+            ("secondary", model.secondary.as_str()),
+            ("accent", model.accent.as_str()),
+            ("fourth", model.fourth.as_str()),
+            ("glow", model.glow.as_str()),
+            ("rim", model.rim.as_str()),
+        ] {
+            reject_bug_owned_hex(palette, &owned, &format!("heroes_visual.toml {} {slot}", model.id), name)?;
+        }
     }
     Ok(())
 }
@@ -4572,14 +4713,44 @@ fn validate_lit_keys(palette: &Palette) -> Result<(), String> {
         ("gear_nyra_gun_glow", &palette.keys.gear_nyra_gun_glow),
         ("gear_brakk_gun_glow", &palette.keys.gear_brakk_gun_glow),
     ] {
+        let path = palette.palette_toml_path(name)?;
         if lit.hex.trim().trim_start_matches('#').len() < 6 {
-            return Err(format!("{name} hex does not resolve"));
+            return Err(format!("{path} hex does not resolve"));
         }
         if !lit.emissive {
-            return Err(format!("{name} emissive must be true"));
+            return Err(format!("{path} emissive must be true"));
         }
     }
     Ok(())
+}
+
+/// Bug cast colors in `bugs_visual.toml`. Empty slots, such as a rim the mask does not use, are skipped.
+fn require_bug_visual_owned(palette: &Palette, models: &[CastModel], bugs: &crate::bugs::BugBook) -> Result<(), String> {
+    let mut unowned = Vec::new();
+    for model in models {
+        if bugs.rows().iter().all(|(id, _)| *id != model.id) {
+            continue;
+        }
+        for (slot, name) in [
+            ("base", model.base.as_str()),
+            ("accent", model.accent.as_str()),
+            ("glow", model.glow.as_str()),
+            ("rim", model.rim.as_str()),
+        ] {
+            if name.is_empty() {
+                continue;
+            }
+            if palette.bug_owned.iter().any(|key| key == name) {
+                continue;
+            }
+            unowned.push(format!("bugs_visual.toml {} {slot} \"{name}\" is not bug_owned", model.id));
+        }
+    }
+    if unowned.is_empty() {
+        Ok(())
+    } else {
+        Err(unowned.join("\n"))
+    }
 }
 
 fn require_palette_keys(
@@ -4599,16 +4770,28 @@ fn require_palette_keys(
     };
     // Locked portraits paint the lit body with this key. Fail here, not in the painter.
     check("portrait", "hero_white")?;
+    let mut unowned = Vec::new();
+    let mut note_unowned = |path: &str, name: &str| {
+        if !palette.bug_owned.iter().any(|key| key == name) {
+            unowned.push(format!("bugs.toml {path} \"{name}\" is not bug_owned"));
+        }
+    };
     for (bug, row) in bugs.rows() {
         if !row.visual.bud_color.is_empty() {
             check(bug, &row.visual.bud_color)?;
+            note_unowned(&format!("{bug}.visual.bud_color"), &row.visual.bud_color);
         }
         if !row.visual.grown_color.is_empty() {
             check(bug, &row.visual.grown_color)?;
+            note_unowned(&format!("{bug}.visual.grown_color"), &row.visual.grown_color);
         }
         for part in &row.visual.parts {
             check(&format!("{bug} {}", part.name), &part.color)?;
+            note_unowned(&format!("{bug}.visual.parts.{}", part.name), &part.color);
         }
+    }
+    if !unowned.is_empty() {
+        return Err(unowned.join("\n"));
     }
     for rarity in ["common", "rare", "epic", "legendary"] {
         check("rarity", &format!("rarity_{rarity}"))?;
@@ -5949,6 +6132,20 @@ fn validate_ui(
         if victory_hex == rarity_hex {
             return Err(format!("ui.toml colors.victory matches {name}"));
         }
+    }
+    let defeat_hex = palette.hex(&ui.colors.defeat).ok_or_else(|| {
+        format!("ui.toml colors.defeat \"{}\" does not resolve", ui.colors.defeat)
+    })?;
+    for name in ["rarity_common", "rarity_rare", "rarity_epic", "rarity_legendary"] {
+        let rarity_hex = palette.hex(name).ok_or_else(|| format!("palette.toml {name} does not resolve"))?;
+        if defeat_hex == rarity_hex {
+            let path = palette.palette_toml_path(name)?;
+            return Err(format!("ui.toml colors.defeat matches palette.toml {path}"));
+        }
+    }
+    if defeat_hex == victory_hex {
+        let path = palette.palette_toml_path(&ui.colors.victory)?;
+        return Err(format!("ui.toml colors.defeat matches palette.toml {path}"));
     }
     if !(layout.border_px > 0.0) {
         return Err("ui.toml layout.border_px must be > 0".into());
