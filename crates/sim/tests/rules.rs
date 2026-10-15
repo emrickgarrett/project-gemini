@@ -1657,6 +1657,78 @@ fn bug_owned_unknown_key_is_rejected() {
 }
 
 #[test]
+fn empty_bug_owned_is_rejected() {
+    let base = gemini_sim::content::embedded_sources();
+    let start = base.palette.find("bug_owned = [").expect("bug_owned");
+    let end = base.palette[start..].find(']').expect("bug_owned end") + start + 1;
+    let palette = format!("{}bug_owned = []{}", &base.palette[..start], &base.palette[end..]);
+    assert_ne!(palette, base.palette);
+    assert!(palette.contains("bug_owned = []"));
+    let err = Content::parse(&gemini_sim::content::Sources {
+        palette: &palette,
+        ..sources_with(&base, base.coop)
+    })
+    .expect_err("empty bug_owned");
+    assert!(err.starts_with("palette.toml bug_owned"), "{err}");
+}
+
+#[test]
+fn bug_colors_must_be_bug_owned() {
+    let base = gemini_sim::content::embedded_sources();
+    let doc = palette_doc(base.palette);
+    let names = bug_owned_names(&doc);
+    assert!(names.iter().any(|name| name == "brood_sac"));
+    assert!(names.iter().any(|name| name == "spitter_rim"));
+    let visual = include_str!("../../../content/bugs_visual.toml");
+    assert_eq!(visual.matches("spitter_rim").count(), 1);
+    let spitter = visual.find("id = \"spitter\"").expect("spitter model");
+    let next = visual[spitter + 1..].find("id = \"").expect("model after spitter") + spitter + 1;
+    assert!(visual[spitter..next].contains("rim = \"spitter_rim\""));
+    assert!(!base.bugs.contains("spitter_rim"));
+    let content = Content::parse(&sources_with(&base, base.coop)).expect("shipped bugs use bug_owned colors");
+    for (bug, row) in content.bugs.rows() {
+        if !row.visual.bud_color.is_empty() {
+            assert!(names.iter().any(|name| name == &row.visual.bud_color), "{bug} bud");
+        }
+        if !row.visual.grown_color.is_empty() {
+            assert!(names.iter().any(|name| name == &row.visual.grown_color), "{bug} grown");
+        }
+        for part in &row.visual.parts {
+            assert!(names.iter().any(|name| name == &part.color), "{bug} {}", part.name);
+        }
+    }
+
+    let friendly = "defeat_ember";
+    assert!(!names.iter().any(|name| name == friendly));
+    let load = |bugs: &str, why: &str| {
+        Content::parse(&gemini_sim::content::Sources {
+            bugs,
+            ..sources_with(&base, base.coop)
+        })
+        .expect_err(why)
+    };
+    let bud = base.bugs.replacen("bud_color = \"brood_sac\"", &format!("bud_color = \"{friendly}\""), 1);
+    assert_ne!(bud, base.bugs);
+    let err = load(&bud, "bud_color must be bug_owned");
+    assert!(err.starts_with("bugs.toml brood_mother.visual.bud_color"), "{err}");
+    assert!(err.contains(friendly), "{err}");
+    assert!(err.contains("bug_owned"), "{err}");
+
+    let grown = base.bugs.replacen("grown_color = \"bud_glow\"", &format!("grown_color = \"{friendly}\""), 1);
+    assert_ne!(grown, base.bugs);
+    let err = load(&grown, "grown_color must be bug_owned");
+    assert!(err.starts_with("bugs.toml brood_mother.visual.grown_color"), "{err}");
+    assert!(err.contains(friendly), "{err}");
+
+    let sac = "name=\"sac\",   part=\"gem\",   shape=\"sphere\", size=[2.6,2.0,2.6], offset=[0,1.75,-0.1], color=\"brood_sac\"";
+    let part = base.bugs.replacen(sac, &sac.replace("color=\"brood_sac\"", &format!("color=\"{friendly}\"")), 1);
+    assert_ne!(part, base.bugs);
+    let err = load(&part, "part color must be bug_owned");
+    assert!(err.starts_with("bugs.toml brood_mother.visual.parts.sac"), "{err}");
+    assert!(err.contains(friendly), "{err}");
+}
+
+#[test]
 fn current_palette_loads() {
     let base = gemini_sim::content::embedded_sources();
     let doc = palette_doc(base.palette);

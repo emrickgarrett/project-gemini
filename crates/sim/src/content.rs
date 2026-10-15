@@ -197,7 +197,13 @@ impl Content {
         validate_ledge_catch(&controller.ledge_catch)?;
         let difficulty = parse::<DifficultyFile>("difficulty.toml", src.difficulty)?.tier;
         require_palette_keys(&palette, &bugs, &presentation.hud.away, &crate_reveal.layout, &ui, &heroes)
-            .map_err(|err| format!("palette.toml {err}"))?;
+            .map_err(|err| {
+                if err.starts_with("bugs.toml ") {
+                    err
+                } else {
+                    format!("palette.toml {err}")
+                }
+            })?;
         reject_bug_owned_on_friendly(
             &palette,
             &ui,
@@ -4593,6 +4599,9 @@ fn validate_palette_hexes(palette: &Palette) -> Result<(), String> {
 
 /// Resolved hex of every `bug_owned` name. A missing list fails at parse. An unknown name fails here.
 fn bug_owned_hexes(palette: &Palette) -> Result<Vec<(String, String)>, String> {
+    if palette.bug_owned.is_empty() {
+        return Err("bug_owned must name at least one color".into());
+    }
     let mut owned = Vec::new();
     for name in &palette.bug_owned {
         let hex = palette.hex(name).filter(|hex| !hex.is_empty()).ok_or_else(|| {
@@ -4726,15 +4735,24 @@ fn require_palette_keys(
     };
     // Locked portraits paint the lit body with this key. Fail here, not in the painter.
     check("portrait", "hero_white")?;
+    let on_bug_owned = |path: &str, name: &str| -> Result<(), String> {
+        if palette.bug_owned.iter().any(|key| key == name) {
+            return Ok(());
+        }
+        Err(format!("bugs.toml {path} \"{name}\" is not bug_owned"))
+    };
     for (bug, row) in bugs.rows() {
         if !row.visual.bud_color.is_empty() {
             check(bug, &row.visual.bud_color)?;
+            on_bug_owned(&format!("{bug}.visual.bud_color"), &row.visual.bud_color)?;
         }
         if !row.visual.grown_color.is_empty() {
             check(bug, &row.visual.grown_color)?;
+            on_bug_owned(&format!("{bug}.visual.grown_color"), &row.visual.grown_color)?;
         }
         for part in &row.visual.parts {
             check(&format!("{bug} {}", part.name), &part.color)?;
+            on_bug_owned(&format!("{bug}.visual.parts.{}", part.name), &part.color)?;
         }
     }
     for rarity in ["common", "rare", "epic", "legendary"] {

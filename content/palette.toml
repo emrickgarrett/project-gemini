@@ -19,6 +19,8 @@ bug_owned = [
   "spitter_carapace",
   "spitter_glow",
   "brute_cracks",
+  "brood_sac",
+  "spitter_rim",
 ]
 
 [hero]
