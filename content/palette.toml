@@ -1,5 +1,28 @@
 # Art-lead palette. Read these in the client; do not duplicate the hex values in code.
 
+# Enemy-only names. UI, heroes, the away HUD, and the crate reveal fail the load
+# when their resolved hex equals one of these.
+bug_owned = [
+  "swarmer.shell",
+  "swarmer.glow",
+  "spitter.carapace",
+  "spitter.glow",
+  "brute.shell",
+  "brute.cracks",
+  "bugs.acid",
+  "bugs.amber",
+  "bugs.magenta",
+  "swarmer_amber",
+  "brute_amber",
+  "swarmer_glow",
+  "bud_glow",
+  "spitter_carapace",
+  "spitter_glow",
+  "brute_cracks",
+  "brood_sac",
+  "spitter_rim",
+]
+
 [hero]
 teal = "#1FB5A8"
 cobalt = "#1E40AF"
@@ -51,6 +74,8 @@ reveal_ink = "#1C1820"
 reveal_paper = "#F2F2F2"
 # Win title and panel outline. Same family as shots.player. Not legendary gold.
 victory = "#2DE1D0"
+# Loss title and outline. Not a rarity, a bug color, or the win color.
+defeat_ember = "#A34A50"
 # UI accents only. Casts do not tint with these keys.
 hero_vex = "#F97316"
 hero_nyra = "#7DD3FC"
